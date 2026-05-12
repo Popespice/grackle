@@ -15,6 +15,14 @@ def main() -> None:
 
 
 @main.command()
+def languages() -> None:
+    """List supported languages registered with the adapter registry."""
+    from grackle.adapters import registry  # lazy import — keeps CLI startup snappy
+
+    click.echo(f"supported languages: {registry.supported_languages()}")
+
+
+@main.command()
 @click.option("--host", default="127.0.0.1", show_default=True, help="Bind address.")
 @click.option("--port", default=7878, show_default=True, help="WebSocket port.")
 def serve(host: str, port: int) -> None:
