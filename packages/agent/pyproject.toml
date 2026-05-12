@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "grackle"
+version = "0.0.0"
+description = "Local-first live code visualizer for Python"
+license = { text = "MIT" }
+authors = [{ name = "Connor Allen", email = "connor.allen9@icloud.com" }]
+requires-python = ">=3.12"
+dependencies = [
+    "websockets>=16,<17",
+    "click>=8.1",
+    "structlog>=25",
+    "jsonschema>=4",
+]
+
+[project.scripts]
+grackle = "grackle.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/grackle"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.4",
+    "mypy>=1.10",
+    "types-jsonschema",
+]
+
+[tool.ruff]
+line-length = 100
+exclude = ["src/grackle/_generated"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "TCH", "PTH"]
+
+[tool.mypy]
+strict = true
+exclude = ["src/grackle/_generated/"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

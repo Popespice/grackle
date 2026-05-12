@@ -85,7 +85,9 @@ export async function main(opts = {}) {
     if (generatePython) {
       await mkdir(pyOutDir, { recursive: true });
       await execFileAsync("uvx", [
+        "--from",
         "datamodel-code-generator",
+        "datamodel-codegen",
         "--input",
         schemaPath,
         "--input-file-type",
