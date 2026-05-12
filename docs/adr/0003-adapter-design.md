@@ -61,6 +61,13 @@ method presence, not signatures; explicit unit tests on return shapes compensate
 question at every call site. CLI, server, and future UI code all import the
 same `registry` without passing it as a parameter.
 
+**Open language values**: the `language` attribute on adapters is an open
+`str`, not a closed `Literal` or enum. See [ADR-0004](0004-extension-surface.md)
+for the broader open-string convention applied to other extension-surface
+fields (node-kind, edge-kind, trace event type, exporter format). The
+path-discipline contract above complements the cross-platform discipline
+established in [ADR-0001](0001-monorepo-structure.md).
+
 ## Consequences
 
 - `super()`-based code reuse is unavailable across Protocol implementors.

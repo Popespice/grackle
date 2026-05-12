@@ -6,14 +6,11 @@ from grackle.adapters.base import (
     StaticParserAdapter,
     TraceEvent,
 )
-from grackle.adapters.noop import NoOpRuntimeAdapter, NoOpStaticParser
 from grackle.adapters.registry import AdapterRegistry, registry
 
 __all__ = [
     "AdapterRegistry",
     "Capabilities",
-    "NoOpRuntimeAdapter",
-    "NoOpStaticParser",
     "ParseOptions",
     "RuntimeAdapter",
     "StaticGraph",

@@ -1,4 +1,10 @@
+from importlib.metadata import PackageNotFoundError, version
+
 from grackle.adapters import registry as registry
 
-__version__ = "0.1.0"
-__all__ = ["registry", "__version__"]
+try:
+    __version__ = version("grackle")
+except PackageNotFoundError:
+    __version__ = "0.0.0+unknown"
+
+__all__ = ["registry"]

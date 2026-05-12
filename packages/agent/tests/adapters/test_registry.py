@@ -98,3 +98,51 @@ def test_get_static_unknown_returns_none() -> None:
 def test_get_runtime_unknown_returns_none() -> None:
     reg = AdapterRegistry()
     assert reg.get_runtime("unknown") is None
+
+
+def test_detect_uses_registered_key_after_language_mutation() -> None:
+    """detect() must yield the registered key, not adapter.language at call time."""
+    reg = AdapterRegistry()
+    adapter = _StaticStub("python", detects=True)
+    reg.register_static(adapter)
+    adapter.language = "DIFFERENT"
+    assert reg.detect(Path("/tmp")) == ["python"]
+    assert reg.supported_languages() == ["python"]
+
+
+def test_register_rejects_empty_language() -> None:
+    reg = AdapterRegistry()
+    with pytest.raises(ValueError, match="non-empty"):
+        reg.register_static(_StaticStub(""))
+
+
+def test_register_rejects_whitespace_only_language() -> None:
+    reg = AdapterRegistry()
+    with pytest.raises(ValueError, match="non-empty"):
+        reg.register_static(_StaticStub("   "))
+
+
+def test_register_rejects_language_with_embedded_control_char() -> None:
+    """Embedded newlines/tabs must raise; trailing whitespace is stripped silently."""
+    reg = AdapterRegistry()
+    with pytest.raises(ValueError, match="control characters"):
+        reg.register_static(_StaticStub("py\nthon"))
+    # Trailing whitespace (including newlines) is stripped, not an error:
+    fresh = AdapterRegistry()
+    fresh.register_static(_StaticStub("python\n"))
+    assert fresh.supported_languages() == ["python"]
+
+
+def test_register_strips_and_lowercases_language() -> None:
+    reg = AdapterRegistry()
+    adapter = _StaticStub("  Python  ")
+    reg.register_static(adapter)
+    assert reg.supported_languages() == ["python"]
+    assert reg.get_static("python") is adapter
+
+
+def test_get_static_strips_whitespace_on_lookup() -> None:
+    reg = AdapterRegistry()
+    adapter = _StaticStub("python")
+    reg.register_static(adapter)
+    assert reg.get_static("  Python  ") is adapter

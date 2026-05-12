@@ -4,9 +4,13 @@
 
 ## Context
 
-grackle is designed as an extensible platform (brief §6.5). Several concepts
-are "kinds" that users, adapter authors, and future core development will want
-to extend without modifying grackle's core:
+grackle is designed as an extensible platform (brief §6.5). The adapter
+Protocol shape itself is the subject of [ADR-0003](0003-adapter-design.md);
+this ADR addresses the parallel question of how *values* flowing through that
+contract (and through other extension points) are typed.
+
+Several concepts are "kinds" that users, adapter authors, and future core
+development will want to extend without modifying grackle's core:
 
 | Concept | Where it appears |
 |---|---|
