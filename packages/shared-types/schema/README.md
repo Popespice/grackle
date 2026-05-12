@@ -4,7 +4,7 @@ These JSON Schema (Draft 2020-12) files are the **single source of truth** for a
 
 ## Adding a new message type
 
-1. Add the definition to the relevant `*.schema.json` under `$defs`.
+1. Add the definition to the relevant `*.schema.json` under `definitions`.
 2. Run `pnpm codegen` from the repo root to regenerate TS and Python outputs.
 3. Run `pnpm check-parity` to confirm generated files are in sync.
 4. Commit the schema change — generated files are gitignored and rebuilt on demand.

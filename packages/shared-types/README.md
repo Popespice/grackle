@@ -11,6 +11,12 @@ Protocol types shared between the Python agent and the React frontend.
 
 Generated files are **gitignored**. Run `pnpm codegen` after a fresh clone or schema change.
 
+## Public API vs generated output
+
+`src/messages.ts` is the **canonical public API** — hand-written, strict, and what downstream code imports. The generated `src/generated/*.ts` files are sanity-check artifacts that confirm codegen ran and produced the expected shape; they are not re-exported.
+
+json-schema-to-typescript v14 cannot faithfully express certain constraints (e.g. `maxProperties: 0` → `Record<string, never>`), so hand-written types are intentionally stricter. After a schema change, review both `src/messages.ts` and the generated output.
+
 ## Usage
 
 ```ts

@@ -1,6 +1,9 @@
 /**
  * Hand-written message types for the grackle WebSocket protocol.
- * Must stay in sync with schema/messages.schema.json — run `pnpm codegen` to verify.
+ * Stricter than the codegen output in src/generated/ — json-schema-to-typescript v14
+ * can't express `maxProperties: 0` as `Record<string, never>`, so these types serve
+ * as the canonical public API. The generated files are a sanity-check artifact only.
+ * Review src/generated/messages.ts after schema changes to confirm intent is preserved.
  */
 
 export interface WsEnvelope {

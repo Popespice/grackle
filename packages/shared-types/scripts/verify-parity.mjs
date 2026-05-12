@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
 /**
- * Parity guard: regenerates types into a tmp dir and diffs against committed
- * outputs. Exits non-zero if drift is detected.
+ * Parity guard: regenerates types into a tmp dir and diffs against the locally
+ * existing outputs (gitignored; created by the last codegen run). Exits non-zero
+ * if drift is detected — meaning codegen was not run after the last schema change.
  *
  * Called by `pnpm check-parity` (root) and by `pnpm verify-parity`
  * (shared-types package).

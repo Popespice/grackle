@@ -2,6 +2,7 @@
 node_modules/
 dist/
 .turbo/
+*.tsbuildinfo
 
 # Python
 .venv/
@@ -44,9 +45,11 @@ ehthumbs.db
 *.swp
 *.swo
 
-# Codegen outputs (generated; not committed)
-packages/shared-types/src/generated/
-packages/agent/src/grackle/_generated/
+# Codegen outputs (generated; not committed — only .gitkeep placeholders are tracked)
+packages/shared-types/src/generated/*
+!packages/shared-types/src/generated/.gitkeep
+packages/agent/src/grackle/_generated/*
+!packages/agent/src/grackle/_generated/.gitkeep
 
 # grackle runtime data
 .grackle/
