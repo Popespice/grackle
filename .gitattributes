@@ -1,0 +1,22 @@
+# Default: normalize all text to LF
+* text=auto eol=lf
+
+# Windows shell scripts keep CRLF
+*.ps1 eol=crlf
+*.cmd eol=crlf
+*.bat eol=crlf
+
+# Lockfiles: treat as binary to avoid merge conflicts rewriting them
+pnpm-lock.yaml merge=binary
+uv.lock merge=binary
+
+# Binary assets
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
