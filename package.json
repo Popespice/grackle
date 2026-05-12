@@ -1,0 +1,25 @@
+{
+  "name": "grackle-monorepo",
+  "private": true,
+  "packageManager": "pnpm@11.1.1",
+  "scripts": {
+    "dev": "concurrently -k -n agent,frontend -c cyan,magenta \"cd packages/agent && uv run grackle serve\" \"pnpm --filter @grackle/frontend dev\"",
+    "build": "pnpm -r build",
+    "lint": "biome ci .",
+    "format": "biome check --write .",
+    "typecheck": "tsc -b",
+    "test": "pnpm -r --parallel test --run",
+    "codegen": "pnpm --filter @grackle/shared-types codegen",
+    "check-parity": "node tools/check-parity.mjs",
+    "prepare": "lefthook install"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.0.0",
+    "@commitlint/cli": "^19.0.0",
+    "@commitlint/config-conventional": "^19.0.0",
+    "concurrently": "^9.0.0",
+    "json-schema-to-typescript": "^14.0.0",
+    "lefthook": "^1.0.0",
+    "typescript": "^5.7.0"
+  }
+}
