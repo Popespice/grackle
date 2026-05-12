@@ -2,6 +2,7 @@ import asyncio
 import os
 
 import structlog
+import websockets.exceptions
 from websockets.asyncio.server import ServerConnection
 from websockets.asyncio.server import serve as _ws_serve
 
@@ -33,6 +34,8 @@ async def _handler(ws: ServerConnection) -> None:
                 continue
             if envelope["type"] == "ping":
                 await ws.send(protocol.make_pong(envelope["id"]))
+    except websockets.exceptions.ConnectionClosed:
+        pass
     finally:
         log.info("client disconnected", remote=ws.remote_address)
 

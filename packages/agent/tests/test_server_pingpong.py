@@ -61,3 +61,18 @@ async def test_multiple_pings(agent_server: int) -> None:
             data = json.loads(await ws.recv())
             assert data["type"] == "pong"
             assert data["id"] == f"ping-{i}"
+
+
+async def test_abnormal_close_does_not_crash_server(agent_server: int) -> None:
+    """Server survives an abrupt TCP disconnect (no WS close frame)."""
+    with contextlib.suppress(Exception):
+        async with connect(f"ws://127.0.0.1:{agent_server}") as ws:
+            ws.transport.close()  # drop TCP without sending WS close frame
+
+    await asyncio.sleep(0.05)
+
+    # Server must still accept new connections
+    async with connect(f"ws://127.0.0.1:{agent_server}") as ws:
+        await ws.send(json.dumps({"id": "recovery", "type": "ping", "payload": {}}))
+        data = json.loads(await ws.recv())
+    assert data["id"] == "recovery"
