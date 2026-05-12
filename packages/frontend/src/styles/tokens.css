@@ -1,0 +1,100 @@
+:root {
+  color-scheme: dark light;
+
+  /* === Surface (dark mode default) === */
+  --color-bg: oklch(15% 0.01 250);
+  --color-surface: oklch(20% 0.015 250);
+  --color-surface-2: oklch(24% 0.018 250);
+  --color-border: oklch(28% 0.02 250);
+  --color-border-strong: oklch(40% 0.03 250);
+
+  /* === Text === */
+  --color-text: oklch(92% 0.01 250);
+  --color-text-muted: oklch(65% 0.02 250);
+  --color-text-subtle: oklch(50% 0.02 250);
+
+  /* === Accent (grackle iridescent purple) === */
+  --color-accent: oklch(65% 0.22 290);
+  --color-accent-bright: oklch(75% 0.2 290);
+  --color-accent-glow: oklch(70% 0.25 290 / 0.4);
+
+  /* === Status === */
+  --color-success: oklch(75% 0.18 145);
+  --color-warning: oklch(80% 0.16 75);
+  --color-error: oklch(67% 0.22 25);
+
+  /* === Typography === */
+  --font-sans:
+    system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+  --font-mono:
+    ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Menlo, Consolas,
+    monospace;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.25rem;
+  --text-2xl: 1.5rem;
+
+  /* === Spacing (4px base) === */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+
+  /* === Radius === */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-full: 9999px;
+
+  /* === Motion === */
+  --duration-fast: 120ms;
+  --duration-normal: 200ms;
+  --duration-slow: 350ms;
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /* === Z-index === */
+  --z-base: 0;
+  --z-overlay: 100;
+  --z-modal: 200;
+  --z-toast: 300;
+}
+
+[data-theme="light"] {
+  --color-bg: oklch(98% 0.005 80);
+  --color-surface: oklch(100% 0 0);
+  --color-surface-2: oklch(96% 0.005 80);
+  --color-border: oklch(92% 0.005 250);
+  --color-border-strong: oklch(85% 0.01 250);
+  --color-text: oklch(15% 0.01 250);
+  --color-text-muted: oklch(45% 0.02 250);
+  --color-text-subtle: oklch(60% 0.02 250);
+  --color-accent: oklch(55% 0.22 290);
+  --color-accent-bright: oklch(50% 0.24 290);
+  --color-accent-glow: oklch(60% 0.25 290 / 0.25);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --color-bg: oklch(98% 0.005 80);
+    --color-surface: oklch(100% 0 0);
+    --color-surface-2: oklch(96% 0.005 80);
+    --color-border: oklch(92% 0.005 250);
+    --color-border-strong: oklch(85% 0.01 250);
+    --color-text: oklch(15% 0.01 250);
+    --color-text-muted: oklch(45% 0.02 250);
+    --color-text-subtle: oklch(60% 0.02 250);
+    --color-accent: oklch(55% 0.22 290);
+    --color-accent-bright: oklch(50% 0.24 290);
+    --color-accent-glow: oklch(60% 0.25 290 / 0.25);
+  }
+}

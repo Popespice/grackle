@@ -1,0 +1,12 @@
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    /* biome-ignore lint/complexity/noImportantStyles: !important needed to override any specificity for a11y */
+    transition-duration: 0.01ms !important;
+    /* biome-ignore lint/complexity/noImportantStyles: !important needed to override any specificity for a11y */
+    animation-duration: 0.01ms !important;
+    /* biome-ignore lint/complexity/noImportantStyles: !important needed to override any specificity for a11y */
+    animation-iteration-count: 1 !important;
+  }
+}
