@@ -24,3 +24,5 @@ NNNN-short-title.md
 |---|---|---|
 | [0001](0001-monorepo-structure.md) | Monorepo structure & package boundaries | accepted |
 | [0002](0002-trace-transport.md) | Trace transport: WebSocket vs alternatives | accepted |
+| [0003](0003-adapter-design.md) | Adapter design: Protocols, capability flags, registry | accepted |
+| [0004](0004-extension-surface.md) | Extension surface: open strings, registries, rule of three | accepted |
