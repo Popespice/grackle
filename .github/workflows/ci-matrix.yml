@@ -52,7 +52,7 @@ jobs:
 
       - name: Install Python dependencies
         working-directory: packages/agent
-        run: uv sync
+        run: uv sync --frozen
 
       - name: Ruff
         working-directory: packages/agent

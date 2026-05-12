@@ -53,3 +53,6 @@ packages/agent/src/grackle/_generated/*
 
 # grackle runtime data
 .grackle/
+
+# Claude Code local state (launch configs, MCP state)
+.claude/

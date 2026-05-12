@@ -27,7 +27,10 @@ async def _handler(ws: ServerConnection) -> None:
     log.info("client connected", remote=ws.remote_address)
     try:
         async for raw in ws:
-            msg = raw.decode() if isinstance(raw, bytes) else raw
+            try:
+                msg = raw.decode() if isinstance(raw, bytes) else raw
+            except UnicodeDecodeError:
+                continue
             try:
                 envelope = protocol.parse_envelope(msg)
             except protocol.InvalidEnvelope:
@@ -42,6 +45,8 @@ async def _handler(ws: ServerConnection) -> None:
 
 async def serve(host: str, port: int) -> None:
     """Start the WebSocket server and run until cancelled."""
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        log.warning("binding to non-loopback address — agent reachable from network", host=host)
     async with _ws_serve(_handler, host, port):
         log.info("agent listening", host=host, port=port)
         await asyncio.Future()  # run until cancelled

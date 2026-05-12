@@ -76,3 +76,16 @@ async def test_abnormal_close_does_not_crash_server(agent_server: int) -> None:
         await ws.send(json.dumps({"id": "recovery", "type": "ping", "payload": {}}))
         data = json.loads(await ws.recv())
     assert data["id"] == "recovery"
+
+
+async def test_binary_frame_is_dropped(agent_server: int) -> None:
+    """Binary frame with non-UTF-8 bytes is silently dropped; connection stays alive."""
+    async with connect(f"ws://127.0.0.1:{agent_server}") as ws:
+        await ws.send(b"\x00\x01\x02\xff")  # non-UTF-8 binary
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(ws.recv(), timeout=0.1)
+            pytest.fail("expected no reply to binary frame")
+        # Connection must still be alive after the bad frame
+        await ws.send(json.dumps({"id": "after-binary", "type": "ping", "payload": {}}))
+        data = json.loads(await ws.recv())
+    assert data["id"] == "after-binary"
