@@ -1,10 +1,15 @@
 #!/usr/bin/env node
 /**
- * Verifies that committed codegen outputs match what the generator would produce.
- * Full implementation added in chunk 0.C alongside the codegen pipeline.
+ * Root-level parity check entry point.
+ * Delegates to packages/shared-types/scripts/verify-parity.mjs.
+ *
+ * Usage: node tools/check-parity.mjs
+ *   (also invoked via `pnpm check-parity`)
  */
 
-console.log(
-  "check-parity: stub (run after chunk 0.C to enable full verification)"
-);
-process.exit(0);
+import { main } from "../packages/shared-types/scripts/verify-parity.mjs";
+
+main().catch((err) => {
+  console.error(err.message ?? err);
+  process.exit(1);
+});

@@ -10,7 +10,7 @@ pre-commit:
       run: uv run ruff format {staged_files} && uv run ruff check --fix {staged_files} && git add {staged_files}
     schema-parity:
       glob: "packages/shared-types/schema/*.json"
-      run: pnpm --filter @grackle/shared-types codegen && git add packages/shared-types/src/generated packages/agent/src/grackle/_generated
+      run: pnpm --filter @grackle/shared-types codegen
 
 pre-push:
   parallel: false

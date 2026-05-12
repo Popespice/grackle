@@ -20,7 +20,7 @@ grackle traces your Python code and renders a live, interactive graph showing fi
 
 - **Python 3.12+** — install via [uv](https://docs.astral.sh/uv/getting-started/installation/)
 - **Node 22 LTS** — install via [nvm](https://github.com/nvm-sh/nvm) or the [Windows installer](https://nodejs.org/en/download)
-- **pnpm 9** — enabled via corepack: `corepack enable pnpm`
+- **pnpm 11+** — install via `npm install -g pnpm` or corepack: `corepack enable pnpm`
 
 ---
 

@@ -30,6 +30,12 @@ importers:
         specifier: ^5.7.0
         version: 5.9.3
 
+  packages/shared-types:
+    devDependencies:
+      json-schema-to-typescript:
+        specifier: ^14.0.0
+        version: 14.1.0
+
 packages:
 
   '@apidevtools/json-schema-ref-parser@11.9.3':

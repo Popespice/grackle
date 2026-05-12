@@ -1,0 +1,14 @@
+{
+  "name": "@grackle/shared-types",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "codegen": "node scripts/codegen.mjs",
+    "build": "tsc -b",
+    "verify-parity": "node scripts/verify-parity.mjs"
+  },
+  "devDependencies": {
+    "json-schema-to-typescript": "^14.0.0"
+  }
+}
