@@ -40,7 +40,8 @@ class MockWebSocket {
 }
 
 let mockWs: MockWebSocket;
-const MockWsClass = vi.fn((url: string) => {
+// biome-ignore lint/complexity/useArrowFunction: must be a function expression — arrow functions are non-constructable and vi.fn() rejects them as constructor mocks in Vitest 4
+const MockWsClass = vi.fn(function (url: string) {
   mockWs = new MockWebSocket(url);
   return mockWs;
 });
