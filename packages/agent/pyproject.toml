@@ -13,7 +13,7 @@ dependencies = [
     "websockets>=16,<17",
     "click>=8.3.3",
     "structlog>=25.5.0",
-    "jsonschema>=4",
+    "jsonschema>=4.26.0",
 ]
 
 [project.scripts]
