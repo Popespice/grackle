@@ -24,7 +24,7 @@ packages = ["src/grackle"]
 
 [dependency-groups]
 dev = [
-    "pytest>=8",
+    "pytest>=9.0.3",
     "pytest-asyncio>=0.24",
     "ruff>=0.4",
     "mypy>=1.10",
