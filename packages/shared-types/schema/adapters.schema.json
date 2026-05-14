@@ -50,7 +50,7 @@
     },
     "StaticGraph": {
       "type": "object",
-      "description": "Phase-1 skeleton for the static analysis graph artifact. Fleshed out in phase 2.",
+      "description": "Static analysis graph artifact emitted by a StaticParserAdapter. See graph.schema.json#/$defs/Graph for the canonical, fully-typed top-level shape.",
       "properties": {
         "version": {
           "type": "integer",
@@ -63,13 +63,13 @@
         },
         "nodes": {
           "type": "array",
-          "description": "Graph nodes — shape defined in phase 2.",
-          "items": {}
+          "description": "Graph nodes — see graph.schema.json#/$defs/GraphNode.",
+          "items": { "$ref": "graph.schema.json#/$defs/GraphNode" }
         },
         "edges": {
           "type": "array",
-          "description": "Graph edges — shape defined in phase 2.",
-          "items": {}
+          "description": "Graph edges — see graph.schema.json#/$defs/GraphEdge.",
+          "items": { "$ref": "graph.schema.json#/$defs/GraphEdge" }
         }
       },
       "required": ["version", "language", "nodes", "edges"],

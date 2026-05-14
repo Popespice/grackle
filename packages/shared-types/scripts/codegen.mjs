@@ -75,6 +75,7 @@ export async function main(opts = {}) {
       enableConstEnums: false,
       unreachableDefinitions: true,
       style: { singleQuote: false, semi: true },
+      cwd: SCHEMA_DIR,
     });
     await writeFile(join(tsOutDir, `${baseName}.ts`), tsSource, {
       encoding: "utf-8",

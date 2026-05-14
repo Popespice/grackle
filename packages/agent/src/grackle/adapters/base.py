@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, NotRequired, Protocol, TypedDict, runtime_checkable
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,7 +21,37 @@ class ParseOptions:
     follow_imports: bool = True
 
 
-type StaticGraph = dict[str, Any]
+# Hand-written TypedDicts — kept locally rather than imported from
+# grackle._generated/ for the same reason protocol.py does (the generated
+# tree is gitignored and tests/library code must not depend on it).
+# Parity with packages/shared-types/schema/graph.schema.json is enforced by
+# review during schema changes; _generated/graph.py is the reference shape.
+# See ADR-0003 and ADR-0004.
+class GraphNode(TypedDict):
+    id: str
+    kind: str
+    name: str
+    path: str
+    line: NotRequired[int]
+    metadata: NotRequired[dict[str, Any]]
+
+
+class GraphEdge(TypedDict):
+    source: str
+    target: str
+    kind: str
+    metadata: NotRequired[dict[str, Any]]
+
+
+class StaticGraph(TypedDict):
+    version: int
+    language: str
+    nodes: list[GraphNode]
+    edges: list[GraphEdge]
+    metadata: NotRequired[dict[str, Any]]
+
+
+# TraceEvent stays permissive until Phase 6 fleshes out the wire format.
 type TraceEvent = dict[str, Any]
 
 
