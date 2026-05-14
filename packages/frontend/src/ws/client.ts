@@ -23,19 +23,23 @@ export const useGrackleClient = create<GrackleClientState>()((set, get) => ({
 
     const ws = new WebSocket(url);
 
+    // Guards against late events from a stale socket. React StrictMode runs
+    // effects twice in dev, so two sockets may exist briefly — only the
+    // second one should update state.
     ws.addEventListener("open", () => {
-      set({ status: "connected" });
+      if (get()._ws === ws) set({ status: "connected" });
     });
 
     ws.addEventListener("close", () => {
-      set({ status: "disconnected", _ws: null });
+      if (get()._ws === ws) set({ status: "disconnected", _ws: null });
     });
 
     ws.addEventListener("error", () => {
-      set({ status: "disconnected", _ws: null });
+      if (get()._ws === ws) set({ status: "disconnected", _ws: null });
     });
 
     ws.addEventListener("message", (event: MessageEvent<string>) => {
+      if (get()._ws !== ws) return;
       try {
         const envelope = JSON.parse(event.data) as WsEnvelope;
         if (envelope.type === "pong") {

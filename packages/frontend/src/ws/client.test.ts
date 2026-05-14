@@ -142,4 +142,27 @@ describe("useGrackleClient", () => {
     expect(() => mockWs.simulateMessage("not json")).not.toThrow();
     expect(useGrackleClient.getState().status).toBe("connected");
   });
+
+  it("late events from a stale socket are ignored (StrictMode guard)", () => {
+    const { connect } = useGrackleClient.getState();
+
+    // First connect → staleWs
+    connect("ws://127.0.0.1:7878");
+    const staleWs = mockWs;
+
+    // Second connect → activeWs replaces staleWs in state
+    connect("ws://127.0.0.1:7878");
+    const activeWs = mockWs;
+
+    expect(useGrackleClient.getState()._ws).toBe(activeWs);
+
+    // Active socket opens normally
+    activeWs.simulateOpen();
+    expect(useGrackleClient.getState().status).toBe("connected");
+
+    // Stale socket fires open late — must not overwrite status or _ws
+    staleWs.simulateOpen();
+    expect(useGrackleClient.getState().status).toBe("connected");
+    expect(useGrackleClient.getState()._ws).toBe(activeWs);
+  });
 });

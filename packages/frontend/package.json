@@ -11,9 +11,13 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@fontsource-variable/doto": "^5.2.10",
     "@grackle/shared-types": "workspace:*",
+    "graphology": "^0.26.0",
+    "graphology-layout-forceatlas2": "^0.10.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "sigma": "^3.0.3",
     "zustand": "^5.0.0"
   },
   "devDependencies": {

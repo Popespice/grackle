@@ -30,6 +30,9 @@
   --font-mono:
     ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Menlo, Consolas,
     monospace;
+  /* Display font for the wordmark — dot-matrix style à la "Nightcall". */
+  --font-display:
+    "Doto Variable", "Doto", "Major Mono Display", ui-monospace, monospace;
 
   --text-xs: 0.75rem;
   --text-sm: 0.875rem;
