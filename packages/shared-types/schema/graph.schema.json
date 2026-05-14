@@ -10,7 +10,7 @@
       "properties": {
         "id": {
           "type": "string",
-          "description": "Stable POSIX-relative node ID. See ADR-0005 for the ID scheme."
+          "description": "Stable POSIX-relative node ID. Format: <posix-path>:<qualname>. Scheme settled in Phase 2.A."
         },
         "kind": {
           "type": "string",

@@ -20,6 +20,7 @@ export function NodeInspector({
 
   return (
     <aside
+      aria-label="Node inspector"
       style={{
         position: "absolute",
         top: "calc(var(--space-3) * 2 + 40px)",
@@ -35,7 +36,7 @@ export function NodeInspector({
         color: "var(--color-text)",
         fontFamily: "var(--font-sans)",
         fontSize: "var(--text-sm)",
-        zIndex: "var(--z-overlay)" as unknown as number,
+        zIndex: "var(--z-overlay)",
       }}
     >
       <div
