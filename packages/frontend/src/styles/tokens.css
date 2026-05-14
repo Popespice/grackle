@@ -70,6 +70,17 @@
   --z-overlay: 100;
   --z-modal: 200;
   --z-toast: 300;
+
+  /* === Node-kind colors (Phase 2 default kinds + extension surface) === */
+  --color-node-file: #7c6cff;
+  --color-node-class: #5eead4;
+  --color-node-function: #fbbf24;
+  --color-node-method: #f472b6;
+
+  /* === Edge-kind colors === */
+  --color-edge-import: #5eead4;
+  --color-edge-call: #fbbf24;
+  --color-edge-inherit: #f472b6;
 }
 
 [data-theme="light"] {
