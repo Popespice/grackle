@@ -66,6 +66,35 @@
       "required": ["source", "target", "kind"],
       "additionalProperties": false
     },
+    "ManifestEntry": {
+      "type": "object",
+      "description": "Cache entry for a single source file.",
+      "properties": {
+        "hash": {
+          "type": "string",
+          "description": "SHA-256 hex digest of the file content at time of caching."
+        },
+        "partial_path": {
+          "type": "string",
+          "description": "Sidecar filename within the cache directory (e.g. 'abc123….json')."
+        }
+      },
+      "required": ["hash", "partial_path"],
+      "additionalProperties": false
+    },
+    "Manifest": {
+      "type": "object",
+      "description": "Cache manifest: maps POSIX-relative source file paths to their cache entries. Written to .grackle/cache/manifest.json by CacheManager.",
+      "properties": {
+        "entries": {
+          "type": "object",
+          "description": "Map from POSIX-relative path to cache entry.",
+          "additionalProperties": { "$ref": "#/$defs/ManifestEntry" }
+        }
+      },
+      "required": ["entries"],
+      "additionalProperties": false
+    },
     "Graph": {
       "type": "object",
       "description": "Top-level graph artifact produced by a StaticParserAdapter.",
