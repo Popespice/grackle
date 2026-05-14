@@ -11,7 +11,7 @@ authors = [{ name = "Connor Allen", email = "connor.allen9@icloud.com" }]
 requires-python = ">=3.12"
 dependencies = [
     "websockets>=16,<17",
-    "click>=8.1",
+    "click>=8.3.3",
     "structlog>=25.5.0",
     "jsonschema>=4",
 ]
