@@ -3,7 +3,7 @@
   "$id": "messages",
   "title": "grackle WebSocket messages",
   "description": "Wire format for agent ↔ browser WebSocket communication. Unknown message types MUST be silently ignored by all consumers.",
-  "definitions": {
+  "$defs": {
     "WsEnvelope": {
       "type": "object",
       "description": "Base envelope — every wire message shares this shape.",
@@ -28,7 +28,7 @@
     "PingMessage": {
       "description": "Heartbeat sent by the browser. Agent replies with PongMessage.",
       "allOf": [
-        { "$ref": "#/definitions/WsEnvelope" },
+        { "$ref": "#/$defs/WsEnvelope" },
         {
           "properties": {
             "type": { "const": "ping" },
@@ -41,7 +41,7 @@
     "PongMessage": {
       "description": "Heartbeat reply from the agent.",
       "allOf": [
-        { "$ref": "#/definitions/WsEnvelope" },
+        { "$ref": "#/$defs/WsEnvelope" },
         {
           "properties": {
             "type": { "const": "pong" },
