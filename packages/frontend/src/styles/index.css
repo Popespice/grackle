@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "@fontsource-variable/doto";
 @import "./tokens.css";
 @import "./base.css";
 @import "./theme.css";

@@ -1,5 +1,6 @@
 import type { JSX } from "react";
 import { useEffect } from "react";
+import { BrandMark } from "./components/BrandMark";
 import { ConnectionBadge } from "./components/ConnectionBadge";
 import { ThemeToggle } from "./components/ThemeToggle";
 import { useGrackleClient } from "./ws/client";
@@ -31,7 +32,16 @@ export function App(): JSX.Element {
           background: "var(--color-surface)",
         }}
       >
-        <ConnectionBadge />
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "var(--space-3)",
+          }}
+        >
+          <BrandMark />
+          <ConnectionBadge />
+        </div>
         <ThemeToggle />
       </header>
 
