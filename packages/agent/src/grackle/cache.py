@@ -5,7 +5,7 @@ a two-level layout: a manifest JSON file (``manifest.json``) maps
 POSIX-relative source paths → ``{hash, partial_path}`` entries, and each
 partial is stored as a sidecar ``<sha256>.json`` file.
 
-All writes are atomic (write to ``.tmp`` then ``Path.rename()``) so a crash
+All writes are atomic (write to ``.tmp`` then ``Path.replace()``) so a crash
 or kill mid-write leaves the cache in a consistent state. All public methods
 are safe under (a) multiple threads in one process and (b) multiple processes
 sharing the same project root, via a per-root in-process ``threading.Lock``
@@ -73,10 +73,15 @@ def _hash_file(path: Path) -> str:
 
 
 def _atomic_write(dest: Path, data: str) -> None:
-    """Write ``data`` to ``dest`` atomically via a sibling ``.tmp`` + rename."""
+    """Write ``data`` to ``dest`` atomically via a sibling ``.tmp`` + replace.
+
+    Uses ``Path.replace`` (not ``rename``): on Windows ``rename`` raises
+    ``FileExistsError`` when the destination exists, while ``replace`` is
+    atomic on both POSIX and Windows.
+    """
     tmp = dest.with_suffix(".tmp")
     tmp.write_text(data, encoding="utf-8")
-    tmp.rename(dest)
+    tmp.replace(dest)
 
 
 def _normalize_manifest(data: Any) -> dict[str, Any]:

@@ -129,7 +129,7 @@ def test_stale_tmp_overwritten_by_new_set(tmp_path: Path) -> None:
     assert cache.get(src) == {"nodes": [], "edges": []}
 
 
-def test_atomic_write_uses_tmp_then_rename(tmp_path: Path) -> None:
+def test_atomic_write_uses_tmp_then_replace(tmp_path: Path) -> None:
     # Verify that _atomic_write produces the correct final file content
     # (we can't intercept the rename, but we can verify the file is consistent).
     from grackle.cache import _atomic_write
@@ -138,6 +138,19 @@ def test_atomic_write_uses_tmp_then_rename(tmp_path: Path) -> None:
     _atomic_write(dest, '{"ok": true}')
     assert dest.read_text(encoding="utf-8") == '{"ok": true}'
     assert not dest.with_suffix(".tmp").exists()
+
+
+def test_atomic_write_overwrites_existing_dest(tmp_path: Path) -> None:
+    """Cross-platform regression: Path.rename raises FileExistsError on
+    Windows when dest exists, but Path.replace works on both POSIX and
+    Windows. This test would have caught the Windows-only bug on POSIX too.
+    """
+    from grackle.cache import _atomic_write
+
+    dest = tmp_path / "out.json"
+    dest.write_text("old content", encoding="utf-8")
+    _atomic_write(dest, "new content")
+    assert dest.read_text(encoding="utf-8") == "new content"
 
 
 # ---------------------------------------------------------------------------
