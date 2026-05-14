@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "graph",
+  "title": "grackle graph",
+  "description": "Static analysis graph artifact emitted by a StaticParserAdapter. Nodes represent code entities (files, classes, functions, etc.); edges represent relationships (imports, calls, inheritance). Kind fields are open strings per ADR-0004.",
+  "$defs": {
+    "GraphNode": {
+      "type": "object",
+      "description": "A node in the analysis graph (file, class, function, method, etc.).",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Stable POSIX-relative node ID. See ADR-0005 for the ID scheme."
+        },
+        "kind": {
+          "type": "string",
+          "description": "Open string — see ADR-0004. Common values listed in examples.",
+          "examples": ["file", "class", "function", "method"]
+        },
+        "name": {
+          "type": "string",
+          "description": "Display name of the code entity (e.g., class or function name)."
+        },
+        "path": {
+          "type": "string",
+          "description": "POSIX-relative path from the project root. Forward slashes only.",
+          "pattern": "^[^\\\\]*$"
+        },
+        "line": {
+          "type": "integer",
+          "description": "1-based line number of the definition.",
+          "minimum": 1
+        },
+        "metadata": {
+          "type": "object",
+          "description": "Open metadata bag — shape is kind-specific and adapter-specific.",
+          "additionalProperties": {}
+        }
+      },
+      "required": ["id", "kind", "name", "path"],
+      "additionalProperties": false
+    },
+    "GraphEdge": {
+      "type": "object",
+      "description": "A directed edge between two nodes.",
+      "properties": {
+        "source": {
+          "type": "string",
+          "description": "ID of the source node."
+        },
+        "target": {
+          "type": "string",
+          "description": "ID of the target node."
+        },
+        "kind": {
+          "type": "string",
+          "description": "Open string — see ADR-0004. Common values listed in examples.",
+          "examples": ["import", "call", "inherit"]
+        },
+        "metadata": {
+          "type": "object",
+          "description": "Open metadata bag — shape is kind-specific and adapter-specific.",
+          "additionalProperties": {}
+        }
+      },
+      "required": ["source", "target", "kind"],
+      "additionalProperties": false
+    },
+    "Graph": {
+      "type": "object",
+      "description": "Top-level graph artifact produced by a StaticParserAdapter.",
+      "properties": {
+        "version": {
+          "type": "integer",
+          "description": "Schema version for forward-compatibility. Current: 1.",
+          "minimum": 1
+        },
+        "language": {
+          "type": "string",
+          "description": "Open string — see ADR-0004. The adapter language key that produced this graph.",
+          "examples": ["python", "typescript", "go", "rust"]
+        },
+        "nodes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/GraphNode" },
+          "description": "All nodes in the graph."
+        },
+        "edges": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/GraphEdge" },
+          "description": "All edges in the graph."
+        },
+        "metadata": {
+          "type": "object",
+          "description": "Optional graph-level metadata (e.g., parse_warnings list).",
+          "additionalProperties": {}
+        }
+      },
+      "required": ["version", "language", "nodes", "edges"],
+      "additionalProperties": false
+    }
+  }
+}
