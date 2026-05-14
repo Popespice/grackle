@@ -21,7 +21,7 @@ pre-push:
       run: pnpm --filter @grackle/frontend test --run
     mypy:
       root: "packages/agent/"
-      run: uv run mypy --strict src
+      run: uv run mypy --strict src tests
     test-agent:
       root: "packages/agent/"
       run: uv run pytest -q

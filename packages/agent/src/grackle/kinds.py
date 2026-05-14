@@ -59,6 +59,12 @@ class KindRegistry[T: (NodeKind, EdgeKind)]:
     ``KindRegistry[EdgeKind]``. The two module-level singletons are the
     intended entry points; creating additional registries is allowed but
     unusual.
+
+    Note: the PEP 695 constraint ``T: (NodeKind, EdgeKind)`` is enforced by
+    static type checkers only — at runtime, ``KindRegistry[NodeKind]`` and
+    ``KindRegistry`` are the same class, and ``register()`` accepts any
+    object with the duck-typed ``.name`` and ``.color`` attributes the
+    method reads. Don't rely on isinstance enforcement.
     """
 
     def __init__(self) -> None:

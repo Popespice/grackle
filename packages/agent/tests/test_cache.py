@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import multiprocessing
 import threading
 from typing import TYPE_CHECKING, Any
+
+import pytest
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -180,7 +183,7 @@ def test_evict_does_not_affect_other_entries(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Resilience: corrupted / missing manifest
+# Resilience: corrupted / missing manifest + sidecars
 # ---------------------------------------------------------------------------
 
 
@@ -189,6 +192,34 @@ def test_corrupted_manifest_returns_none(tmp_path: Path) -> None:
     manifest_path = tmp_path / ".grackle" / "cache" / "manifest.json"
     manifest_path.write_text("not json!!!", encoding="utf-8")
 
+    src = _make_file(tmp_path / "mod.py", b"x")
+    assert cache.get(src) is None
+
+
+@pytest.mark.parametrize("payload", ["[]", "null", '"hello"', "42", "true"])
+def test_manifest_wrong_shape_returns_none(tmp_path: Path, payload: str) -> None:
+    """F-1: valid JSON of the wrong shape must not raise AttributeError."""
+    cache = CacheManager(tmp_path)
+    manifest_path = tmp_path / ".grackle" / "cache" / "manifest.json"
+    manifest_path.write_text(payload, encoding="utf-8")
+    src = _make_file(tmp_path / "mod.py", b"x")
+    assert cache.get(src) is None
+
+
+def test_manifest_entries_field_wrong_shape_returns_none(tmp_path: Path) -> None:
+    """F-1: top-level dict but `entries` is the wrong shape."""
+    cache = CacheManager(tmp_path)
+    manifest_path = tmp_path / ".grackle" / "cache" / "manifest.json"
+    manifest_path.write_text('{"entries": [1, 2, 3], "extra": "preserved"}', encoding="utf-8")
+    src = _make_file(tmp_path / "mod.py", b"x")
+    assert cache.get(src) is None
+
+
+def test_manifest_entry_value_wrong_shape_returns_none(tmp_path: Path) -> None:
+    """F-1: entries dict exists but the per-key value isn't a dict."""
+    cache = CacheManager(tmp_path)
+    manifest_path = tmp_path / ".grackle" / "cache" / "manifest.json"
+    manifest_path.write_text('{"entries": {"mod.py": "not-a-dict"}}', encoding="utf-8")
     src = _make_file(tmp_path / "mod.py", b"x")
     assert cache.get(src) is None
 
@@ -204,6 +235,49 @@ def test_missing_sidecar_returns_none(tmp_path: Path) -> None:
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     assert cache.get(src) is None
+
+
+def test_sidecar_wrong_shape_returns_none(tmp_path: Path) -> None:
+    """F-2: sidecar is valid JSON but isn't an object (e.g. list)."""
+    cache = CacheManager(tmp_path)
+    src = _make_file(tmp_path / "mod.py", b"x")
+    h = _hash_file(src)
+    cache.set(src, h, {"ok": True})
+
+    sidecar = tmp_path / ".grackle" / "cache" / f"{h}.json"
+    sidecar.write_text("[1, 2, 3]", encoding="utf-8")
+
+    assert cache.get(src) is None
+
+
+def test_manifest_entry_missing_partial_path_returns_none(tmp_path: Path) -> None:
+    cache = CacheManager(tmp_path)
+    src = _make_file(tmp_path / "mod.py", b"x")
+    h = _hash_file(src)
+    manifest = {"entries": {"mod.py": {"hash": h}}}  # missing partial_path
+    (tmp_path / ".grackle" / "cache" / "manifest.json").write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
+    assert cache.get(src) is None
+
+
+def test_unknown_top_level_keys_preserved_across_set(tmp_path: Path) -> None:
+    """Forward-compat: future versions can add top-level keys without losing them."""
+    cache = CacheManager(tmp_path)
+    src = _make_file(tmp_path / "mod.py", b"x")
+    h = _hash_file(src)
+
+    manifest_path = tmp_path / ".grackle" / "cache" / "manifest.json"
+    manifest_path.write_text(
+        json.dumps({"entries": {}, "schema_version": 99, "metadata": {"foo": "bar"}}),
+        encoding="utf-8",
+    )
+
+    cache.set(src, h, {"v": 1})
+    after = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert after.get("schema_version") == 99
+    assert after.get("metadata") == {"foo": "bar"}
+    assert "mod.py" in after["entries"]
 
 
 # ---------------------------------------------------------------------------
@@ -260,3 +334,83 @@ def test_flush_after_set_is_noop(tmp_path: Path) -> None:
     cache.set(src, h, {})
     cache.flush()
     assert cache.get(src) == {}
+
+
+# ---------------------------------------------------------------------------
+# F-3: cross-instance and cross-process safety
+# ---------------------------------------------------------------------------
+
+
+def test_two_instances_share_lock_within_process(tmp_path: Path) -> None:
+    """F-3 (in-process): two CacheManagers on the same root must coordinate."""
+    c1 = CacheManager(tmp_path)
+    c2 = CacheManager(tmp_path)
+
+    # They MUST share the same in-process lock object.
+    assert c1._inproc_lock is c2._inproc_lock
+
+    files = []
+    for i in range(40):
+        files.append(_make_file(tmp_path / f"f{i}.py", f"c{i}".encode()))
+
+    errors: list[Exception] = []
+
+    def worker(c: CacheManager, fs: list[Path]) -> None:
+        for f in fs:
+            try:
+                c.set(f, _hash_file(f), {"name": f.name})
+            except Exception as exc:
+                errors.append(exc)
+
+    t1 = threading.Thread(target=worker, args=(c1, files[:20]))
+    t2 = threading.Thread(target=worker, args=(c2, files[20:]))
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    assert not errors, f"errors: {errors}"
+    manifest = json.loads(
+        (tmp_path / ".grackle" / "cache" / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert len(manifest["entries"]) == 40, f"lost entries: {len(manifest['entries'])} of 40"
+
+
+def _cross_process_worker(args: tuple[str, list[str]]) -> None:
+    """Module-level worker for cross-process test (must be picklable)."""
+    from pathlib import Path
+
+    from grackle.cache import CacheManager, _hash_file
+
+    root_str, file_paths = args
+    cache = CacheManager(Path(root_str))
+    for fp in file_paths:
+        f = Path(fp)
+        cache.set(f, _hash_file(f), {"name": f.name})
+
+
+def test_cross_process_safety(tmp_path: Path) -> None:
+    """F-3 (cross-process): two processes writing to the same cache must not corrupt."""
+    n_files = 20
+    files = [_make_file(tmp_path / f"f{i}.py", f"c{i}".encode()) for i in range(n_files)]
+    half = n_files // 2
+    args_a = (str(tmp_path), [str(f) for f in files[:half]])
+    args_b = (str(tmp_path), [str(f) for f in files[half:]])
+
+    ctx = multiprocessing.get_context("spawn")
+    p1 = ctx.Process(target=_cross_process_worker, args=(args_a,))
+    p2 = ctx.Process(target=_cross_process_worker, args=(args_b,))
+    p1.start()
+    p2.start()
+    p1.join(timeout=30)
+    p2.join(timeout=30)
+
+    assert p1.exitcode == 0, f"process 1 failed: exitcode={p1.exitcode}"
+    assert p2.exitcode == 0, f"process 2 failed: exitcode={p2.exitcode}"
+
+    manifest = json.loads(
+        (tmp_path / ".grackle" / "cache" / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert len(manifest["entries"]) == n_files, (
+        f"cross-process lost entries: {len(manifest['entries'])} of {n_files}"
+    )
