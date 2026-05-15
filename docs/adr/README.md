@@ -26,3 +26,5 @@ NNNN-short-title.md
 | [0002](0002-trace-transport.md) | Trace transport: WebSocket vs alternatives | accepted |
 | [0003](0003-adapter-design.md) | Adapter design: Protocols, capability flags, registry | accepted |
 | [0004](0004-extension-surface.md) | Extension surface: open strings, registries, rule of three | accepted |
+| [0005](0005-kind-registry.md) | Kind registry: separate node/edge registries with display metadata | accepted |
+| [0006](0006-python-ast-vs-tree-sitter.md) | Python parser: stdlib ast vs Tree-sitter | accepted |
