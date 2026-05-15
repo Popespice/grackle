@@ -52,6 +52,8 @@ beforeEach(() => {
     status: "disconnected",
     lastPong: null,
     _ws: null,
+    _staticGraphHandlers: new Set(),
+    _pendingReadSource: new Map(),
   });
   MockWsClass.mockClear();
 });
@@ -133,6 +135,107 @@ describe("useGrackleClient", () => {
       JSON.stringify({ id: "x", type: "unknown", payload: {} })
     );
     expect(useGrackleClient.getState().lastPong).toBeNull();
+  });
+
+  it("static_graph message calls registered handlers", () => {
+    const { connect, onStaticGraph } = useGrackleClient.getState();
+    connect("ws://127.0.0.1:7878");
+    mockWs.simulateOpen();
+
+    const received: unknown[] = [];
+    onStaticGraph((g) => received.push(g));
+
+    const fakeGraph = {
+      version: 1,
+      language: "python",
+      nodes: [],
+      edges: [],
+    };
+    mockWs.simulateMessage(
+      JSON.stringify({ id: "sg1", type: "static_graph", payload: fakeGraph })
+    );
+
+    expect(received).toHaveLength(1);
+    expect(received[0]).toEqual(fakeGraph);
+  });
+
+  it("onStaticGraph returns an unsubscribe function", () => {
+    const { connect, onStaticGraph } = useGrackleClient.getState();
+    connect("ws://127.0.0.1:7878");
+    mockWs.simulateOpen();
+
+    const received: unknown[] = [];
+    const unsubscribe = onStaticGraph((g) => received.push(g));
+    unsubscribe();
+
+    mockWs.simulateMessage(
+      JSON.stringify({
+        id: "sg2",
+        type: "static_graph",
+        payload: { version: 1, language: "python", nodes: [], edges: [] },
+      })
+    );
+
+    expect(received).toHaveLength(0);
+  });
+
+  it("source_response resolves a pending sendReadSource promise", async () => {
+    const { connect, sendReadSource } = useGrackleClient.getState();
+    connect("ws://127.0.0.1:7878");
+    mockWs.simulateOpen();
+
+    const promise = sendReadSource("foo/bar.py");
+    expect(mockWs.sent).toHaveLength(1);
+    const sent = JSON.parse(mockWs.sent[0] ?? "{}") as {
+      id: string;
+      type: string;
+      payload: { path: string };
+    };
+    expect(sent.type).toBe("read_source");
+    expect(sent.payload.path).toBe("foo/bar.py");
+
+    // Simulate agent reply
+    mockWs.simulateMessage(
+      JSON.stringify({
+        id: sent.id,
+        type: "source_response",
+        payload: { path: "foo/bar.py", source: "x = 1\n", encoding: "utf-8" },
+      })
+    );
+
+    const result = await promise;
+    expect(result.type).toBe("source_response");
+    if (result.type === "source_response") {
+      expect(result.payload.source).toBe("x = 1\n");
+    }
+  });
+
+  it("source_error resolves a pending sendReadSource promise with error", async () => {
+    const { connect, sendReadSource } = useGrackleClient.getState();
+    connect("ws://127.0.0.1:7878");
+    mockWs.simulateOpen();
+
+    const promise = sendReadSource("missing.py");
+    const sent = JSON.parse(mockWs.sent[0] ?? "{}") as { id: string };
+
+    mockWs.simulateMessage(
+      JSON.stringify({
+        id: sent.id,
+        type: "source_error",
+        payload: { path: "missing.py", reason: "not_found" },
+      })
+    );
+
+    const result = await promise;
+    expect(result.type).toBe("source_error");
+    if (result.type === "source_error") {
+      expect(result.payload.reason).toBe("not_found");
+    }
+  });
+
+  it("sendReadSource rejects when not connected", async () => {
+    const { sendReadSource } = useGrackleClient.getState();
+    await expect(sendReadSource("foo.py")).rejects.toThrow("not connected");
   });
 
   it("malformed message is ignored without throwing", () => {

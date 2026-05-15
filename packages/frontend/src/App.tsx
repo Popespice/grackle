@@ -3,16 +3,24 @@ import { useEffect } from "react";
 import { BrandMark } from "./components/BrandMark";
 import { ConnectionBadge } from "./components/ConnectionBadge";
 import { ThemeToggle } from "./components/ThemeToggle";
+import { GraphCanvas } from "./graph/GraphCanvas";
+import { useGraphStore } from "./graph/useGraphStore";
 import { useGrackleClient } from "./ws/client";
 
 const WS_URL = "ws://127.0.0.1:7878";
 
 export function App(): JSX.Element {
   const connect = useGrackleClient((s) => s.connect);
+  const onStaticGraph = useGrackleClient((s) => s.onStaticGraph);
+  const setGraph = useGraphStore((s) => s.setGraph);
 
   useEffect(() => {
     connect(WS_URL);
   }, [connect]);
+
+  useEffect(() => {
+    return onStaticGraph(setGraph);
+  }, [onStaticGraph, setGraph]);
 
   return (
     <div
@@ -48,11 +56,14 @@ export function App(): JSX.Element {
       <main
         style={{
           flex: 1,
+          position: "relative",
           backgroundImage:
             "radial-gradient(circle, var(--color-border) 1px, transparent 1px)",
           backgroundSize: "24px 24px",
         }}
-      />
+      >
+        <GraphCanvas />
+      </main>
     </div>
   );
 }

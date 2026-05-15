@@ -71,6 +71,13 @@ Auto-fix on dirty repos: `pnpm format` (biome write) and `uv run ruff format` in
 
 ## Active roadmap context
 
-Phase 1 (adapter Protocols + `AdapterRegistry` + `grackle languages`) is shipped at tag `v0.1.0-phase-1`. Phase 2 (Python static parser via stdlib `ast`) is shipped at tag `v0.2.0-phase-2` — `paths.py`, `kinds.py`, `cache.py`, `python_parser/` (walker + visitors + resolver + adapter), `grackle parse` CLI, `fixtures/tiny-app/` golden-graph integration test, and ADRs 0005 (kind registry) + 0006 (ast vs tree-sitter). Phase 2 committed the load-bearing contracts (`graph.json` shape, node-ID scheme `<posix-path>:<qualname>`, kind registry pattern) that every later phase consumes. Phase 3 (frontend renders the static graph via Sigma.js + `grackle serve` push) is next.
+Phase 1 (adapter Protocols + `AdapterRegistry` + `grackle languages`) is shipped at tag `v0.1.0-phase-1`. Phase 2 (Python static parser via stdlib `ast`) is shipped at tag `v0.2.0-phase-2` — `paths.py`, `kinds.py`, `cache.py`, `python_parser/` (walker + visitors + resolver + adapter), `grackle parse` CLI, `fixtures/tiny-app/` golden-graph integration test, and ADRs 0005 + 0006. Phase 2 committed the load-bearing contracts (`graph.json` shape, node-ID scheme `<posix-path>:<qualname>`, kind registry pattern) that every later phase consumes.
+
+**Phase 3 (frontend renders the static graph) is in progress.** Approved plan at `/Users/connorallen/.claude/plans/radiant-seeking-owl.md`. Chunks 3.A–3.H.
+
+- **Step 0 (done):** `demo/end-product-preview` rebased onto main; `_DemoServer` swapped from hand-authored JSON to `PythonStaticParser().parse()`; `fixtures/demo-graph/` deleted.
+- **3.A (done, commit `be10fe4`):** 4 new WebSocket message types (`static_graph`, `read_source`, `source_response`, `source_error`). `grackle serve --root PATH` pushes `static_graph` on connect; handles `read_source` with path-traversal guard + 1 MiB cap + UTF-8 check. `client.ts` dispatches `static_graph` to subscribers and correlates `read_source` replies by id.
+- **3.B (done):** Zustand graph store (`useGraphStore.ts`) + pure graphology builder (`buildGraphology.ts`) + `GraphCanvas.tsx` (Sigma 3 + FA2 worker, StrictMode-safe). 20 new frontend tests (55 total).
+- **3.C (next):** Panel/slot chassis — `PanelRegistry`, `SlotContainer`, wire `GraphLegend`/`NodeInspector` into slots.
 
 `PHASE_0_SUMMARY.md`, `PHASE_1_SUMMARY.md`, and `PHASE_2_SUMMARY.md` at the repo root are the per-phase "what shipped + acceptance grid" reference cards.
