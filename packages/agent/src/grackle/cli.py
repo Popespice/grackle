@@ -83,7 +83,13 @@ def parse(
 @main.command()
 @click.option("--host", default="127.0.0.1", show_default=True, help="Bind address.")
 @click.option("--port", default=7878, show_default=True, help="WebSocket port.")
-def serve(host: str, port: int) -> None:
+@click.option(
+    "--root",
+    default=".",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="Project root to parse on client connect (default: current directory).",
+)
+def serve(host: str, port: int, root: Path) -> None:
     """Start the grackle agent WebSocket server."""
     configure_logging()
     log = structlog.get_logger()
@@ -91,5 +97,6 @@ def serve(host: str, port: int) -> None:
         "grackle starting",
         platform=platform.platform(),
         python=sys.version.split()[0],
+        root=str(root),
     )
-    asyncio.run(_server.serve(host, port))
+    asyncio.run(_server.serve(host, port, root=root))

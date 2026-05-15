@@ -60,6 +60,93 @@
           "required": ["type"]
         }
       ]
+    },
+    "StaticGraphMessage": {
+      "description": "Unsolicited push from agent on connect — the full static analysis graph. Payload shape is graph.schema.json#/$defs/Graph.",
+      "allOf": [
+        { "$ref": "#/$defs/WsEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "static_graph" },
+            "payload": {
+              "type": "object",
+              "description": "A Graph — see graph.schema.json#/$defs/Graph.",
+              "additionalProperties": true
+            }
+          },
+          "required": ["type"]
+        }
+      ]
+    },
+    "ReadSourceRequest": {
+      "description": "Browser requests raw source text for a file at a POSIX-relative path.",
+      "allOf": [
+        { "$ref": "#/$defs/WsEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "read_source" },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "description": "POSIX-relative path from project root. No backslashes.",
+                  "pattern": "^[^\\\\]*$"
+                }
+              },
+              "required": ["path"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["type"]
+        }
+      ]
+    },
+    "ReadSourceResponse": {
+      "description": "Agent reply with file content. id echoes the ReadSourceRequest id.",
+      "allOf": [
+        { "$ref": "#/$defs/WsEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "source_response" },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "path": { "type": "string" },
+                "source": { "type": "string" },
+                "encoding": { "type": "string" }
+              },
+              "required": ["path", "source", "encoding"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["type"]
+        }
+      ]
+    },
+    "ReadSourceError": {
+      "description": "Agent error reply when ReadSourceRequest cannot be fulfilled. id echoes the request.",
+      "allOf": [
+        { "$ref": "#/$defs/WsEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "source_error" },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "path": { "type": "string" },
+                "reason": {
+                  "type": "string",
+                  "enum": ["not_found", "forbidden", "binary", "too_large"]
+                }
+              },
+              "required": ["path", "reason"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["type"]
+        }
+      ]
     }
   }
 }

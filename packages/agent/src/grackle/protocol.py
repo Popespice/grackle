@@ -9,10 +9,13 @@ sanity-check artifact reviewed after schema changes, not a runtime dependency.
 """
 
 import json
+import uuid
 from typing import Any, TypedDict, cast
 
 import jsonschema
 import jsonschema.exceptions
+
+from grackle.adapters.base import StaticGraph
 
 
 class WsEnvelope(TypedDict):
@@ -53,3 +56,30 @@ def parse_envelope(raw: str) -> WsEnvelope:
 def make_pong(ping_id: str) -> str:
     """Return a serialized pong envelope, echoing ping_id as both id and payload.ping_id."""
     return json.dumps({"id": ping_id, "type": "pong", "payload": {"ping_id": ping_id}})
+
+
+def make_static_graph(graph: StaticGraph) -> str:
+    """Return a serialized static_graph envelope with a fresh UUID id."""
+    return json.dumps({"id": str(uuid.uuid4()), "type": "static_graph", "payload": graph})
+
+
+def make_source_response(request_id: str, path: str, source: str, encoding: str) -> str:
+    """Return a serialized source_response envelope echoing the request id."""
+    return json.dumps(
+        {
+            "id": request_id,
+            "type": "source_response",
+            "payload": {"path": path, "source": source, "encoding": encoding},
+        }
+    )
+
+
+def make_source_error(request_id: str, path: str, reason: str) -> str:
+    """Return a serialized source_error envelope echoing the request id."""
+    return json.dumps(
+        {
+            "id": request_id,
+            "type": "source_error",
+            "payload": {"path": path, "reason": reason},
+        }
+    )

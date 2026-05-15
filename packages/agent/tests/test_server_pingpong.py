@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import json
 from collections.abc import AsyncGenerator
+from pathlib import Path
 
 import pytest
 from websockets.asyncio.client import connect
@@ -10,8 +11,9 @@ from grackle.server import serve
 
 
 @pytest.fixture
-async def agent_server(free_port: int) -> AsyncGenerator[int, None]:
-    task = asyncio.create_task(serve("127.0.0.1", free_port))
+async def agent_server(free_port: int, tmp_path: Path) -> AsyncGenerator[int, None]:
+    # tmp_path is an empty dir — no Python files detected, no static_graph pushed.
+    task = asyncio.create_task(serve("127.0.0.1", free_port, root=tmp_path))
     await asyncio.sleep(0.05)  # let the server bind and start listening
     yield free_port
     task.cancel()
