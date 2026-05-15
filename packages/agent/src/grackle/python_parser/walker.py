@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from grackle.cache import CacheManager
 
 from grackle.paths import to_posix
+from grackle.python_parser.resolver import resolve_graph
 from grackle.python_parser.visitors import FileVisitor, GraphBuilder
 
 
@@ -99,4 +100,4 @@ class PythonAstWalker:
         }
         if warnings:
             graph["metadata"] = {"parse_warnings": warnings}
-        return graph
+        return resolve_graph(graph)

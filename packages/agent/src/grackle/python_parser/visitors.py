@@ -228,6 +228,48 @@ class ImportVisitor(ast.NodeVisitor):
 
 
 # ---------------------------------------------------------------------------
+# _CallVisitor
+# ---------------------------------------------------------------------------
+
+
+class _CallVisitor(ast.NodeVisitor):
+    """Emits unresolved call edges for direct calls within one function body.
+
+    Does not descend into nested function or class definitions; those emit
+    their own call edges when FunctionVisitor processes them separately.
+    """
+
+    def __init__(self, file_id: str, caller_id: str, builder: GraphBuilder) -> None:
+        self._file_id = file_id
+        self._caller_id = caller_id
+        self._builder = builder
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        pass
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        pass
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        pass
+
+    def visit_Call(self, node: ast.Call) -> None:
+        callee = _expr_to_name(node.func)
+        if callee is None and isinstance(node.func, ast.Attribute):
+            callee = _attr_to_str(node.func)
+        if callee is not None:
+            self._builder.add_edge(
+                {
+                    "source": self._caller_id,
+                    "target": callee,
+                    "kind": "call",
+                    "metadata": {"resolved": False},
+                }
+            )
+        self.generic_visit(node)
+
+
+# ---------------------------------------------------------------------------
 # FunctionVisitor
 # ---------------------------------------------------------------------------
 
@@ -285,6 +327,11 @@ class FunctionVisitor(ast.NodeVisitor):
                 },
             }
         )
+
+        # Emit unresolved call edges from this function's body.
+        call_vis = _CallVisitor(self._file_id, node_id, self._builder)
+        for stmt in node.body:
+            call_vis.visit(stmt)
 
         # Recurse into nested functions (always closures) and nested classes.
         for child in node.body:
