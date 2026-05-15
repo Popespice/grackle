@@ -71,6 +71,6 @@ Auto-fix on dirty repos: `pnpm format` (biome write) and `uv run ruff format` in
 
 ## Active roadmap context
 
-Phase 1 (adapter Protocols + `AdapterRegistry` + `grackle languages`) is shipped at tag `v0.1.0-phase-1`. Phase 2 (Python static parser via stdlib `ast`) is in progress — 2.A (`paths.py` + graph schemas) and 2.B (kind registries + content-hash cache) are on `main`; chunks 2.C–2.H are pending. Phase 2 commits the load-bearing contracts (`graph.json` shape, node-ID scheme `<posix-path>:<qualname>`, kind registry pattern) that every later phase consumes.
+Phase 1 (adapter Protocols + `AdapterRegistry` + `grackle languages`) is shipped at tag `v0.1.0-phase-1`. Phase 2 (Python static parser via stdlib `ast`) is shipped at tag `v0.2.0-phase-2` — `paths.py`, `kinds.py`, `cache.py`, `python_parser/` (walker + visitors + resolver + adapter), `grackle parse` CLI, `fixtures/tiny-app/` golden-graph integration test, and ADRs 0005 (kind registry) + 0006 (ast vs tree-sitter). Phase 2 committed the load-bearing contracts (`graph.json` shape, node-ID scheme `<posix-path>:<qualname>`, kind registry pattern) that every later phase consumes. Phase 3 (frontend renders the static graph via Sigma.js + `grackle serve` push) is next.
 
-`PHASE_0_SUMMARY.md` and `PHASE_1_SUMMARY.md` at the repo root are the per-phase "what shipped + acceptance grid" reference cards.
+`PHASE_0_SUMMARY.md`, `PHASE_1_SUMMARY.md`, and `PHASE_2_SUMMARY.md` at the repo root are the per-phase "what shipped + acceptance grid" reference cards.
