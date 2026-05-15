@@ -1,6 +1,8 @@
 import asyncio
+import json
 import platform
 import sys
+from pathlib import Path
 
 import click
 import structlog
@@ -20,6 +22,62 @@ def languages() -> None:
     from grackle.adapters import registry  # lazy import — keeps CLI startup snappy
 
     click.echo(f"supported languages: {registry.supported_languages()}")
+
+
+@main.command()
+@click.argument(
+    "root",
+    default=".",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+)
+@click.option(
+    "--output",
+    "-o",
+    default=None,
+    type=click.Path(dir_okay=False, writable=True, path_type=Path),
+    help="Write JSON to FILE instead of stdout.",
+)
+@click.option("--language", "-l", default=None, help="Force parser language (skips auto-detect).")
+@click.option(
+    "--exclude",
+    "-e",
+    "patterns",
+    multiple=True,
+    help="Exclude glob patterns (repeatable).",
+)
+def parse(
+    root: Path,
+    output: Path | None,
+    language: str | None,
+    patterns: tuple[str, ...],
+) -> None:
+    """Parse ROOT and emit a static graph as JSON."""
+    from grackle.adapters import registry
+    from grackle.adapters.base import ParseOptions
+
+    if language is not None:
+        adapter = registry.get_static(language)
+        if adapter is None:
+            raise click.UsageError(f"no static parser registered for language: {language!r}")
+    else:
+        detected = registry.detect(root)
+        if not detected:
+            raise click.UsageError(f"no static parser detected for project at: {root}")
+        adapter = registry.get_static(detected[0])
+        if adapter is None:  # defensive — detect() only returns registered names
+            raise click.UsageError(f"no static parser registered for language: {detected[0]!r}")
+
+    graph = adapter.parse(root, ParseOptions(exclude_patterns=patterns))
+    json_str = json.dumps(graph, indent=2)
+
+    if output is not None:
+        output.write_text(json_str, encoding="utf-8")
+        click.echo(
+            f"wrote {len(graph['nodes'])} nodes, {len(graph['edges'])} edges → {output}",
+            err=True,
+        )
+    else:
+        click.echo(json_str)
 
 
 @main.command()

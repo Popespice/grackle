@@ -1,5 +1,6 @@
 from importlib.metadata import PackageNotFoundError, version
 
+import grackle.python_parser  # noqa: F401  — triggers PythonStaticParser registration
 from grackle.adapters import registry as registry
 
 try:
