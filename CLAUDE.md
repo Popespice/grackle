@@ -78,6 +78,8 @@ Phase 1 (adapter Protocols + `AdapterRegistry` + `grackle languages`) is shipped
 - **Step 0 (done):** `demo/end-product-preview` rebased onto main; `_DemoServer` swapped from hand-authored JSON to `PythonStaticParser().parse()`; `fixtures/demo-graph/` deleted.
 - **3.A (done, commit `be10fe4`):** 4 new WebSocket message types (`static_graph`, `read_source`, `source_response`, `source_error`). `grackle serve --root PATH` pushes `static_graph` on connect; handles `read_source` with path-traversal guard + 1 MiB cap + UTF-8 check. `client.ts` dispatches `static_graph` to subscribers and correlates `read_source` replies by id.
 - **3.B (done):** Zustand graph store (`useGraphStore.ts`) + pure graphology builder (`buildGraphology.ts`) + `GraphCanvas.tsx` (Sigma 3 + FA2 worker, StrictMode-safe). 20 new frontend tests (55 total).
-- **3.C (next):** Panel/slot chassis — `PanelRegistry`, `SlotContainer`, wire `GraphLegend`/`NodeInspector` into slots.
+- **3.C (done):** Panel/slot chassis — `PanelRegistry`, `SlotContainer`, `HeaderChrome`, `GraphLegendPanel`, `NodeInspectorPanel`, `panels/init.ts`; `App.tsx` replaced with 5-slot CSS grid layout. `showAllKinds` added to store. 14 new frontend tests (69 total).
+- **3.D (done):** Search/filter sidebar — `matching.ts` (`isNodeVisible` pure function, fnmatch-style globs), `SearchFilterPanel.tsx` (search + kind toggles + exclude globs + hidden badge), registered into `left-sidebar`. `GraphCanvas` updated to use `isNodeVisible`. 25 new frontend tests (94 total).
+- **3.E (next):** Source viewer with Shiki — lazy-load `@shikijs/core`, `useSource.ts` hook, `SourceViewer.tsx` panel into `right-sidebar`.
 
 `PHASE_0_SUMMARY.md`, `PHASE_1_SUMMARY.md`, and `PHASE_2_SUMMARY.md` at the repo root are the per-phase "what shipped + acceptance grid" reference cards.

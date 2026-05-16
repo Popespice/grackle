@@ -22,21 +22,13 @@ export function NodeInspector({
     <aside
       aria-label="Node inspector"
       style={{
-        position: "absolute",
-        top: "calc(var(--space-3) * 2 + 40px)",
-        right: "var(--space-4)",
         width: 340,
-        maxHeight: "calc(100dvh - var(--space-16))",
-        overflowY: "auto",
         padding: "var(--space-4)",
         background: "var(--color-surface-2)",
-        border: "1px solid var(--color-border-strong)",
-        borderRadius: "var(--radius-lg)",
-        boxShadow: "0 12px 32px rgba(0,0,0,0.4)",
+        borderBottom: "1px solid var(--color-border)",
         color: "var(--color-text)",
         fontFamily: "var(--font-sans)",
         fontSize: "var(--text-sm)",
-        zIndex: "var(--z-overlay)",
       }}
     >
       <div

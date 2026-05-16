@@ -10,6 +10,7 @@ interface GraphStoreState {
   setGraph: (graph: Graph) => void;
   selectNode: (nodeId: string | null) => void;
   toggleKind: (kind: string) => void;
+  showAllKinds: () => void;
   setSearch: (term: string) => void;
   setExcludes: (globs: string[]) => void;
 }
@@ -32,6 +33,7 @@ export const useGraphStore = create<GraphStoreState>()((set) => ({
       }
       return { hiddenKinds: next };
     }),
+  showAllKinds: () => set({ hiddenKinds: new Set<string>() }),
   setSearch: (term) => set({ searchTerm: term }),
   setExcludes: (globs) => set({ excludeGlobs: globs }),
 }));

@@ -89,4 +89,18 @@ describe("useGraphStore", () => {
       "*.spec.ts",
     ]);
   });
+
+  it("showAllKinds clears all hidden kinds", () => {
+    useGraphStore.getState().toggleKind("class");
+    useGraphStore.getState().toggleKind("function");
+    useGraphStore.getState().showAllKinds();
+    expect(useGraphStore.getState().hiddenKinds.size).toBe(0);
+  });
+
+  it("showAllKinds creates a new Set instance", () => {
+    useGraphStore.getState().toggleKind("class");
+    const before = useGraphStore.getState().hiddenKinds;
+    useGraphStore.getState().showAllKinds();
+    expect(useGraphStore.getState().hiddenKinds).not.toBe(before);
+  });
 });

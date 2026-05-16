@@ -51,18 +51,12 @@ export function GraphLegend({
   return (
     <aside
       style={{
-        position: "absolute",
-        bottom: "var(--space-4)",
-        left: "var(--space-4)",
         padding: "var(--space-3) var(--space-4)",
         background: "var(--color-surface-2)",
-        border: "1px solid var(--color-border)",
-        borderRadius: "var(--radius-lg)",
+        borderTop: "1px solid var(--color-border)",
         color: "var(--color-text)",
         fontFamily: "var(--font-sans)",
         fontSize: "var(--text-xs)",
-        boxShadow: "0 8px 24px rgba(0,0,0,0.3)",
-        zIndex: 5,
         minWidth: 240,
       }}
     >
