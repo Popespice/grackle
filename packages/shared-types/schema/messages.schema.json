@@ -147,6 +147,91 @@
           "required": ["type"]
         }
       ]
+    },
+    "AgentHelloMessage": {
+      "description": "Demo-branch unsolicited push from agent on connect — fixture metadata + pulse settings. Not part of the production protocol; consumed only by the demo branch.",
+      "allOf": [
+        { "$ref": "#/$defs/WsEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "agent_hello" },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "fixtures": {
+                  "type": "array",
+                  "items": { "type": "object", "additionalProperties": true }
+                },
+                "active": { "type": "string" },
+                "live": { "type": "boolean" },
+                "pulseIntervalMs": { "type": "number" },
+                "pulseNodesPerPulse": { "type": "number" }
+              },
+              "required": ["fixtures", "active", "live"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["type"]
+        }
+      ]
+    },
+    "LoadFixtureMessage": {
+      "description": "Demo-branch browser→agent request to switch active fixture.",
+      "allOf": [
+        { "$ref": "#/$defs/WsEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "load_fixture" },
+            "payload": {
+              "type": "object",
+              "properties": { "name": { "type": "string" } },
+              "required": ["name"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["type"]
+        }
+      ]
+    },
+    "PulseMessage": {
+      "description": "Demo-branch agent→browser live-pulse highlight. Random subset of node ids per tick. Phase 6/7 will replace with real sys.monitoring trace events.",
+      "allOf": [
+        { "$ref": "#/$defs/WsEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "pulse" },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "nodes": { "type": "array", "items": { "type": "string" } }
+              },
+              "required": ["nodes"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["type"]
+        }
+      ]
+    },
+    "SetPulseRateMessage": {
+      "description": "Demo-branch browser→agent request to adjust pulse-loop frequency.",
+      "allOf": [
+        { "$ref": "#/$defs/WsEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "set_pulse_rate" },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "intervalMs": { "type": "number" },
+                "nodesPerPulse": { "type": "number" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": ["type"]
+        }
+      ]
     }
   }
 }

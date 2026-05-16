@@ -49,10 +49,52 @@ export interface ReadSourceError extends WsEnvelope {
   };
 }
 
+// Demo-branch message types — not part of the production protocol. Carried in
+// shared-types so the demo's TypeScript code can typecheck without redefining
+// them. Phase 6/7 will replace `PulseMessage` with real sys.monitoring traces.
+
+export interface DemoFixtureInfo {
+  name: string;
+  label?: string;
+  description?: string;
+  nodeCount?: number | null;
+  edgeCount?: number | null;
+}
+
+export interface AgentHelloMessage extends WsEnvelope {
+  type: "agent_hello";
+  payload: {
+    fixtures: DemoFixtureInfo[];
+    active: string;
+    live: boolean;
+    pulseIntervalMs?: number;
+    pulseNodesPerPulse?: number;
+  };
+}
+
+export interface LoadFixtureMessage extends WsEnvelope {
+  type: "load_fixture";
+  payload: { name: string };
+}
+
+export interface PulseMessage extends WsEnvelope {
+  type: "pulse";
+  payload: { nodes: string[] };
+}
+
+export interface SetPulseRateMessage extends WsEnvelope {
+  type: "set_pulse_rate";
+  payload: { intervalMs?: number; nodesPerPulse?: number };
+}
+
 export type AnyKnownMessage =
   | PingMessage
   | PongMessage
   | StaticGraphMessage
   | ReadSourceRequest
   | ReadSourceResponse
-  | ReadSourceError;
+  | ReadSourceError
+  | AgentHelloMessage
+  | LoadFixtureMessage
+  | PulseMessage
+  | SetPulseRateMessage;
