@@ -53,11 +53,12 @@ export function GraphLegend({
       style={{
         padding: "var(--space-3) var(--space-4)",
         background: "var(--color-surface-2)",
-        borderTop: "1px solid var(--color-border)",
+        borderLeft: "1px solid var(--color-border)",
         color: "var(--color-text)",
         fontFamily: "var(--font-sans)",
         fontSize: "var(--text-xs)",
         minWidth: 240,
+        boxSizing: "border-box",
       }}
     >
       <div

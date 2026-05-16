@@ -25,10 +25,12 @@ export function NodeInspector({
         width: 340,
         padding: "var(--space-4)",
         background: "var(--color-surface-2)",
+        borderLeft: "1px solid var(--color-border)",
         borderBottom: "1px solid var(--color-border)",
         color: "var(--color-text)",
         fontFamily: "var(--font-sans)",
         fontSize: "var(--text-sm)",
+        boxSizing: "border-box",
       }}
     >
       <div

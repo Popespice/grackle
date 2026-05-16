@@ -89,11 +89,25 @@ describe("SearchFilterPanel", () => {
     ]);
   });
 
-  it("shows hidden badge when nodes are hidden", () => {
+  it("shows hidden badge when nodes are hidden by kind", () => {
     useGraphStore.setState({ hiddenKinds: new Set(["function"]) });
     render(<SearchFilterPanel />);
-    // 2 function nodes are hidden, 1 class visible => hidden: 2 / 3
+    // 2 function nodes hidden, 1 class visible => 2 / 3
     expect(screen.getByLabelText(/Hidden: 2 of 3/)).toBeInTheDocument();
+  });
+
+  it("shows hidden badge when nodes are hidden by search term", () => {
+    useGraphStore.setState({ searchTerm: "main" });
+    render(<SearchFilterPanel />);
+    // Only b.py:main matches => 2 / 3 hidden
+    expect(screen.getByLabelText(/Hidden: 2 of 3/)).toBeInTheDocument();
+  });
+
+  it("shows hidden badge when nodes are hidden by exclude glob", () => {
+    useGraphStore.setState({ excludeGlobs: ["a.py"] });
+    render(<SearchFilterPanel />);
+    // a.py matches the glob => 1 / 3 hidden
+    expect(screen.getByLabelText(/Hidden: 1 of 3/)).toBeInTheDocument();
   });
 
   it("hides the badge when no nodes are hidden", () => {

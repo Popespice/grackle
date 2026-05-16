@@ -82,8 +82,8 @@ export function GraphCanvas(): JSX.Element {
   const selectNode = useGraphStore((s) => s.selectNode);
 
   // Rebuild sigma + FA2 when the graph data changes.
-  // hiddenKinds/searchTerm/selectedNodeId are intentionally omitted from deps:
-  // effect 2 below handles those changes without tearing down the sigma instance.
+  // hiddenKinds/searchTerm/excludeGlobs/selectedNodeId are intentionally omitted
+  // from deps: effect 2 below handles those changes without tearing down sigma.
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentional two-effect pattern
   useEffect(() => {
     if (!containerRef.current || !graph) return;

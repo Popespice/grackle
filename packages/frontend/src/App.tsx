@@ -51,7 +51,6 @@ export function App(): JSX.Element {
           display: "flex",
           flexDirection: "column",
           overflowY: "auto",
-          borderLeft: "1px solid var(--color-border)",
         }}
       >
         <SlotContainer slot="right-sidebar" />
