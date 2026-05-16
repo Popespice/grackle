@@ -9,6 +9,7 @@ import {
   type GrackleMultiGraph,
   type NodeAttributes,
 } from "./buildGraphology";
+import { isNodeVisible } from "./matching";
 import { useGraphStore } from "./useGraphStore";
 
 const KIND_COLORS: Record<string, string> = {
@@ -42,15 +43,21 @@ function makeNodeReducer(
   graphology: GrackleMultiGraph,
   hiddenKinds: Set<string>,
   searchTerm: string,
+  excludeGlobs: string[],
   selectedNodeId: string | null,
   container: HTMLElement
 ) {
   return (node: string, data: NodeAttributes): Partial<NodeDisplayData> => {
-    const hidden =
-      hiddenKinds.has(data.kind) ||
-      (searchTerm.length > 0 &&
-        !data.name.toLowerCase().includes(searchTerm.toLowerCase()) &&
-        !data.path.toLowerCase().includes(searchTerm.toLowerCase()));
+    const hidden = !isNodeVisible(
+      {
+        id: node,
+        kind: data.kind,
+        name: data.name,
+        path: data.path,
+        ...(data.metadata !== undefined ? { metadata: data.metadata } : {}),
+      },
+      { hiddenKinds, searchTerm, excludeGlobs }
+    );
 
     const inDegree = graphology.inDegree(node);
     const size = Math.max(BASE_SIZE, Math.log(inDegree + 1) * 8 + BASE_SIZE);
@@ -70,6 +77,7 @@ export function GraphCanvas(): JSX.Element {
   const graph = useGraphStore((s) => s.graph);
   const hiddenKinds = useGraphStore((s) => s.hiddenKinds);
   const searchTerm = useGraphStore((s) => s.searchTerm);
+  const excludeGlobs = useGraphStore((s) => s.excludeGlobs);
   const selectedNodeId = useGraphStore((s) => s.selectedNodeId);
   const selectNode = useGraphStore((s) => s.selectNode);
 
@@ -98,6 +106,7 @@ export function GraphCanvas(): JSX.Element {
           graphology,
           hiddenKinds,
           searchTerm,
+          excludeGlobs,
           selectedNodeId,
           container
         ),
@@ -149,12 +158,13 @@ export function GraphCanvas(): JSX.Element {
         graphology,
         hiddenKinds,
         searchTerm,
+        excludeGlobs,
         selectedNodeId,
         container
       )
     );
     sigma.refresh();
-  }, [hiddenKinds, searchTerm, selectedNodeId]);
+  }, [hiddenKinds, searchTerm, excludeGlobs, selectedNodeId]);
 
   return (
     <div
