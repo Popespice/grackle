@@ -17,6 +17,7 @@
     "graphology-layout-forceatlas2": "^0.10.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "shiki": "^4.0.2",
     "sigma": "^3.0.3",
     "zustand": "^5.0.0"
   },

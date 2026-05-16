@@ -4,6 +4,7 @@ import { HeaderChrome } from "./HeaderChrome";
 import { NodeInspectorPanel } from "./NodeInspectorPanel";
 import { panels } from "./registry";
 import { SearchFilterPanel } from "./SearchFilterPanel";
+import { SourceViewer } from "./SourceViewer";
 
 panels.register({
   slot: "top-bar",
@@ -22,6 +23,12 @@ panels.register({
   id: "graph-canvas",
   component: GraphCanvas,
   order: 0,
+});
+panels.register({
+  slot: "right-sidebar",
+  id: "source-viewer",
+  component: SourceViewer,
+  order: 5,
 });
 panels.register({
   slot: "right-sidebar",
