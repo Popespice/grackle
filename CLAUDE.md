@@ -55,7 +55,7 @@ Auto-fix on dirty repos: `pnpm format` (biome write) and `uv run ruff format` in
 
 ## Architecture seams (read these to be productive)
 
-- **`docs/adr/`** — five accepted ADRs cover monorepo structure (0001), trace transport (0002), adapter design / Protocols vs ABCs / path discipline (0003), and the open-string extension surface (0004). When designing new code, check whether an ADR already constrains the decision.
+- **`docs/adr/`** — eight accepted ADRs: monorepo structure (0001), trace transport (0002), adapter design (0003), open-string extension surface (0004), kind registry (0005), Python ast vs Tree-sitter (0006), panel/slot system (0007), analysis registry (0008). When designing new code, check whether an ADR already constrains the decision.
 - **`docs/cross-platform.md`** — the cross-platform contract (path handling, `spawn` semantics, line endings, CI matrix). Non-negotiable; CI runs Ubuntu + Windows on every PR, all three OSes on push to main.
 - **`packages/agent/src/grackle/adapters/`** — `StaticParserAdapter` and `RuntimeAdapter` are `@runtime_checkable` `typing.Protocol`s (not ABCs — see ADR-0003). `AdapterRegistry` is a thread-safe module singleton; adapters register themselves and the CLI/UI look them up by language string.
 
@@ -71,15 +71,8 @@ Auto-fix on dirty repos: `pnpm format` (biome write) and `uv run ruff format` in
 
 ## Active roadmap context
 
-Phase 1 (adapter Protocols + `AdapterRegistry` + `grackle languages`) is shipped at tag `v0.1.0-phase-1`. Phase 2 (Python static parser via stdlib `ast`) is shipped at tag `v0.2.0-phase-2` — `paths.py`, `kinds.py`, `cache.py`, `python_parser/` (walker + visitors + resolver + adapter), `grackle parse` CLI, `fixtures/tiny-app/` golden-graph integration test, and ADRs 0005 + 0006. Phase 2 committed the load-bearing contracts (`graph.json` shape, node-ID scheme `<posix-path>:<qualname>`, kind registry pattern) that every later phase consumes.
+Phase 1 (adapter Protocols + `AdapterRegistry` + `grackle languages`) is shipped at tag `v0.1.0-phase-1`. Phase 2 (Python static parser via stdlib `ast`) is shipped at tag `v0.2.0-phase-2`. Phase 3 (frontend renders the static graph) is shipped at tag `v0.3.0-phase-3` — panel/slot chassis, search/filter, Shiki source viewer, stats panel, stress-2k fixture, ADRs 0007+0008.
 
-**Phase 3 (frontend renders the static graph) is in progress.** Approved plan at `/Users/connorallen/.claude/plans/radiant-seeking-owl.md`. Chunks 3.A–3.H.
+**Phase 4 (TypeScript + Go adapters + analysis registry) is next.** See ADR-0008 for the `Analysis<T>` interface design.
 
-- **Step 0 (done):** `demo/end-product-preview` rebased onto main; `_DemoServer` swapped from hand-authored JSON to `PythonStaticParser().parse()`; `fixtures/demo-graph/` deleted.
-- **3.A (done, commit `be10fe4`):** 4 new WebSocket message types (`static_graph`, `read_source`, `source_response`, `source_error`). `grackle serve --root PATH` pushes `static_graph` on connect; handles `read_source` with path-traversal guard + 1 MiB cap + UTF-8 check. `client.ts` dispatches `static_graph` to subscribers and correlates `read_source` replies by id.
-- **3.B (done):** Zustand graph store (`useGraphStore.ts`) + pure graphology builder (`buildGraphology.ts`) + `GraphCanvas.tsx` (Sigma 3 + FA2 worker, StrictMode-safe). 20 new frontend tests (55 total).
-- **3.C (done):** Panel/slot chassis — `PanelRegistry`, `SlotContainer`, `HeaderChrome`, `GraphLegendPanel`, `NodeInspectorPanel`, `panels/init.ts`; `App.tsx` replaced with 5-slot CSS grid layout. `showAllKinds` added to store. 14 new frontend tests (69 total).
-- **3.D (done):** Search/filter sidebar — `matching.ts` (`isNodeVisible` pure function, fnmatch-style globs), `SearchFilterPanel.tsx` (search + kind toggles + exclude globs + hidden badge), registered into `left-sidebar`. `GraphCanvas` updated to use `isNodeVisible`. 25 new frontend tests (94 total).
-- **3.E (next):** Source viewer with Shiki — lazy-load `@shikijs/core`, `useSource.ts` hook, `SourceViewer.tsx` panel into `right-sidebar`.
-
-`PHASE_0_SUMMARY.md`, `PHASE_1_SUMMARY.md`, and `PHASE_2_SUMMARY.md` at the repo root are the per-phase "what shipped + acceptance grid" reference cards.
+`PHASE_0_SUMMARY.md`, `PHASE_1_SUMMARY.md`, `PHASE_2_SUMMARY.md`, and `PHASE_3_SUMMARY.md` at the repo root are the per-phase "what shipped + acceptance grid" reference cards.
