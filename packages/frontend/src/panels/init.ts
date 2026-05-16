@@ -5,6 +5,7 @@ import { NodeInspectorPanel } from "./NodeInspectorPanel";
 import { panels } from "./registry";
 import { SearchFilterPanel } from "./SearchFilterPanel";
 import { SourceViewer } from "./SourceViewer";
+import { StatsPanel } from "./StatsPanel";
 
 panels.register({
   slot: "top-bar",
@@ -41,4 +42,10 @@ panels.register({
   id: "graph-legend",
   component: GraphLegendPanel,
   order: 20,
+});
+panels.register({
+  slot: "bottom-status",
+  id: "stats-panel",
+  component: StatsPanel,
+  order: 0,
 });
