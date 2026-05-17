@@ -73,6 +73,6 @@ Auto-fix on dirty repos: `pnpm format` (biome write) and `uv run ruff format` in
 
 Phase 1 (adapter Protocols + `AdapterRegistry` + `grackle languages`) is shipped at tag `v0.1.0-phase-1`. Phase 2 (Python static parser via stdlib `ast`) is shipped at tag `v0.2.0-phase-2`. Phase 3 (frontend renders the static graph) is shipped at tag `v0.3.0-phase-3` — panel/slot chassis, search/filter, Shiki source viewer, stats panel, stress-2k fixture, ADRs 0007+0008.
 
-**Phase 4 (TypeScript + Go adapters + analysis registry) is next.** See ADR-0008 for the `Analysis<T>` interface design.
+**Phase 4 (TypeScript + Go adapters + analysis registry) is in progress.** Approved 8-chunk plan at `/Users/connorallen/.claude/plans/cozy-wandering-summit.md` (4.A–4.H, ~30 h). Shipped so far: 4.A (schema-batch), 4.B (Tree-sitter chassis), 4.C (TypeScript adapter). Remaining: 4.D (Go adapter), 4.E (polyglot detection), 4.F–4.H (analysis registry, frontend, ADRs, tag). User-confirmed scope: 4th analysis = hub-score; TS/Go call edges = cross-file via import resolution; interface implementation = new `implements` edge kind. Rust deferred to Phase 5. See ADR-0008 for the `Analysis<T>` interface design and ADR-0006 for the Tree-sitter strategy.
 
 `PHASE_0_SUMMARY.md`, `PHASE_1_SUMMARY.md`, `PHASE_2_SUMMARY.md`, and `PHASE_3_SUMMARY.md` at the repo root are the per-phase "what shipped + acceptance grid" reference cards.
