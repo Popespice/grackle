@@ -19,12 +19,17 @@ const NODE_KINDS: { kind: string; label: string }[] = [
   { kind: "class", label: "Class" },
   { kind: "function", label: "Function" },
   { kind: "method", label: "Method" },
+  { kind: "interface", label: "Interface" },
+  { kind: "type_alias", label: "Type Alias" },
+  { kind: "enum", label: "Enum" },
+  { kind: "struct", label: "Struct" },
 ];
 
 const EDGE_KINDS: { kind: string; label: string }[] = [
   { kind: "import", label: "Import" },
   { kind: "call", label: "Call" },
   { kind: "inherit", label: "Inherits" },
+  { kind: "implements", label: "Implements" },
 ];
 
 export function GraphLegend({

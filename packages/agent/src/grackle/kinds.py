@@ -119,6 +119,29 @@ node_kinds.register(
     NodeKind(name="method", display_name="Method", color="--color-node-method", shape="dot")
 )
 
+# Phase 4 node kinds — TS/Go cross-language extension
+node_kinds.register(
+    NodeKind(
+        name="interface", display_name="Interface", color="--color-node-interface", shape="circle"
+    )
+)
+node_kinds.register(
+    NodeKind(
+        name="type_alias",
+        display_name="Type Alias",
+        color="--color-node-type_alias",
+        shape="diamond",
+    )
+)
+node_kinds.register(
+    NodeKind(name="enum", display_name="Enum", color="--color-node-enum", shape="dot")
+)
+node_kinds.register(
+    NodeKind(
+        name="struct", display_name="Struct", color="--color-node-struct", shape="rounded-square"
+    )
+)
+
 # Default edge kinds
 edge_kinds.register(
     EdgeKind(name="import", display_name="Import", color="--color-edge-import", style="dashed")
@@ -128,4 +151,12 @@ edge_kinds.register(
 )
 edge_kinds.register(
     EdgeKind(name="inherit", display_name="Inherit", color="--color-edge-inherit", style="double")
+)
+edge_kinds.register(
+    EdgeKind(
+        name="implements",
+        display_name="Implements",
+        color="--color-edge-implements",
+        style="double",
+    )
 )
