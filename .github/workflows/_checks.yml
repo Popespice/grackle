@@ -1,0 +1,71 @@
+name: Checks
+
+on:
+  workflow_call:
+    inputs:
+      os-matrix:
+        description: JSON array of runner OSes to fan out across.
+        required: true
+        type: string
+
+jobs:
+  ci:
+    name: check / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.os-matrix) }}
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install pnpm
+        run: corepack enable pnpm
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install JS dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Codegen
+        run: pnpm codegen
+
+      - name: Check parity
+        run: pnpm check-parity
+
+      - name: Biome
+        run: pnpm exec biome ci .
+
+      - name: TypeScript
+        run: pnpm typecheck
+
+      - name: Frontend tests
+        run: pnpm --filter @grackle/frontend test --run
+
+      - name: Install Python dependencies
+        working-directory: packages/agent
+        run: uv sync --frozen
+
+      - name: Ruff
+        working-directory: packages/agent
+        run: uv run ruff check .
+
+      - name: Mypy
+        working-directory: packages/agent
+        run: uv run mypy --strict src tests
+
+      - name: Pytest
+        working-directory: packages/agent
+        run: uv run pytest -q
