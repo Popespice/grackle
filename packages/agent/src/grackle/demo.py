@@ -1,4 +1,4 @@
-"""Demo server — parses real Python project roots via PythonStaticParser.
+"""Demo server — parses real project roots via AdapterRegistry.parse_all.
 
 Replaces hand-authored JSON fixtures from Phase 1. The pulse-loop preview of
 the Phase 6/7 runtime overlay stays until those phases ship.
@@ -34,11 +34,11 @@ def _allowed_origins() -> list[str]:
 
 
 class _DemoServer:
-    """Multi-fixture demo server backed by PythonStaticParser.
+    """Multi-fixture demo server backed by AdapterRegistry.parse_all.
 
-    Each fixture is a Python project root path. Parses on first request and
-    caches the result in-memory. The pulse loop samples node IDs from the
-    currently-active parsed graph.
+    Each fixture is a project root path (Python, Go, or polyglot). Parses on
+    first request and caches the result in-memory. The pulse loop samples node
+    IDs from the currently-active parsed graph.
     """
 
     def __init__(self, fixture_roots: dict[str, Path], default: str, live: bool) -> None:
@@ -57,18 +57,18 @@ class _DemoServer:
 
     def _parse(self, name: str) -> dict[str, Any]:
         if name not in self._cache:
+            from grackle.adapters import registry
             from grackle.adapters.base import ParseOptions
-            from grackle.python_parser.adapter import PythonStaticParser
 
             root = self._fixture_roots[name]
             log.info("demo: parsing fixture", name=name, root=str(root))
             try:
-                parsed = PythonStaticParser().parse(root, ParseOptions())
+                parsed = registry.parse_all(root, ParseOptions())
                 result: dict[str, Any] = typing.cast("dict[str, Any]", parsed)
             except Exception as exc:
                 log.error("demo: parse failed", name=name, error=str(exc))
                 result = {
-                    "version": "0.1",
+                    "version": 1,
                     "language": "python",
                     "nodes": [],
                     "edges": [],

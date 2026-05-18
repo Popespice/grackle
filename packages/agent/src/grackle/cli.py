@@ -115,8 +115,8 @@ def serve(host: str, port: int, root: Path) -> None:
     multiple=True,
     metavar="NAME=PATH",
     help=(
-        "Named Python project root in NAME=PATH format. Repeatable. "
-        "Defaults to tiny=fixtures/tiny-app."
+        "Named project root in NAME=PATH format. Repeatable. "
+        "Defaults to tiny (Python), go (Go), and poly (polyglot)."
     ),
 )
 @click.option(
@@ -134,17 +134,22 @@ def demo(
     default_fixture: str,
     live: bool,
 ) -> None:
-    """End-product preview: parse real Python projects + optional live pulses.
+    """End-product preview: parse real projects + optional live pulses.
 
-    Parses each fixture root via PythonStaticParser on first connect, then
-    caches the result. Accepts ``load_fixture`` envelopes to switch mid-session.
+    Parses each fixture root via parse_all on first connect, then caches the
+    result. Accepts ``load_fixture`` envelopes to switch mid-session.
+    Ships three default fixtures: tiny (Python), go (Go), poly (polyglot).
     """
     from grackle import demo as demo_module  # lazy: throwaway module
 
     configure_logging()
     log = structlog.get_logger()
 
-    roots_raw = fixture_roots_raw or ("tiny=fixtures/tiny-app",)
+    roots_raw = fixture_roots_raw or (
+        "tiny=fixtures/tiny-app",
+        "go=fixtures/tiny-go-app",
+        "poly=fixtures/tiny-polyglot",
+    )
     fixture_roots: dict[str, Path] = {}
     for raw in roots_raw:
         if "=" not in raw:
