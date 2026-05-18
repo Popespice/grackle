@@ -146,3 +146,65 @@ def test_get_static_strips_whitespace_on_lookup() -> None:
     adapter = _StaticStub("python")
     reg.register_static(adapter)
     assert reg.get_static("  Python  ") is adapter
+
+
+# ---------------------------------------------------------------------------
+# parse_all
+# ---------------------------------------------------------------------------
+
+
+class _CountingStub(_StaticStub):
+    """Stub that returns a graph with a configurable number of nodes."""
+
+    def __init__(self, language: str, node_count: int = 2, *, detects: bool = True) -> None:
+        super().__init__(language, detects=detects)
+        self._node_count = node_count
+
+    def parse(self, project_root: Path, options: ParseOptions) -> StaticGraph:
+        nodes = [
+            {"id": f"{self.language}-{i}", "kind": "file", "name": f"{i}", "path": f"{i}.py"}
+            for i in range(self._node_count)
+        ]
+        return {"version": 1, "language": self.language, "nodes": nodes, "edges": []}  # type: ignore[typeddict-item]
+
+
+def test_parse_all_single_language(tmp_path: Path) -> None:
+    reg = AdapterRegistry()
+    reg.register_static(_CountingStub("python", 3, detects=True))
+    graph = reg.parse_all(tmp_path, ParseOptions())
+    assert graph["language"] == "python"
+    assert len(graph["nodes"]) == 3
+
+
+def test_parse_all_union_two_languages(tmp_path: Path) -> None:
+    reg = AdapterRegistry()
+    reg.register_static(_CountingStub("python", 3, detects=True))
+    reg.register_static(_CountingStub("typescript", 2, detects=True))
+    graph = reg.parse_all(tmp_path, ParseOptions())
+    assert graph["language"] == "python+typescript"
+    assert len(graph["nodes"]) == 5
+    meta = graph.get("metadata", {})
+    assert meta["languages"]["python"] == 3
+    assert meta["languages"]["typescript"] == 2
+
+
+def test_parse_all_no_detection_raises(tmp_path: Path) -> None:
+    reg = AdapterRegistry()
+    reg.register_static(_CountingStub("python", detects=False))
+    with pytest.raises(ValueError, match="no static parsers detected"):
+        reg.parse_all(tmp_path, ParseOptions())
+
+
+def test_parse_all_against_polyglot_fixture() -> None:
+    fixture = Path(__file__).parents[4] / "fixtures" / "tiny-polyglot"
+    import grackle  # noqa: F401
+    from grackle.adapters import registry
+
+    graph = registry.parse_all(fixture, ParseOptions())
+    langs = graph["language"].split("+")
+    assert "python" in langs
+    assert "typescript" in langs
+    meta = graph.get("metadata", {})
+    assert "languages" in meta
+    assert meta["languages"]["python"] > 0
+    assert meta["languages"]["typescript"] > 0
