@@ -1,6 +1,6 @@
 import type { GraphNode } from "@grackle/shared-types";
 import type { JSX } from "react";
-import type { HubEntry } from "../graph/analysis";
+import type { CycleEntry, HubEntry } from "../graph/analysis";
 import { useAnalysis } from "../graph/analysis";
 import type { DegreeEntry, KindCount } from "../graph/stats";
 import { useGraphStore } from "../graph/useGraphStore";
@@ -23,10 +23,12 @@ export function StatsPanel(): JSX.Element | null {
   const top = useAnalysis<DegreeEntry[]>("top-in-degree");
   const orphanList = useAnalysis<GraphNode[]>("orphans");
   const hubs = useAnalysis<HubEntry[]>("hub-score");
+  const cycles = useAnalysis<CycleEntry[]>("cycles");
 
   if (!graph) return null;
 
   const orphanCount = orphanList?.length ?? 0;
+  const cycleCount = cycles?.length ?? 0;
 
   return (
     <div
@@ -113,6 +115,13 @@ export function StatsPanel(): JSX.Element | null {
       <span>
         <span style={{ color: "var(--color-text-subtle)" }}>Orphans: </span>
         <span style={{ color: "var(--color-text)" }}>{orphanCount}</span>
+      </span>
+
+      {_sep}
+
+      <span>
+        <span style={{ color: "var(--color-text-subtle)" }}>Cycles: </span>
+        <span style={{ color: "var(--color-text)" }}>{cycleCount}</span>
       </span>
 
       {_sep}

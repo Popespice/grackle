@@ -2,10 +2,13 @@ import type { Graph, GraphNode } from "@grackle/shared-types";
 import type { DegreeEntry, KindCount } from "../stats";
 import { countByKind, orphans, topByInDegree } from "../stats";
 import { useGraphStore } from "../useGraphStore";
+import type { CycleEntry } from "./cycleDetection";
+import { cycleDetection } from "./cycleDetection";
 import type { HubEntry } from "./hubScore";
 import { hubScore } from "./hubScore";
 import { AnalysisRegistry } from "./registry";
 
+export type { CycleEntry } from "./cycleDetection";
 export type { HubEntry } from "./hubScore";
 export type { Analysis } from "./registry";
 
@@ -36,6 +39,13 @@ analyses.register<HubEntry[]>({
   compute: (graph: Graph) => hubScore(graph),
   cacheKey: (graph: Graph) =>
     `hub-score:${graph.nodes.length}:${graph.edges.length}`,
+});
+
+analyses.register<CycleEntry[]>({
+  id: "cycles",
+  compute: (graph: Graph) => cycleDetection(graph),
+  cacheKey: (graph: Graph) =>
+    `cycles:${graph.nodes.length}:${graph.edges.length}`,
 });
 
 /**

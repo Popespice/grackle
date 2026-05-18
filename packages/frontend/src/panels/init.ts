@@ -1,4 +1,5 @@
 import { GraphCanvas } from "../graph/GraphCanvas";
+import { CyclesPanel } from "./CyclesPanel";
 import { GraphLegendPanel } from "./GraphLegendPanel";
 import { HeaderChrome } from "./HeaderChrome";
 import { NodeInspectorPanel } from "./NodeInspectorPanel";
@@ -42,6 +43,12 @@ panels.register({
   id: "graph-legend",
   component: GraphLegendPanel,
   order: 20,
+});
+panels.register({
+  slot: "right-sidebar",
+  id: "cycles-panel",
+  component: CyclesPanel,
+  order: 30,
 });
 panels.register({
   slot: "bottom-status",

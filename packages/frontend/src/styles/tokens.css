@@ -81,6 +81,9 @@
   --color-node-enum: #fb923c;
   --color-node-struct: #f87171;
 
+  /* === Cycle highlight === */
+  --color-highlight-cycle: oklch(72% 0.2 40);
+
   /* === Edge-kind colors === */
   --color-edge-import: #5eead4;
   --color-edge-call: #fbbf24;
