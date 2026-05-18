@@ -29,4 +29,6 @@ NNNN-short-title.md
 | [0005](0005-kind-registry.md) | Kind registry: separate node/edge registries with display metadata | accepted |
 | [0006](0006-python-ast-vs-tree-sitter.md) | Python parser: stdlib ast vs Tree-sitter | accepted |
 | [0007](0007-panel-slot-system.md) | Panel/slot system: registry-driven UI layout | accepted |
-| [0008](0008-analysis-registry.md) | Analysis registry: graph analyses, scheduling, caching | accepted |
+| [0008](0008-analysis-registry.md) | Analysis registry: graph analyses, scheduling, caching | accepted, implemented in Phase 4 |
+| [0009](0009-tree-sitter-integration.md) | Tree-sitter integration: Python bindings, grammar pinning, polyglot | accepted |
+| [0010](0010-rust-adapter-integration.md) | Rust adapter: trait→interface mapping, workspace glob, ABI 15 upgrade | accepted |

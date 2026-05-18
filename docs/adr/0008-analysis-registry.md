@@ -1,6 +1,6 @@
 # ADR-0008 — Analysis registry
 
-**Status:** accepted
+**Status:** accepted, implemented in Phase 4
 
 ## Context
 
@@ -34,3 +34,12 @@ An `AnalysisRegistry` (same pattern as `PanelRegistry`, ADR-0007) would let call
 - No registry indirection today means no dynamic registration — adding a new analysis requires editing `stats.ts` directly. This is acceptable while the count is below three.
 - The `cacheKey` seam in the future interface preserves the option to move expensive analyses to a Web Worker or the agent without changing callers.
 - Cross-refs: ADR-0004 (open metadata), ADR-0005 (kind registry pattern), ADR-0007 (panel/slot system using the same registry shape).
+
+## Phase 4 implementation note
+
+The `Analysis<T>` interface and `AnalysisRegistry` were implemented in Phase 4 at `packages/frontend/src/graph/analysis/`. The chosen cache-key implementation is:
+
+- **In-memory cache:** `WeakMap<Graph, Map<analysisId, result>>` keyed by graph object reference. Same render = same Graph reference = zero recomputation. Garbage-collected automatically when the graph is discarded.
+- **Content-hash utility:** `graphCacheKey(graph): Promise<string>` in `cacheKey.ts` computes SHA-256 over canonical JSON (sorted node IDs + sorted `source|target|kind` edge tuples). Stable across array reordering; differs on any structural graph change.
+- **Registered analyses:** `count-by-kind`, `top-in-degree`, `orphans`, `hub-score` (4th analysis proves rule-of-three).
+- **`useAnalysis<T>(id): T | null`** hook exposes registry results to React components; `StatsPanel` refactored to use it.

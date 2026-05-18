@@ -7,7 +7,8 @@ pre-commit:
     ruff-format:
       glob: "*.py"
       root: "packages/agent/"
-      run: uv run ruff format {staged_files} && uv run ruff check --fix {staged_files} && git add {staged_files}
+      stage_fixed: true
+      run: uv run ruff format {staged_files} && uv run ruff check --fix {staged_files}
     schema-parity:
       glob: "packages/shared-types/schema/*.json"
       run: pnpm --filter @grackle/shared-types codegen
@@ -15,6 +16,13 @@ pre-commit:
 pre-push:
   parallel: false
   commands:
+    biome:
+      run: pnpm exec biome ci .
+    ruff:
+      root: "packages/agent/"
+      run: uv run ruff check .
+    check-parity:
+      run: pnpm check-parity
     typecheck:
       run: pnpm typecheck
     test-frontend:

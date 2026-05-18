@@ -7,11 +7,12 @@
     "build": "pnpm -r build",
     "lint": "biome ci .",
     "format": "biome check --write .",
+    "pretypecheck": "pnpm codegen",
     "typecheck": "tsc -b",
     "test": "pnpm -r --parallel test --run",
     "codegen": "pnpm --filter @grackle/shared-types codegen",
     "check-parity": "node tools/check-parity.mjs",
-    "prepare": "lefthook install"
+    "prepare": "lefthook install && pnpm codegen"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.0.0",

@@ -1,15 +1,32 @@
+import type { GraphNode } from "@grackle/shared-types";
 import type { JSX } from "react";
-import { countByKind, orphans, topByInDegree } from "../graph/stats";
+import type { HubEntry } from "../graph/analysis";
+import { useAnalysis } from "../graph/analysis";
+import type { DegreeEntry, KindCount } from "../graph/stats";
 import { useGraphStore } from "../graph/useGraphStore";
+
+const _sep = (
+  <span
+    style={{
+      width: 1,
+      height: 16,
+      background: "var(--color-border)",
+      flexShrink: 0,
+      margin: "0 var(--space-1)",
+    }}
+  />
+);
 
 export function StatsPanel(): JSX.Element | null {
   const graph = useGraphStore((s) => s.graph);
+  const kinds = useAnalysis<KindCount[]>("count-by-kind");
+  const top = useAnalysis<DegreeEntry[]>("top-in-degree");
+  const orphanList = useAnalysis<GraphNode[]>("orphans");
+  const hubs = useAnalysis<HubEntry[]>("hub-score");
 
   if (!graph) return null;
 
-  const kinds = countByKind(graph);
-  const top = topByInDegree(graph, 5);
-  const orphanCount = orphans(graph).length;
+  const orphanCount = orphanList?.length ?? 0;
 
   return (
     <div
@@ -39,7 +56,7 @@ export function StatsPanel(): JSX.Element | null {
       >
         Kinds:
       </span>
-      {kinds.map(({ kind, count }) => (
+      {kinds?.map(({ kind, count }) => (
         <span
           key={kind}
           style={{
@@ -62,15 +79,7 @@ export function StatsPanel(): JSX.Element | null {
         </span>
       ))}
 
-      <span
-        style={{
-          width: 1,
-          height: 16,
-          background: "var(--color-border)",
-          flexShrink: 0,
-          margin: "0 var(--space-1)",
-        }}
-      />
+      {_sep}
 
       <span
         style={{
@@ -81,7 +90,7 @@ export function StatsPanel(): JSX.Element | null {
         Top:
       </span>
       {top
-        .filter((e) => e.inDegree > 0)
+        ?.filter((e) => e.inDegree > 0)
         .slice(0, 3)
         .map((entry) => (
           <span key={entry.node.id}>
@@ -99,20 +108,41 @@ export function StatsPanel(): JSX.Element | null {
           </span>
         ))}
 
-      <span
-        style={{
-          width: 1,
-          height: 16,
-          background: "var(--color-border)",
-          flexShrink: 0,
-          margin: "0 var(--space-1)",
-        }}
-      />
+      {_sep}
 
       <span>
         <span style={{ color: "var(--color-text-subtle)" }}>Orphans: </span>
         <span style={{ color: "var(--color-text)" }}>{orphanCount}</span>
       </span>
+
+      {_sep}
+
+      <span
+        style={{
+          color: "var(--color-text-subtle)",
+          marginRight: "var(--space-1)",
+        }}
+      >
+        Hub:
+      </span>
+      {hubs
+        ?.filter((e) => e.score > 0)
+        .slice(0, 3)
+        .map((entry) => (
+          <span key={entry.node.id}>
+            <span
+              style={{
+                fontFamily: "var(--font-mono)",
+                color: "var(--color-text)",
+              }}
+            >
+              {entry.node.name}
+            </span>
+            <span style={{ color: "var(--color-text-subtle)" }}>
+              +{entry.score}
+            </span>
+          </span>
+        ))}
     </div>
   );
 }
