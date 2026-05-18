@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from grackle.python_parser.visitors import GraphBuilder
 from grackle.tree_sitter_walker import TreeSitterWalker
+from grackle.typescript_parser.hints import extract_hints
 from grackle.typescript_parser.visitors import TSFileVisitor
 
 if TYPE_CHECKING:
@@ -27,6 +28,9 @@ class TSWalker(TreeSitterWalker):
         builder = GraphBuilder()
         TSFileVisitor(file_id, builder).visit(tree)
         return builder
+
+    def hints_for_file(self, source: str, file_id: str) -> list[Any]:
+        return extract_hints(source, file_id)
 
     def _resolve(self, graph: StaticGraph) -> StaticGraph:
         from grackle.typescript_parser.resolver import resolve_graph

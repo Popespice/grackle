@@ -29,6 +29,13 @@ export function StatsPanel(): JSX.Element | null {
 
   const orphanCount = orphanList?.length ?? 0;
   const cycleCount = cycles?.length ?? 0;
+  const httpEdges = graph.edges.filter(
+    (e) => e.kind === "cross_language_call"
+  ).length;
+  const spawnEdges = graph.edges.filter(
+    (e) => e.kind === "cross_language_spawn"
+  ).length;
+  const crossLangTotal = httpEdges + spawnEdges;
 
   return (
     <div
@@ -123,6 +130,22 @@ export function StatsPanel(): JSX.Element | null {
         <span style={{ color: "var(--color-text-subtle)" }}>Cycles: </span>
         <span style={{ color: "var(--color-text)" }}>{cycleCount}</span>
       </span>
+
+      {crossLangTotal > 0 && (
+        <>
+          {_sep}
+          <span>
+            <span style={{ color: "var(--color-text-subtle)" }}>
+              Cross-language:{" "}
+            </span>
+            <span style={{ color: "var(--color-text)" }}>{crossLangTotal}</span>
+            <span style={{ color: "var(--color-text-subtle)" }}>
+              {" "}
+              ({httpEdges} HTTP, {spawnEdges} subprocess)
+            </span>
+          </span>
+        </>
+      )}
 
       {_sep}
 

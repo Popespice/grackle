@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from grackle.cache import CacheManager
 
 from grackle.paths import to_posix
+from grackle.python_parser.hints import extract_hints
 from grackle.python_parser.resolver import resolve_graph
 from grackle.python_parser.visitors import FileVisitor, GraphBuilder
 
@@ -51,6 +52,7 @@ class PythonAstWalker:
     def walk(self) -> StaticGraph:
         nodes: list[Any] = []
         edges: list[Any] = []
+        hints: list[Any] = []
         warnings: list[str] = []
 
         for py_file in sorted(self._root.rglob("*.py")):
@@ -61,6 +63,7 @@ class PythonAstWalker:
             if partial is not None:
                 nodes.extend(partial.get("nodes", []))
                 edges.extend(partial.get("edges", []))
+                hints.extend(partial.get("hints", []))
                 continue
 
             # Cache miss — read the file, hash it, parse it.
@@ -87,10 +90,19 @@ class PythonAstWalker:
             builder = GraphBuilder()
             FileVisitor(file_id, builder).visit(tree)
 
+            file_hints = extract_hints(source, file_id)
             partial_dict = builder.partial()
+            partial_dict["hints"] = file_hints
             self._cache.set(py_file, content_hash, partial_dict)
             nodes.extend(partial_dict["nodes"])
             edges.extend(partial_dict["edges"])
+            hints.extend(file_hints)
+
+        metadata: dict[str, Any] = {}
+        if warnings:
+            metadata["parse_warnings"] = warnings
+        if hints:
+            metadata["cross_language_hints"] = hints
 
         graph: StaticGraph = {
             "version": 1,
@@ -98,6 +110,6 @@ class PythonAstWalker:
             "nodes": nodes,
             "edges": edges,
         }
-        if warnings:
-            graph["metadata"] = {"parse_warnings": warnings}
+        if metadata:
+            graph["metadata"] = metadata
         return resolve_graph(graph)

@@ -106,7 +106,7 @@ describe("GraphLegend", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("renders 8 node-kind chips and 4 edge-kind rows", () => {
+  it("renders 8 node-kind chips and 6 edge-kind rows", () => {
     render(
       <GraphLegend
         graph={MOCK_GRAPH}
@@ -131,7 +131,14 @@ describe("GraphLegend", () => {
         })
       ).toBeInTheDocument();
     }
-    for (const label of ["Import", "Call", "Inherits", "Implements"]) {
+    for (const label of [
+      "Import",
+      "Call",
+      "Inherits",
+      "Implements",
+      "HTTP Call",
+      "Subprocess",
+    ]) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
   });

@@ -33,3 +33,4 @@ NNNN-short-title.md
 | [0009](0009-tree-sitter-integration.md) | Tree-sitter integration: Python bindings, grammar pinning, polyglot | accepted |
 | [0010](0010-rust-adapter-integration.md) | Rust adapter: trait→interface mapping, workspace glob, ABI 15 upgrade | accepted |
 | [0011](0011-cycle-detection.md) | Cycle detection: Tarjan SCC, all-edge-kinds default, frontend implementation | accepted |
+| [0012](0012-cross-language-edges.md) | Cross-language edges: HTTP route matching + subprocess references | accepted |

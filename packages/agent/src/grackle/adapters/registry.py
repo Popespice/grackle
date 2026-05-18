@@ -65,15 +65,20 @@ class AdapterRegistry:
 
         Sets ``graph.language`` to the sorted ``+``-joined detected languages and
         stores per-language node counts in ``graph.metadata.languages``.
+        Cross-language edges (HTTP routes, subprocess refs) are resolved from
+        per-language hints before the combined graph is returned.
 
         Raises ValueError if no language is detected.
         """
+        from grackle.cross_language import resolve_cross_language_edges
+
         detected = self.detect(root)
         if not detected:
             raise ValueError(f"no static parsers detected for project at: {root}")
 
         all_nodes: list[Any] = []
         all_edges: list[Any] = []
+        all_hints: list[Any] = []
         language_counts: dict[str, int] = {}
 
         for lang in detected:
@@ -84,6 +89,11 @@ class AdapterRegistry:
             all_nodes.extend(graph["nodes"])
             all_edges.extend(graph["edges"])
             language_counts[lang] = len(graph["nodes"])
+            metadata = graph.get("metadata") or {}
+            all_hints.extend(metadata.get("cross_language_hints", []))
+
+        cross_edges = resolve_cross_language_edges(all_hints, all_nodes)
+        all_edges.extend(cross_edges)
 
         combined_lang = "+".join(sorted(detected))
         result: StaticGraph = {

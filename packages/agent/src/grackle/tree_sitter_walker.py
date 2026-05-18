@@ -74,9 +74,18 @@ class TreeSitterWalker(abc.ABC):
         """Post-walk resolver hook. Subclasses override to run their resolver."""
         return graph
 
+    def hints_for_file(self, source: str, file_id: str) -> list[Any]:
+        """Return cross-language hint dicts for one source file.
+
+        Subclasses override this to call their ``hints.extract_hints``.
+        The default returns an empty list (opt-in).
+        """
+        return []
+
     def walk(self) -> StaticGraph:
         nodes: list[Any] = []
         edges: list[Any] = []
+        hints: list[Any] = []
         warnings: list[str] = []
 
         parser = get_parser(self.language_name)
@@ -95,6 +104,7 @@ class TreeSitterWalker(abc.ABC):
             if partial is not None:
                 nodes.extend(partial.get("nodes", []))
                 edges.extend(partial.get("edges", []))
+                hints.extend(partial.get("hints", []))
                 continue
 
             try:
@@ -115,10 +125,19 @@ class TreeSitterWalker(abc.ABC):
             file_id = to_posix(src_file, self._root)
             builder = self.visit_tree(tree, source, file_id)
 
+            file_hints = self.hints_for_file(source, file_id)
             partial_dict = builder.partial()
+            partial_dict["hints"] = file_hints
             self._cache.set(src_file, content_hash, partial_dict)
             nodes.extend(partial_dict["nodes"])
             edges.extend(partial_dict["edges"])
+            hints.extend(file_hints)
+
+        metadata: dict[str, Any] = {}
+        if warnings:
+            metadata["parse_warnings"] = warnings
+        if hints:
+            metadata["cross_language_hints"] = hints
 
         graph: StaticGraph = {
             "version": 1,
@@ -126,6 +145,6 @@ class TreeSitterWalker(abc.ABC):
             "nodes": nodes,
             "edges": edges,
         }
-        if warnings:
-            graph["metadata"] = {"parse_warnings": warnings}
+        if metadata:
+            graph["metadata"] = metadata
         return self._resolve(graph)

@@ -208,3 +208,18 @@ def test_parse_all_against_polyglot_fixture() -> None:
     assert "languages" in meta
     assert meta["languages"]["python"] > 0
     assert meta["languages"]["typescript"] > 0
+
+
+def test_parse_all_cross_language_edges() -> None:
+    fixture = Path(__file__).parents[4] / "fixtures" / "tiny-polyglot"
+    import grackle  # noqa: F401
+    from grackle.adapters import registry
+
+    graph = registry.parse_all(fixture, ParseOptions())
+    edge_kinds = {e["kind"] for e in graph["edges"]}
+    assert "cross_language_call" in edge_kinds, (
+        "expected ≥1 cross_language_call edge (Python requests.get → TS app.get)"
+    )
+    assert "cross_language_spawn" in edge_kinds, (
+        "expected ≥1 cross_language_spawn edge (Python subprocess.run → TS build script)"
+    )

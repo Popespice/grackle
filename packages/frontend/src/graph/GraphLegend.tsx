@@ -30,6 +30,8 @@ const EDGE_KINDS: { kind: string; label: string }[] = [
   { kind: "call", label: "Call" },
   { kind: "inherit", label: "Inherits" },
   { kind: "implements", label: "Implements" },
+  { kind: "cross_language_call", label: "HTTP Call" },
+  { kind: "cross_language_spawn", label: "Subprocess" },
 ];
 
 export function GraphLegend({

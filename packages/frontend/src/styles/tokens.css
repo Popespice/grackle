@@ -89,6 +89,8 @@
   --color-edge-call: #fbbf24;
   --color-edge-inherit: #f472b6;
   --color-edge-implements: #a78bfa;
+  --color-edge-cross-lang-call: #fb923c;
+  --color-edge-cross-lang-spawn: #38bdf8;
 }
 
 [data-theme="light"] {

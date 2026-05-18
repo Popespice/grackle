@@ -160,3 +160,21 @@ edge_kinds.register(
         style="double",
     )
 )
+
+# Phase 5 cross-language edge kinds
+edge_kinds.register(
+    EdgeKind(
+        name="cross_language_call",
+        display_name="HTTP Call",
+        color="--color-edge-cross-lang-call",
+        style="dashed",
+    )
+)
+edge_kinds.register(
+    EdgeKind(
+        name="cross_language_spawn",
+        display_name="Subprocess",
+        color="--color-edge-cross-lang-spawn",
+        style="dotted",
+    )
+)
