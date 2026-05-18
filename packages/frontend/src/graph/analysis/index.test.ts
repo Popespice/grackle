@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { analyses } from "./index";
 
 describe("analysis registry (index)", () => {
-  it("registers exactly 4 analyses", () => {
-    expect(analyses.getAll()).toHaveLength(4);
+  it("registers exactly 5 analyses", () => {
+    expect(analyses.getAll()).toHaveLength(5);
   });
 
   it("registers count-by-kind", () => {
@@ -20,6 +20,10 @@ describe("analysis registry (index)", () => {
 
   it("registers hub-score", () => {
     expect(analyses.get("hub-score")).toBeDefined();
+  });
+
+  it("registers cycles", () => {
+    expect(analyses.get("cycles")).toBeDefined();
   });
 
   it("count-by-kind returns an array", () => {

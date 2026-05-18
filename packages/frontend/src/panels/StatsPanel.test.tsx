@@ -72,4 +72,26 @@ describe("StatsPanel", () => {
     const panel = screen.getByLabelText("Graph statistics");
     expect(panel.textContent).toMatch(/Foo|baz/);
   });
+
+  it("shows Cycles label with count", () => {
+    render(<StatsPanel />);
+    const panel = screen.getByLabelText("Graph statistics");
+    expect(panel.textContent).toContain("Cycles:");
+  });
+
+  it("shows non-zero cycle count when cycles exist", () => {
+    useGraphStore.setState({
+      graph: {
+        ...MOCK_GRAPH,
+        edges: [
+          ...MOCK_GRAPH.edges,
+          { source: "a.py:baz", target: "a.py:bar", kind: "call" }, // creates a cycle
+        ],
+      },
+    });
+    render(<StatsPanel />);
+    const panel = screen.getByLabelText("Graph statistics");
+    // cycle count should be > 0
+    expect(panel.textContent).toMatch(/Cycles:\s*[1-9]/);
+  });
 });

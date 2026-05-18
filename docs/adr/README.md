@@ -32,3 +32,4 @@ NNNN-short-title.md
 | [0008](0008-analysis-registry.md) | Analysis registry: graph analyses, scheduling, caching | accepted, implemented in Phase 4 |
 | [0009](0009-tree-sitter-integration.md) | Tree-sitter integration: Python bindings, grammar pinning, polyglot | accepted |
 | [0010](0010-rust-adapter-integration.md) | Rust adapter: trait→interface mapping, workspace glob, ABI 15 upgrade | accepted |
+| [0011](0011-cycle-detection.md) | Cycle detection: Tarjan SCC, all-edge-kinds default, frontend implementation | accepted |

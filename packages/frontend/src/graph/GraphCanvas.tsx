@@ -45,6 +45,7 @@ function makeNodeReducer(
   searchTerm: string,
   excludeGlobs: string[],
   selectedNodeId: string | null,
+  highlightedNodeIds: Set<string> | null,
   container: HTMLElement
 ) {
   return (node: string, data: NodeAttributes): Partial<NodeDisplayData> => {
@@ -61,8 +62,19 @@ function makeNodeReducer(
 
     const inDegree = graphology.inDegree(node);
     const size = Math.max(BASE_SIZE, Math.log(inDegree + 1) * 8 + BASE_SIZE);
-    const dimmed = selectedNodeId !== null && node !== selectedNodeId;
-    const color = dimmed ? "#cbd5e1" : resolveNodeColor(data.kind, container);
+
+    const highlightActive =
+      highlightedNodeIds !== null && highlightedNodeIds.size > 0;
+    const isHighlighted =
+      highlightActive && (highlightedNodeIds?.has(node) ?? false);
+    const dimmed =
+      (highlightActive && !isHighlighted) ||
+      (!highlightActive && selectedNodeId !== null && node !== selectedNodeId);
+    const color = isHighlighted
+      ? cssVar(container, "--color-highlight-cycle") || "#f97316"
+      : dimmed
+        ? "#cbd5e1"
+        : resolveNodeColor(data.kind, container);
 
     return { color, size, hidden };
   };
@@ -79,7 +91,9 @@ export function GraphCanvas(): JSX.Element {
   const searchTerm = useGraphStore((s) => s.searchTerm);
   const excludeGlobs = useGraphStore((s) => s.excludeGlobs);
   const selectedNodeId = useGraphStore((s) => s.selectedNodeId);
+  const highlightedNodeIds = useGraphStore((s) => s.highlightedNodeIds);
   const selectNode = useGraphStore((s) => s.selectNode);
+  const setHighlightedNodes = useGraphStore((s) => s.setHighlightedNodes);
 
   // Rebuild sigma + FA2 when the graph data changes.
   // hiddenKinds/searchTerm/excludeGlobs/selectedNodeId are intentionally omitted
@@ -108,6 +122,7 @@ export function GraphCanvas(): JSX.Element {
           searchTerm,
           excludeGlobs,
           selectedNodeId,
+          highlightedNodeIds,
           container
         ),
         edgeReducer: (_edge, data) => ({
@@ -121,6 +136,7 @@ export function GraphCanvas(): JSX.Element {
     });
     sigma.on("clickStage", () => {
       selectNode(null);
+      setHighlightedNodes(null);
     });
 
     sigmaRef.current = sigma;
@@ -160,11 +176,18 @@ export function GraphCanvas(): JSX.Element {
         searchTerm,
         excludeGlobs,
         selectedNodeId,
+        highlightedNodeIds,
         container
       )
     );
     sigma.refresh();
-  }, [hiddenKinds, searchTerm, excludeGlobs, selectedNodeId]);
+  }, [
+    hiddenKinds,
+    searchTerm,
+    excludeGlobs,
+    selectedNodeId,
+    highlightedNodeIds,
+  ]);
 
   return (
     <div
