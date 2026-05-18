@@ -43,7 +43,6 @@ describe("StatsPanel", () => {
     render(<StatsPanel />);
     const panel = screen.getByLabelText("Graph statistics");
     expect(panel).toBeInTheDocument();
-    // 2 file nodes, 1 class, 2 function
     expect(panel.textContent).toContain("file");
     expect(panel.textContent).toContain("class");
     expect(panel.textContent).toContain("function");
@@ -52,16 +51,25 @@ describe("StatsPanel", () => {
   it("shows the orphan count", () => {
     render(<StatsPanel />);
     const panel = screen.getByLabelText("Graph statistics");
-    // a.py:Foo and a.py:baz have non-import inbound edges — bar is the only one without
     expect(panel.textContent).toContain("Orphan");
   });
 
   it("shows top-degree node name", () => {
     render(<StatsPanel />);
-    // a.py:Foo and a.py:baz each have 1 call edge in — bar has the highest call in-degree
-    // bar is the caller so it has 0 inbound call edges — Foo and baz have 1 each
     const panel = screen.getByLabelText("Graph statistics");
-    // Either Foo or baz should appear in the top section
+    expect(panel.textContent).toMatch(/Foo|baz/);
+  });
+
+  it("shows Hub label", () => {
+    render(<StatsPanel />);
+    const panel = screen.getByLabelText("Graph statistics");
+    expect(panel.textContent).toContain("Hub");
+  });
+
+  it("shows hub node name when score > 0", () => {
+    // Foo and baz have inDegree=1, outDegree=0 → score=+1
+    render(<StatsPanel />);
+    const panel = screen.getByLabelText("Graph statistics");
     expect(panel.textContent).toMatch(/Foo|baz/);
   });
 });

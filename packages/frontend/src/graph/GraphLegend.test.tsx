@@ -106,6 +106,36 @@ describe("GraphLegend", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("renders 8 node-kind chips and 4 edge-kind rows", () => {
+    render(
+      <GraphLegend
+        graph={MOCK_GRAPH}
+        hiddenKinds={new Set()}
+        onToggleKind={vi.fn()}
+        onShowAll={vi.fn()}
+      />
+    );
+    for (const label of [
+      "file",
+      "class",
+      "function",
+      "method",
+      "interface",
+      "type alias",
+      "enum",
+      "struct",
+    ]) {
+      expect(
+        screen.getByRole("button", {
+          name: new RegExp(`hide ${label} nodes`, "i"),
+        })
+      ).toBeInTheDocument();
+    }
+    for (const label of ["Import", "Call", "Inherits", "Implements"]) {
+      expect(screen.getByText(label)).toBeInTheDocument();
+    }
+  });
+
   it("shows layout stats when provided", () => {
     render(
       <GraphLegend

@@ -59,15 +59,19 @@ def parse(
         adapter = registry.get_static(language)
         if adapter is None:
             raise click.UsageError(f"no static parser registered for language: {language!r}")
+        graph = adapter.parse(root, ParseOptions(exclude_patterns=patterns))
     else:
         detected = registry.detect(root)
         if not detected:
             raise click.UsageError(f"no static parser detected for project at: {root}")
-        adapter = registry.get_static(detected[0])
-        if adapter is None:  # defensive — detect() only returns registered names
-            raise click.UsageError(f"no static parser registered for language: {detected[0]!r}")
-
-    graph = adapter.parse(root, ParseOptions(exclude_patterns=patterns))
+        if len(detected) > 1:
+            click.echo(f"detected languages: {detected}; merging polyglot graph", err=True)
+            graph = registry.parse_all(root, ParseOptions(exclude_patterns=patterns))
+        else:
+            adapter = registry.get_static(detected[0])
+            if adapter is None:  # defensive — detect() only returns registered names
+                raise click.UsageError(f"no static parser registered for language: {detected[0]!r}")
+            graph = adapter.parse(root, ParseOptions(exclude_patterns=patterns))
     json_str = json.dumps(graph, indent=2)
 
     if output is not None:

@@ -192,23 +192,37 @@ def test_default_node_kinds_registered() -> None:
     assert node_kinds.get("class") is not None
     assert node_kinds.get("function") is not None
     assert node_kinds.get("method") is not None
+    assert node_kinds.get("interface") is not None
+    assert node_kinds.get("type_alias") is not None
+    assert node_kinds.get("enum") is not None
+    assert node_kinds.get("struct") is not None
 
 
 def test_default_edge_kinds_registered() -> None:
     assert edge_kinds.get("import") is not None
     assert edge_kinds.get("call") is not None
     assert edge_kinds.get("inherit") is not None
+    assert edge_kinds.get("implements") is not None
 
 
 def test_default_node_kind_colors_are_tokens() -> None:
-    for name in ("file", "class", "function", "method"):
+    for name in (
+        "file",
+        "class",
+        "function",
+        "method",
+        "interface",
+        "type_alias",
+        "enum",
+        "struct",
+    ):
         kind = node_kinds.get(name)
         assert kind is not None
         assert kind.color.startswith("--color-"), f"{name!r}: {kind.color!r}"
 
 
 def test_default_edge_kind_colors_are_tokens() -> None:
-    for name in ("import", "call", "inherit"):
+    for name in ("import", "call", "inherit", "implements"):
         kind = edge_kinds.get(name)
         assert kind is not None
         assert kind.color.startswith("--color-"), f"{name!r}: {kind.color!r}"

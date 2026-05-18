@@ -1,7 +1,8 @@
 import threading
 from pathlib import Path
+from typing import Any
 
-from grackle.adapters.base import RuntimeAdapter, StaticParserAdapter
+from grackle.adapters.base import ParseOptions, RuntimeAdapter, StaticGraph, StaticParserAdapter
 
 _INVALID_LANGUAGE_CHARS = frozenset("\n\r\t\0\v\f")
 
@@ -58,6 +59,41 @@ class AdapterRegistry:
     def supported_languages(self) -> list[str]:
         with self._lock:
             return sorted(self._static.keys() | self._runtime.keys())
+
+    def parse_all(self, root: Path, options: ParseOptions) -> StaticGraph:
+        """Detect all languages, parse each, and return a merged graph.
+
+        Sets ``graph.language`` to the sorted ``+``-joined detected languages and
+        stores per-language node counts in ``graph.metadata.languages``.
+
+        Raises ValueError if no language is detected.
+        """
+        detected = self.detect(root)
+        if not detected:
+            raise ValueError(f"no static parsers detected for project at: {root}")
+
+        all_nodes: list[Any] = []
+        all_edges: list[Any] = []
+        language_counts: dict[str, int] = {}
+
+        for lang in detected:
+            adapter = self.get_static(lang)
+            if adapter is None:
+                continue
+            graph = adapter.parse(root, options)
+            all_nodes.extend(graph["nodes"])
+            all_edges.extend(graph["edges"])
+            language_counts[lang] = len(graph["nodes"])
+
+        combined_lang = "+".join(sorted(detected))
+        result: StaticGraph = {
+            "version": 1,
+            "language": combined_lang,
+            "nodes": all_nodes,
+            "edges": all_edges,
+            "metadata": {"languages": language_counts},
+        }
+        return result
 
 
 registry = AdapterRegistry()

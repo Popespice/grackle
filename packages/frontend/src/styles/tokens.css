@@ -71,16 +71,21 @@
   --z-modal: 200;
   --z-toast: 300;
 
-  /* === Node-kind colors (Phase 2 default kinds + extension surface) === */
+  /* === Node-kind colors (Phase 2 default kinds + Phase 4 extension) === */
   --color-node-file: #7c6cff;
   --color-node-class: #5eead4;
   --color-node-function: #fbbf24;
   --color-node-method: #f472b6;
+  --color-node-interface: #38bdf8;
+  --color-node-type_alias: #4ade80;
+  --color-node-enum: #fb923c;
+  --color-node-struct: #f87171;
 
   /* === Edge-kind colors === */
   --color-edge-import: #5eead4;
   --color-edge-call: #fbbf24;
   --color-edge-inherit: #f472b6;
+  --color-edge-implements: #a78bfa;
 }
 
 [data-theme="light"] {

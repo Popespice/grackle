@@ -71,8 +71,8 @@ Auto-fix on dirty repos: `pnpm format` (biome write) and `uv run ruff format` in
 
 ## Active roadmap context
 
-Phase 1 (adapter Protocols + `AdapterRegistry` + `grackle languages`) is shipped at tag `v0.1.0-phase-1`. Phase 2 (Python static parser via stdlib `ast`) is shipped at tag `v0.2.0-phase-2`. Phase 3 (frontend renders the static graph) is shipped at tag `v0.3.0-phase-3` — panel/slot chassis, search/filter, Shiki source viewer, stats panel, stress-2k fixture, ADRs 0007+0008.
+Phase 1 (adapter Protocols + `AdapterRegistry` + `grackle languages`) is shipped at tag `v0.1.0-phase-1`. Phase 2 (Python static parser via stdlib `ast`) is shipped at tag `v0.2.0-phase-2`. Phase 3 (frontend renders the static graph) is shipped at tag `v0.3.0-phase-3` — panel/slot chassis, search/filter, Shiki source viewer, stats panel, stress-2k fixture, ADRs 0007+0008. Phase 4 (TypeScript + Go adapters + analysis registry) is shipped at tag `v0.4.0-phase-4` — Tree-sitter chassis, TS + Go adapters, polyglot `parse_all`, `AnalysisRegistry` + hub-score, ADRs 0009 + 0008 amendment.
 
-**Phase 4 (TypeScript + Go adapters + analysis registry) is next.** See ADR-0008 for the `Analysis<T>` interface design.
+**Phase 5 is next:** Rust adapter + cycle detection + cross-language edges. See `PHASE_4_SUMMARY.md` for the acceptance grid and known limitations.
 
-`PHASE_0_SUMMARY.md`, `PHASE_1_SUMMARY.md`, `PHASE_2_SUMMARY.md`, and `PHASE_3_SUMMARY.md` at the repo root are the per-phase "what shipped + acceptance grid" reference cards.
+`PHASE_0_SUMMARY.md`, `PHASE_1_SUMMARY.md`, `PHASE_2_SUMMARY.md`, `PHASE_3_SUMMARY.md`, and `PHASE_4_SUMMARY.md` at the repo root are the per-phase "what shipped + acceptance grid" reference cards.

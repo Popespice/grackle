@@ -61,7 +61,7 @@ def _read_source(root_real: Path, posix_path: str) -> tuple[str | None, str]:
 
 
 async def _push_static_graph(ws: ServerConnection, root: Path) -> None:
-    """Detect language, parse the project, and push static_graph if supported."""
+    """Detect language(s), parse the project, and push static_graph if supported."""
     from grackle.adapters import registry
     from grackle.adapters.base import ParseOptions
 
@@ -69,12 +69,14 @@ async def _push_static_graph(ws: ServerConnection, root: Path) -> None:
     if not detected:
         return
 
-    adapter = registry.get_static(detected[0])
-    if adapter is None:
-        return
-
     try:
-        graph = adapter.parse(root, ParseOptions())
+        if len(detected) > 1:
+            graph = registry.parse_all(root, ParseOptions())
+        else:
+            adapter = registry.get_static(detected[0])
+            if adapter is None:
+                return
+            graph = adapter.parse(root, ParseOptions())
     except Exception as exc:
         log.warning("static graph parse failed", error=str(exc), root=str(root))
         return
