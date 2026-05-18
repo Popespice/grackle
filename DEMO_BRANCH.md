@@ -1,5 +1,7 @@
 # Demo branch — `demo/end-product-preview`
 
+**2026-05-18 forward-merge**: Phase 4 (`v0.4.0-phase-4`). Forward-merged main's Go static parser (Tree-sitter), polyglot detection (`parse_all`), TypeScript adapter, and analysis registry (hub-score, ADR-0009). Demo's `_parse` method upgraded from `PythonStaticParser` to `registry.parse_all()` — viewers can now switch between Python (`tiny`), Go (`go`), and polyglot (`poly`) fixtures. Three default fixtures ship: `tiny=fixtures/tiny-app`, `go=fixtures/tiny-go-app`, `poly=fixtures/tiny-polyglot`. Merge was zero-conflict (`--no-ff`; SHA `5931afa`).
+
 **2026-05-16 rebase**: Phase 3 backport (`v0.3.0-phase-3`). Promoted to `main`: WS `static_graph` + `read_source` protocol, Sigma renderer + FA2 worker, panel/slot chassis, search/filter sidebar, Shiki source viewer, stats panel, stress-2k fixture, ADRs 0007 + 0008. Demo branch was **reset to main** and demo-only value re-layered (see "What's mocked" table below). All of `packages/frontend/src/graph/` and `packages/frontend/src/panels/` now ships from `main`; only `main.tsx` retains the `DemoErrorBoundary` wrap on the demo side.
 
 **2026-05-15 rebase**: Phase 2 backport (`v0.2.0-phase-2`). `_DemoServer` swapped from hand-authored JSON to `PythonStaticParser().parse(root, ParseOptions())`; `fixtures/demo-graph/` deleted; `--fixture-root NAME=PATH` flag replaced `--fixture-dir`.
@@ -24,12 +26,13 @@ pnpm --filter @grackle/frontend dev
 # Open http://localhost:5173
 ```
 
-The agent parses each fixture root via `PythonStaticParser` on the first
-client connect and caches the result. The frontend uses `main`'s panel/slot
-chassis: the static graph renders in `GraphCanvas`, search/filter works,
-clicking nodes opens the Shiki source viewer. When `--live` is set (default),
-the agent loops random `pulse` envelopes every 1.5 s; the frontend ignores
-them silently for now — Phase 6/7 will add a real overlay.
+The agent parses each fixture root via `registry.parse_all()` on the first
+client connect and caches the result. Python, Go, and polyglot fixtures all
+work out of the box. The frontend uses `main`'s panel/slot chassis: the static
+graph renders in `GraphCanvas`, search/filter works, clicking nodes opens the
+Shiki source viewer. When `--live` is set (default), the agent loops random
+`pulse` envelopes every 1.5 s; the frontend ignores them silently for now —
+Phase 6/7 will add a real overlay.
 
 CLI flags:
 
@@ -37,18 +40,21 @@ CLI flags:
 grackle demo
   --host TEXT                 Bind address (default 127.0.0.1)
   --port INTEGER              WebSocket port (default 7878)
-  --fixture-root NAME=PATH    Named Python project root. Repeatable.
-                              (default: tiny=fixtures/tiny-app)
+  --fixture-root NAME=PATH    Named project root (Python/Go/polyglot). Repeatable.
+                              (defaults: tiny/go/poly — see below)
   --default TEXT              Fixture name pushed on connect (default: tiny)
   --live / --no-live          Push random pulses every 1.5 s (default --live)
 ```
 
-Example with multiple fixture roots:
+Default fixtures (used when no `--fixture-root` flags are passed):
 
 ```bash
+uv run --project packages/agent grackle demo
+# equivalent to:
 uv run --project packages/agent grackle demo \
   --fixture-root tiny=fixtures/tiny-app \
-  --fixture-root grackle=packages/agent
+  --fixture-root go=fixtures/tiny-go-app \
+  --fixture-root poly=fixtures/tiny-polyglot
 ```
 
 ## What's mocked (the demo surface)
