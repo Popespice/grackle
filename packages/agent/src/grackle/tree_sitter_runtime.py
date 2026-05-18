@@ -27,6 +27,7 @@ _GRAMMAR_FACTORIES: dict[str, tuple[str, str]] = {
     "typescript": ("tree_sitter_typescript", "language_typescript"),
     "tsx": ("tree_sitter_typescript", "language_tsx"),
     "go": ("tree_sitter_go", "language"),
+    "rust": ("tree_sitter_rust", "language"),
 }
 
 
