@@ -85,6 +85,72 @@ def parse(
 
 
 @main.command()
+@click.argument("script", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option(
+    "--output",
+    "-o",
+    default=None,
+    type=click.Path(dir_okay=False, writable=True, path_type=Path),
+    help="Write JSONL to FILE instead of stdout.",
+)
+@click.option(
+    "--root",
+    "-r",
+    default=".",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="Project root for static-graph ID resolution (default: current directory).",
+)
+@click.option(
+    "--lines",
+    is_flag=True,
+    default=False,
+    help="Include LINE events (one per executed line). Significantly increases event volume.",
+)
+@click.option(
+    "--max-events",
+    default=None,
+    type=int,
+    help="Hard cap on collected events. CLI exits with an error if the cap is reached.",
+)
+def trace(
+    script: Path,
+    output: Path | None,
+    root: Path,
+    lines: bool,
+    max_events: int | None,
+) -> None:
+    """Trace SCRIPT and emit runtime events as JSONL.
+
+    Each line of output is a JSON object with fields: event, node_id,
+    ts_ns, thread_id, frame_depth, metadata. Node IDs match those from
+    ``grackle parse ROOT``.
+
+    SCRIPT is executed under sys.monitoring (PEP 669). Only Python
+    functions inside ROOT are traced; stdlib and site-packages are skipped.
+    """
+    import json as _json
+
+    from grackle.adapters.base import TraceCapExceeded, TraceOptions
+    from grackle.python_runtime.adapter import PythonRuntimeAdapter
+    from grackle.python_runtime.writer import write_jsonl
+
+    options = TraceOptions(include_line_events=lines, max_events=max_events)
+    adapter = PythonRuntimeAdapter()
+
+    try:
+        events = list(adapter.trace(script, root, options))
+    except TraceCapExceeded as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    if output is not None:
+        count = write_jsonl(events, output)
+        click.echo(f"wrote {count} events → {output}", err=True)
+    else:
+        for event in events:
+            click.echo(_json.dumps(event, ensure_ascii=False))
+
+
+@main.command()
 @click.option("--host", default="127.0.0.1", show_default=True, help="Bind address.")
 @click.option("--port", default=7878, show_default=True, help="WebSocket port.")
 @click.option(

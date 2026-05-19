@@ -2,6 +2,7 @@ from importlib.metadata import PackageNotFoundError, version
 
 import grackle.go_parser  # noqa: F401  — triggers GoStaticParser registration
 import grackle.python_parser  # noqa: F401  — triggers PythonStaticParser registration
+import grackle.python_runtime  # noqa: F401  — triggers PythonRuntimeAdapter registration
 import grackle.rust_parser  # noqa: F401  — triggers RustStaticParser registration
 import grackle.typescript_parser  # noqa: F401  — triggers TypeScriptStaticParser registration
 from grackle.adapters import registry as registry

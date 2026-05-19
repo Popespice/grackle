@@ -1,9 +1,17 @@
+from __future__ import annotations
+
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from grackle.adapters.base import Capabilities, ParseOptions, StaticGraph
 from grackle.adapters.registry import AdapterRegistry
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+    from grackle.adapters.base import TraceEvent, TraceOptions
 
 
 class _StaticStub:
@@ -27,6 +35,9 @@ class _RuntimeStub:
 
     def capabilities(self) -> Capabilities:
         return Capabilities()
+
+    def trace(self, script: Path, root: Path, options: TraceOptions) -> Iterator[TraceEvent]:
+        yield from ()
 
 
 def test_register_and_retrieve_static() -> None:

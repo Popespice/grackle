@@ -1,6 +1,14 @@
-from pathlib import Path
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 from grackle.adapters.base import Capabilities, ParseOptions, StaticGraph
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+    from pathlib import Path
+
+    from grackle.adapters.base import TraceEvent, TraceOptions
 
 
 class NoOpStaticParser:
@@ -21,3 +29,6 @@ class NoOpRuntimeAdapter:
 
     def capabilities(self) -> Capabilities:
         return Capabilities()
+
+    def trace(self, script: Path, root: Path, options: TraceOptions) -> Iterator[TraceEvent]:
+        yield from ()
