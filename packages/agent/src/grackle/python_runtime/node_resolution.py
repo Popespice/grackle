@@ -92,6 +92,7 @@ class NodeResolver:
         Returns None for:
         - Sentinel strings like ``<frozen importlib._bootstrap>`` or ``<stdin>``.
         - Absolute paths outside the project root.
+        - Calls made during interpreter shutdown (``sys.meta_path is None``).
         """
         if not co_filename or co_filename.startswith("<"):
             return None
@@ -100,5 +101,7 @@ class NodeResolver:
             # Ensure it is inside the project root.
             abs_path.relative_to(self._root)
             return to_posix(abs_path, self._root)
-        except (ValueError, OSError):
+        except (ValueError, OSError, ImportError):
+            # ImportError can be raised by Path() during interpreter shutdown
+            # (sys.meta_path is None). Treat as "not a project file."
             return None

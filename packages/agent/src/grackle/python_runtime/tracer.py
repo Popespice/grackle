@@ -97,8 +97,21 @@ class Tracer:
             mon.register_callback(_GRACKLE_TOOL_ID, mon.events.LINE, self._on_line)
 
     def _stop(self) -> None:
+        # Order matters: clear events first so no more callbacks fire, then
+        # unregister callbacks (pass None), then release the tool ID. Without
+        # this, `free_tool_id` alone leaves callbacks registered and they keep
+        # firing for the rest of the process lifetime — polluting subsequent
+        # pytest tests and crashing during interpreter shutdown when
+        # ``sys.meta_path`` is None.
         with contextlib.suppress(Exception):
-            sys.monitoring.free_tool_id(_GRACKLE_TOOL_ID)
+            mon = sys.monitoring
+            mon.set_events(_GRACKLE_TOOL_ID, 0)
+            mon.register_callback(_GRACKLE_TOOL_ID, mon.events.PY_START, None)
+            mon.register_callback(_GRACKLE_TOOL_ID, mon.events.PY_RETURN, None)
+            mon.register_callback(_GRACKLE_TOOL_ID, mon.events.RAISE, None)
+            if self._options.include_line_events:
+                mon.register_callback(_GRACKLE_TOOL_ID, mon.events.LINE, None)
+            mon.free_tool_id(_GRACKLE_TOOL_ID)
 
     # ------------------------------------------------------------------
     # Callbacks (hot path — keep allocation/work minimal)

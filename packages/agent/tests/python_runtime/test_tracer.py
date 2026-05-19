@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -9,7 +10,7 @@ import pytest
 from grackle.adapters import registry
 from grackle.adapters.base import ParseOptions, TraceCapExceeded, TraceOptions
 from grackle.python_runtime.node_resolution import NodeResolver
-from grackle.python_runtime.tracer import Tracer
+from grackle.python_runtime.tracer import _GRACKLE_TOOL_ID, Tracer
 
 _FIXTURE_ROOT = Path(__file__).parents[4] / "fixtures" / "tiny-python-app"
 _SCRIPT = _FIXTURE_ROOT / "main.py"
@@ -151,3 +152,38 @@ def test_max_events_none_means_unlimited() -> None:
     tracer = _make_tracer(TraceOptions(max_events=None))
     events = tracer.run(_SCRIPT)
     assert len(events) > 5  # well above any tiny cap
+
+
+# ---------------------------------------------------------------------------
+# Teardown — _stop() must fully detach so callbacks do not leak between runs
+# ---------------------------------------------------------------------------
+
+
+def test_stop_fully_releases_tool_id() -> None:
+    """After run(), the tool ID must be reusable (i.e. fully freed)."""
+    tracer = _make_tracer()
+    tracer.run(_SCRIPT)
+    # Re-claiming the tool ID should succeed; if _stop() leaked, this raises
+    # ValueError("tool id N is already in use").
+    sys.monitoring.use_tool_id(_GRACKLE_TOOL_ID, "test-reclaim")
+    sys.monitoring.free_tool_id(_GRACKLE_TOOL_ID)
+
+
+def test_stop_clears_event_subscriptions() -> None:
+    """After run(), no events should remain subscribed for our tool ID."""
+    tracer = _make_tracer()
+    tracer.run(_SCRIPT)
+    # set_events with 0 is idempotent; assert the current subscription is empty.
+    assert sys.monitoring.get_events(_GRACKLE_TOOL_ID) == 0
+
+
+def test_consecutive_runs_do_not_leak_callbacks() -> None:
+    """Two consecutive run() calls must each produce a full event list — no
+    leftover callbacks from the first run that would pollute the second."""
+    tracer1 = _make_tracer()
+    events1 = tracer1.run(_SCRIPT)
+    tracer2 = _make_tracer()
+    events2 = tracer2.run(_SCRIPT)
+    # Both should observe equivalent event counts (script is deterministic).
+    assert len(events1) == len(events2)
+    assert len(events1) > 0
