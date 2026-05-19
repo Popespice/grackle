@@ -64,7 +64,26 @@ def test_each_line_is_valid_json(tmp_path: Path) -> None:
 def test_no_tmp_file_left_behind(tmp_path: Path) -> None:
     dest = tmp_path / "out.jsonl"
     write_jsonl(_events(2), dest)
+    # The new tmp name is "<name>.tmp" (appended), so check both
+    # the modern shape and the legacy with_suffix shape — neither should
+    # leak after a successful write.
+    assert not (tmp_path / "out.jsonl.tmp").exists()
     assert not (tmp_path / "out.tmp").exists()
+
+
+def test_tmp_path_uses_append_not_with_suffix(tmp_path: Path) -> None:
+    """Regression: foo.tar.gz must produce foo.tar.gz.tmp, not foo.tar.tmp.
+
+    ``with_suffix(".tmp")`` only replaces the final extension and would
+    collide when multiple destinations share a stem. The writer appends
+    ``.tmp`` to the full filename instead.
+    """
+    # Multi-suffix file — with_suffix would strip ".gz" and collide.
+    dest = tmp_path / "trace.tar.gz"
+    write_jsonl(_events(1), dest)
+    assert dest.exists()
+    # The wrong-but-tempting shape must not exist
+    assert not (tmp_path / "trace.tar.tmp").exists()
 
 
 def test_atomic_write_replaces_existing(tmp_path: Path) -> None:

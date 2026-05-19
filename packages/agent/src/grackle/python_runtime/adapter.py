@@ -27,15 +27,13 @@ class PythonRuntimeAdapter:
     language: str = "python"
 
     def capabilities(self) -> Capabilities:
-        return Capabilities(
-            files=True,
-            classes=True,
-            functions=True,
-            imports=True,
-            calls=True,
-            runtime_tracing=True,
-            annotations=True,
-        )
+        # A ``RuntimeAdapter`` only advertises runtime capabilities.
+        # Static-graph features (files/classes/functions/imports/calls/
+        # annotations) belong to the ``StaticParserAdapter`` returned by
+        # ``registry.get_static("python")``. Mixing both on the runtime
+        # adapter was misleading and made it look as if the runtime tracer
+        # itself produced a static graph.
+        return Capabilities(runtime_tracing=True)
 
     def trace(self, script: Path, root: Path, options: TraceOptions) -> Iterator[TraceEvent]:
         """Execute *script* under sys.monitoring and yield collected trace events.

@@ -109,8 +109,11 @@ def parse(
 @click.option(
     "--max-events",
     default=None,
-    type=int,
-    help="Hard cap on collected events. CLI exits with an error if the cap is reached.",
+    type=click.IntRange(min=1),
+    help=(
+        "Hard cap on collected events (must be >= 1). CLI exits with an "
+        "error if the cap is reached. Default: unlimited."
+    ),
 )
 def trace(
     script: Path,
@@ -127,12 +130,32 @@ def trace(
 
     SCRIPT is executed under sys.monitoring (PEP 669). Only Python
     functions inside ROOT are traced; stdlib and site-packages are skipped.
+
+    SCRIPT must live inside ROOT — otherwise its frames will not resolve
+    to any node in the static graph and every event will fall back to
+    ``<unresolved>``. The CLI exits with a clear error in that case.
+
+    Note: SCRIPT is executed in this process via ``runpy.run_path`` with
+    ``sys.argv`` and the current working directory unchanged. If the
+    script reads ``sys.argv`` or relies on a specific cwd, pre-set them
+    before invoking ``grackle trace``.
     """
     import json as _json
 
     from grackle.adapters.base import TraceCapExceeded, TraceOptions
     from grackle.python_runtime.adapter import PythonRuntimeAdapter
     from grackle.python_runtime.writer import write_jsonl
+
+    # Verify SCRIPT lives inside ROOT — otherwise every frame falls back
+    # to "<unresolved>" because the resolver only indexes files under root.
+    try:
+        script.resolve().relative_to(root.resolve())
+    except ValueError as exc:
+        raise click.UsageError(
+            f"SCRIPT ({script}) is not inside --root ({root}); "
+            "every traced frame would resolve to <unresolved>. "
+            "Pass --root pointing at the project that contains SCRIPT."
+        ) from exc
 
     options = TraceOptions(include_line_events=lines, max_events=max_events)
     adapter = PythonRuntimeAdapter()

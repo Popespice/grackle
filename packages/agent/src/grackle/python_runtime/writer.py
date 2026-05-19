@@ -23,8 +23,15 @@ if TYPE_CHECKING:
 def write_jsonl(events: Iterable[TraceEvent], dest: Path) -> int:
     """Write *events* to *dest* as JSONL (one JSON object per line).
 
-    The write is atomic: output goes to ``dest.with_suffix('.tmp')`` then
-    replaces *dest* via ``Path.replace()``.
+    The write is atomic: output goes to a sibling tmp file, then ``Path.replace()``
+    swaps it into place.
+
+    The tmp path is constructed by appending ``".tmp"`` to the destination's
+    name — NOT by ``dest.with_suffix(".tmp")`` — because
+    ``with_suffix`` only replaces the last suffix, so ``foo.tar.gz`` would
+    become ``foo.tar.tmp`` and collide if multiple files share a stem.
+    Appending preserves the full filename ("foo.tar.gz.tmp") for
+    collision-free atomic swaps.
 
     Args:
         events: Iterable of ``TraceEvent`` dicts.
@@ -38,7 +45,7 @@ def write_jsonl(events: Iterable[TraceEvent], dest: Path) -> int:
     for event in events:
         lines.append(json.dumps(event, ensure_ascii=False))
 
-    tmp = dest.with_suffix(".tmp")
+    tmp = dest.parent / (dest.name + ".tmp")
     tmp.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
     tmp.replace(dest)
     return len(lines)

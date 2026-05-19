@@ -187,3 +187,187 @@ def test_consecutive_runs_do_not_leak_callbacks() -> None:
     # Both should observe equivalent event counts (script is deterministic).
     assert len(events1) == len(events2)
     assert len(events1) > 0
+
+
+# ---------------------------------------------------------------------------
+# C1 regression — BaseException must not bypass event collection
+# ---------------------------------------------------------------------------
+
+
+def test_systemexit_does_not_bypass_event_collection(tmp_path: Path) -> None:
+    """A script that calls ``sys.exit()`` must still produce trace events.
+
+    Before the C1 fix, ``run()`` caught ``Exception`` only — ``SystemExit``
+    inherits from ``BaseException`` and so propagated past ``run()``,
+    bypassing the ``return self._events`` line entirely. The fix widens the
+    catch to ``BaseException``.
+    """
+    script = tmp_path / "exits.py"
+    script.write_text(
+        "import sys\ndef helper() -> None:\n    sys.exit(0)\nhelper()\n",
+        encoding="utf-8",
+    )
+    from grackle.adapters import registry  # local import — keep top of file tidy
+    from grackle.adapters.base import ParseOptions
+
+    graph = registry.get_static("python").parse(tmp_path, ParseOptions())  # type: ignore[union-attr]
+    resolver = NodeResolver(tmp_path, graph)
+    tracer = Tracer(resolver, TraceOptions())
+    events = tracer.run(script)
+    # We must reach this assertion — the SystemExit must NOT propagate past run().
+    assert len(events) > 0
+    # And the helper that called sys.exit() must appear among the call events
+    call_ids = {e["node_id"] for e in events if e["event"] == "call"}
+    assert "exits.py:helper" in call_ids
+
+
+def test_keyboard_interrupt_does_not_bypass(tmp_path: Path) -> None:
+    """A script that raises KeyboardInterrupt must also produce events (C1)."""
+    script = tmp_path / "ki.py"
+    script.write_text(
+        "def boom() -> None:\n    raise KeyboardInterrupt('test')\nboom()\n",
+        encoding="utf-8",
+    )
+    from grackle.adapters import registry
+    from grackle.adapters.base import ParseOptions
+
+    graph = registry.get_static("python").parse(tmp_path, ParseOptions())  # type: ignore[union-attr]
+    resolver = NodeResolver(tmp_path, graph)
+    tracer = Tracer(resolver, TraceOptions())
+    events = tracer.run(script)
+    assert len(events) > 0
+
+
+# ---------------------------------------------------------------------------
+# C2 regression — decorated functions resolve to their function node
+# ---------------------------------------------------------------------------
+
+
+def test_decorated_function_resolves_to_function_node(tmp_path: Path) -> None:
+    """Before C2, decorated functions had ``line = def line`` but the runtime
+    code object's ``co_firstlineno`` is the first decorator's line, so every
+    decorated function fell back to the file node. The fix records the
+    decorator line in the static graph so the runtime exact-match succeeds.
+    """
+    script = tmp_path / "deco.py"
+    script.write_text(
+        "import functools\n"
+        "\n"
+        "@functools.lru_cache(maxsize=None)\n"  # decorator on line 3
+        "def cached(x: int) -> int:\n"  # def on line 4
+        "    return x * 2\n"
+        "\n"
+        "cached(7)\n"
+        "cached(7)\n",
+        encoding="utf-8",
+    )
+    from grackle.adapters import registry
+    from grackle.adapters.base import ParseOptions
+
+    graph = registry.get_static("python").parse(tmp_path, ParseOptions())  # type: ignore[union-attr]
+    resolver = NodeResolver(tmp_path, graph)
+    tracer = Tracer(resolver, TraceOptions())
+    events = tracer.run(script)
+
+    call_ids = {e["node_id"] for e in events if e["event"] == "call"}
+    # The decorated function must resolve to its function node, NOT the file node.
+    assert "deco.py:cached" in call_ids, (
+        f"decorated function did not resolve to function node; call_ids={call_ids}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# C3 regression — PY_UNWIND must keep frame_depth consistent
+# ---------------------------------------------------------------------------
+
+
+def test_frame_depth_recovers_after_exception(tmp_path: Path) -> None:
+    """After an exception propagates through a frame, subsequent events on
+    the same thread must report a frame_depth equal to the depth they would
+    have had if the frame had returned normally.
+
+    Concretely: caller() calls thrower() which raises; caller catches; then
+    caller calls peer(). peer's call event must be at the same depth as
+    caller's body — depth 1 above main, not depth 2 (which would imply
+    thrower's stack frame leaked).
+    """
+    script = tmp_path / "unwind.py"
+    script.write_text(
+        "def peer() -> None:\n"
+        "    return None\n"
+        "\n"
+        "def thrower() -> None:\n"
+        "    raise ValueError('boom')\n"
+        "\n"
+        "def caller() -> None:\n"
+        "    try:\n"
+        "        thrower()\n"
+        "    except ValueError:\n"
+        "        pass\n"
+        "    peer()\n"
+        "\n"
+        "caller()\n",
+        encoding="utf-8",
+    )
+    from grackle.adapters import registry
+    from grackle.adapters.base import ParseOptions
+
+    graph = registry.get_static("python").parse(tmp_path, ParseOptions())  # type: ignore[union-attr]
+    resolver = NodeResolver(tmp_path, graph)
+    tracer = Tracer(resolver, TraceOptions())
+    events = tracer.run(script)
+
+    # Find the call event for ``peer``; its depth must equal the depth of
+    # the call event for ``thrower`` (both are direct children of caller).
+    peer_call = next(e for e in events if e["event"] == "call" and e["node_id"] == "unwind.py:peer")
+    thrower_call = next(
+        e for e in events if e["event"] == "call" and e["node_id"] == "unwind.py:thrower"
+    )
+    assert peer_call["frame_depth"] == thrower_call["frame_depth"], (
+        f"peer (after exception unwind) at depth {peer_call['frame_depth']}; "
+        f"thrower (before unwind) at depth {thrower_call['frame_depth']} — "
+        f"PY_UNWIND must decrement the per-thread depth counter"
+    )
+
+
+# ---------------------------------------------------------------------------
+# C4 — generator frames don't crash the tracer (boundary check)
+# ---------------------------------------------------------------------------
+
+
+def test_generator_does_not_crash_tracer(tmp_path: Path) -> None:
+    """We do NOT subscribe to PY_YIELD/PY_RESUME by design, but using a
+    generator must still produce a coherent event stream and not crash.
+
+    frame_depth values for code observed inside a generator may drift by one
+    until the generator returns (documented in ADR-0013).
+    """
+    script = tmp_path / "gen.py"
+    script.write_text(
+        "def squares(n: int):\n"
+        "    for i in range(n):\n"
+        "        yield i * i\n"
+        "\n"
+        "def consume() -> int:\n"
+        "    total = 0\n"
+        "    for v in squares(5):\n"
+        "        total += v\n"
+        "    return total\n"
+        "\n"
+        "consume()\n",
+        encoding="utf-8",
+    )
+    from grackle.adapters import registry
+    from grackle.adapters.base import ParseOptions
+
+    graph = registry.get_static("python").parse(tmp_path, ParseOptions())  # type: ignore[union-attr]
+    resolver = NodeResolver(tmp_path, graph)
+    tracer = Tracer(resolver, TraceOptions())
+    events = tracer.run(script)
+    # Must complete and produce events for both functions.
+    call_ids = {e["node_id"] for e in events if e["event"] == "call"}
+    assert "gen.py:squares" in call_ids
+    assert "gen.py:consume" in call_ids
+    # Depths must be non-negative throughout (the C3 fix also covers this).
+    for e in events:
+        assert e["frame_depth"] >= 0

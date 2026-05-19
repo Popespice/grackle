@@ -72,19 +72,21 @@ class StaticGraph(TypedDict):
     metadata: NotRequired[dict[str, Any]]
 
 
-class TraceEvent(TypedDict, total=False):
+class TraceEvent(TypedDict):
     """A single runtime trace event.
 
-    Parity with packages/shared-types/schema/trace.schema.json. The 'event'
-    and 'node_id' keys are required; all others are optional per the schema.
+    Parity with packages/shared-types/schema/trace.schema.json. The core
+    fields are all required; ``metadata`` is optional per the schema and so
+    is the only ``NotRequired`` field. (The earlier ``total=False`` form
+    made every key optional, which masked missing-field bugs.)
     """
 
-    event: str  # required: "call" | "return" | "line" | "exception"
-    node_id: str  # required: POSIX-relative static-graph node id
-    ts_ns: int  # required: monotonic nanoseconds (time.monotonic_ns())
-    thread_id: int  # required: threading.get_ident()
-    frame_depth: int  # required: 0 = outermost frame
-    metadata: dict[str, Any]  # optional: event-specific payload
+    event: str  # "call" | "return" | "line" | "exception"
+    node_id: str  # POSIX-relative static-graph node id
+    ts_ns: int  # monotonic nanoseconds (time.monotonic_ns())
+    thread_id: int  # threading.get_ident()
+    frame_depth: int  # 0 = outermost frame
+    metadata: NotRequired[dict[str, Any]]  # event-specific payload
 
 
 class TraceCapExceeded(RuntimeError):

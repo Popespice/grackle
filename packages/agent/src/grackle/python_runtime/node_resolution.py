@@ -3,14 +3,21 @@
 A ``NodeResolver`` is built once per tracer session from the static graph
 emitted by the Python static parser. For each runtime event we receive a
 ``CodeType.co_filename`` (absolute path) and ``CodeType.co_firstlineno``
-(the first line of the enclosing function/method definition). The resolver
-normalises the filename to a POSIX-relative path and does an O(1) lookup in
-a precomputed ``(posix_path, lineno)`` index.
+(the first line of the enclosing function/method definition — or the first
+decorator's line, if any). The resolver normalises the filename to a
+POSIX-relative path and does an O(1) lookup in a precomputed
+``(posix_path, lineno)`` index.
 
 Fallback chain (first match wins):
 1. Function / method node whose ``path == posix_path`` and ``line == lineno``.
 2. File node whose ``path == posix_path`` (covers lambdas, class bodies, etc.).
 3. Literal string ``"<unresolved>"`` (should never happen for project files).
+
+Performance note: each callback used to call ``is_project_file`` and then
+``resolve``, which normalised the filename twice. The resolver now caches
+``_normalize_filename`` results in a per-instance dict so the second call is
+a dict lookup. The cache is bounded by the number of distinct code-object
+filenames in the project (a small constant), so growth is not a concern.
 """
 
 from __future__ import annotations
@@ -22,6 +29,11 @@ from grackle.paths import to_posix
 
 if TYPE_CHECKING:
     from grackle.adapters.base import StaticGraph
+
+
+# Sentinel used in ``_norm_cache`` to mean "this filename is not a project
+# file" — distinguished from a missing key so we still get a cache hit.
+_NOT_PROJECT = ""
 
 
 class NodeResolver:
@@ -38,6 +50,10 @@ class NodeResolver:
         self._sym_index: dict[tuple[str, int], str] = {}
         # Index 2: posix_path → node_id  for file nodes (fallback)
         self._file_index: dict[str, str] = {}
+        # Per-instance cache: co_filename (str) → posix_path or _NOT_PROJECT.
+        # Bounded by the number of unique code-object filenames touched
+        # during a single tracer session.
+        self._norm_cache: dict[str, str] = {}
 
         for node in graph["nodes"]:
             node_id: str = node["id"]
@@ -54,17 +70,34 @@ class NodeResolver:
     # Public API
     # ------------------------------------------------------------------
 
-    def resolve(self, co_filename: str, co_firstlineno: int) -> str:
+    def resolve(
+        self,
+        co_filename: str,
+        co_firstlineno: int,
+        co_name: str | None = None,
+    ) -> str:
         """Return the node ID that best matches *co_filename* + *co_firstlineno*.
 
         The *co_filename* may be an absolute path, a ``<string>`` sentinel, or
         anything else Python sets on code objects. Non-project paths (those
         outside the project root) return ``"<unresolved>"`` immediately so the
         caller can decide to skip or disable that code object.
+
+        When *co_name* is ``"<module>"``, the lookup skips the function/method
+        index and goes straight to the file index. Module-level code has
+        ``co_firstlineno = 1``, which collides with any function defined on
+        line 1 — without this special case those module frames would be
+        misresolved to that function's node.
         """
-        posix = self._normalize_filename(co_filename)
-        if posix is None:
+        posix = self._cached_normalize(co_filename)
+        if posix == _NOT_PROJECT:
             return "<unresolved>"
+
+        # Module-level frames never match a function node — go straight to
+        # the file fallback to avoid the line-1 collision described above.
+        if co_name == "<module>":
+            file_id = self._file_index.get(posix)
+            return file_id if file_id is not None else "<unresolved>"
 
         # Prefer the most-specific node (function/method at this exact line).
         sym_id = self._sym_index.get((posix, co_firstlineno))
@@ -80,11 +113,25 @@ class NodeResolver:
 
     def is_project_file(self, co_filename: str) -> bool:
         """Return True if *co_filename* falls inside the project root."""
-        return self._normalize_filename(co_filename) is not None
+        return self._cached_normalize(co_filename) != _NOT_PROJECT
 
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _cached_normalize(self, co_filename: str) -> str:
+        """Return cached POSIX-relative path or ``_NOT_PROJECT`` sentinel.
+
+        Avoids re-running ``Path.resolve()`` and ``relative_to()`` on every
+        callback for the same code object.
+        """
+        cached = self._norm_cache.get(co_filename)
+        if cached is not None:
+            return cached
+        result = self._normalize_filename(co_filename)
+        normalised = _NOT_PROJECT if result is None else result
+        self._norm_cache[co_filename] = normalised
+        return normalised
 
     def _normalize_filename(self, co_filename: str) -> str | None:
         """Normalise *co_filename* to a POSIX-relative path or return None.

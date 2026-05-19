@@ -18,12 +18,22 @@ def test_capabilities_runtime_tracing() -> None:
     assert caps.runtime_tracing is True
 
 
-def test_capabilities_static_flags() -> None:
+def test_capabilities_only_runtime() -> None:
+    """The runtime adapter must not advertise static-graph capabilities.
+
+    Static features belong to the StaticParserAdapter returned by
+    ``registry.get_static("python")``. Advertising them on the runtime
+    adapter was misleading and is intentionally no longer done.
+    """
     adapter = PythonRuntimeAdapter()
     caps = adapter.capabilities()
-    assert caps.files is True
-    assert caps.functions is True
-    assert caps.calls is True
+    assert caps.runtime_tracing is True
+    assert caps.files is False
+    assert caps.classes is False
+    assert caps.functions is False
+    assert caps.imports is False
+    assert caps.calls is False
+    assert caps.annotations is False
 
 
 def test_registered_in_registry() -> None:

@@ -142,3 +142,55 @@ def test_resolves_correct_function_among_several() -> None:
     assert resolver.resolve(filename, 30) == "main.py:baz"
     # Line 15 has no exact match — falls back to file
     assert resolver.resolve(filename, 15) == "main.py"
+
+
+# ---------------------------------------------------------------------------
+# C2 — decorated functions: the parser writes the first decorator's line as
+# ``line``, matching ``code.co_firstlineno``. The resolver doesn't need any
+# special handling — it just needs the index entry under the correct line.
+# ---------------------------------------------------------------------------
+
+
+def test_decorated_function_resolves_at_decorator_line() -> None:
+    """Decorated function: ``co_firstlineno`` == first decorator's line.
+
+    If the parser writes the decorator line as the node's ``line`` field
+    (which it does after the C2 fix), the resolver finds the function node
+    with an exact lookup. The resolver itself doesn't know about decorators
+    — this test guards the assumption that the parser/resolver agreement
+    holds.
+    """
+    # parser stores ``line = 3`` for a function whose decorator is on line 3
+    # and whose ``def`` keyword is on line 4
+    graph = _make_graph([_file_node("deco.py"), _fn_node("deco.py", "cached", 3)])
+    resolver = NodeResolver(_ROOT, graph)
+    filename = str(_ROOT / "deco.py")
+    # Runtime ``co_firstlineno`` for the decorated function is 3 (decorator line)
+    assert resolver.resolve(filename, 3) == "deco.py:cached"
+    # Lookup at the ``def`` line (line 4) without an index entry falls back
+    # to the file node — this is the bug the C2 fix prevents from happening
+    # in real traces (the parser no longer writes line=4 for this function).
+    assert resolver.resolve(filename, 4) == "deco.py"
+
+
+# ---------------------------------------------------------------------------
+# Caching — repeated normalisations must hit the cache
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_filename_is_cached() -> None:
+    """The resolver caches normalisation results per co_filename to avoid
+    paying for ``Path.resolve()`` on every callback. This test asserts the
+    cache is populated after one lookup so subsequent lookups don't repeat
+    the expensive work.
+    """
+    graph = _make_graph([_file_node("app.py")])
+    resolver = NodeResolver(_ROOT, graph)
+    filename = str(_ROOT / "app.py")
+    # First call populates cache
+    resolver.is_project_file(filename)
+    cache = resolver._norm_cache
+    assert filename in cache, "cache must hold the normalised path"
+    # is_project_file and resolve must agree on the same cached value
+    assert resolver.is_project_file(filename) is True
+    assert resolver.resolve(filename, 1) == "app.py"
