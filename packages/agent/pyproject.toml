@@ -30,7 +30,7 @@ packages = ["src/grackle"]
 dev = [
     "pytest>=9.0.3",
     "pytest-asyncio>=1.3.0",
-    "ruff>=0.4",
+    "ruff>=0.15.13",
     "mypy>=1.10",
     "types-jsonschema",
 ]
