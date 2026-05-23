@@ -1,4 +1,8 @@
-import type { Graph } from "@grackle/shared-types";
+import type {
+  Graph,
+  TraceEvent,
+  TraceSessionEndMessage,
+} from "@grackle/shared-types";
 import { create } from "zustand";
 
 interface GraphStoreState {
@@ -8,6 +12,13 @@ interface GraphStoreState {
   hiddenKinds: Set<string>;
   searchTerm: string;
   excludeGlobs: string[];
+  // ---------------------------------------------------------------------------
+  // Trace slice — populated by the runtime overlay (Phase 6.2+).
+  // Append-only during a session; 6.3 will batch appends for render performance.
+  // ---------------------------------------------------------------------------
+  traceEvents: TraceEvent[];
+  traceSessionId: string | null;
+  traceSessionComplete: boolean;
   setGraph: (graph: Graph) => void;
   selectNode: (nodeId: string | null) => void;
   setHighlightedNodes: (ids: string[] | null) => void;
@@ -15,6 +26,9 @@ interface GraphStoreState {
   showAllKinds: () => void;
   setSearch: (term: string) => void;
   setExcludes: (globs: string[]) => void;
+  startTraceSession: (sessionId: string) => void;
+  addTraceEvent: (ev: TraceEvent) => void;
+  endTraceSession: (msg: TraceSessionEndMessage) => void;
 }
 
 export const useGraphStore = create<GraphStoreState>()((set) => ({
@@ -24,6 +38,9 @@ export const useGraphStore = create<GraphStoreState>()((set) => ({
   hiddenKinds: new Set<string>(),
   searchTerm: "",
   excludeGlobs: [],
+  traceEvents: [],
+  traceSessionId: null,
+  traceSessionComplete: false,
   setGraph: (graph) =>
     set({ graph, selectedNodeId: null, highlightedNodeIds: null }),
   selectNode: (nodeId) => set({ selectedNodeId: nodeId }),
@@ -42,4 +59,14 @@ export const useGraphStore = create<GraphStoreState>()((set) => ({
   showAllKinds: () => set({ hiddenKinds: new Set<string>() }),
   setSearch: (term) => set({ searchTerm: term }),
   setExcludes: (globs) => set({ excludeGlobs: globs }),
+  startTraceSession: (sessionId) =>
+    set({
+      traceSessionId: sessionId,
+      traceEvents: [],
+      traceSessionComplete: false,
+    }),
+  addTraceEvent: (ev) =>
+    set((state) => ({ traceEvents: [...state.traceEvents, ev] })),
+  endTraceSession: (_msg: TraceSessionEndMessage) =>
+    set({ traceSessionComplete: true }),
 }));

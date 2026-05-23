@@ -10,7 +10,13 @@ const WS_URL = "ws://127.0.0.1:7878";
 export function App(): JSX.Element {
   const connect = useGrackleClient((s) => s.connect);
   const onStaticGraph = useGrackleClient((s) => s.onStaticGraph);
+  const onTraceSessionStart = useGrackleClient((s) => s.onTraceSessionStart);
+  const onTraceEvent = useGrackleClient((s) => s.onTraceEvent);
+  const onTraceSessionEnd = useGrackleClient((s) => s.onTraceSessionEnd);
   const setGraph = useGraphStore((s) => s.setGraph);
+  const startTraceSession = useGraphStore((s) => s.startTraceSession);
+  const addTraceEvent = useGraphStore((s) => s.addTraceEvent);
+  const endTraceSession = useGraphStore((s) => s.endTraceSession);
 
   useEffect(() => {
     connect(WS_URL);
@@ -19,6 +25,20 @@ export function App(): JSX.Element {
   useEffect(() => {
     return onStaticGraph(setGraph);
   }, [onStaticGraph, setGraph]);
+
+  useEffect(() => {
+    return onTraceSessionStart((msg) =>
+      startTraceSession(msg.payload.session_id)
+    );
+  }, [onTraceSessionStart, startTraceSession]);
+
+  useEffect(() => {
+    return onTraceEvent(addTraceEvent);
+  }, [onTraceEvent, addTraceEvent]);
+
+  useEffect(() => {
+    return onTraceSessionEnd(endTraceSession);
+  }, [onTraceSessionEnd, endTraceSession]);
 
   return (
     <div

@@ -4,6 +4,10 @@ import type {
   ReadSourceRequest,
   ReadSourceResponse,
   StaticGraphMessage,
+  TraceEvent,
+  TraceEventMessage,
+  TraceSessionEndMessage,
+  TraceSessionStartMessage,
   WsEnvelope,
 } from "@grackle/shared-types";
 import { create } from "zustand";
@@ -18,11 +22,21 @@ interface GrackleClientState {
   _ws: WebSocket | null;
   _staticGraphHandlers: Set<(graph: Graph) => void>;
   _pendingReadSource: Map<string, (msg: SourceReply) => void>;
+  _traceSessionStartHandlers: Set<(msg: TraceSessionStartMessage) => void>;
+  _traceEventHandlers: Set<(ev: TraceEvent) => void>;
+  _traceSessionEndHandlers: Set<(msg: TraceSessionEndMessage) => void>;
   connect: (url: string) => void;
   disconnect: () => void;
   ping: () => void;
   onStaticGraph: (handler: (graph: Graph) => void) => () => void;
   sendReadSource: (path: string) => Promise<SourceReply>;
+  onTraceSessionStart: (
+    handler: (msg: TraceSessionStartMessage) => void
+  ) => () => void;
+  onTraceEvent: (handler: (ev: TraceEvent) => void) => () => void;
+  onTraceSessionEnd: (
+    handler: (msg: TraceSessionEndMessage) => void
+  ) => () => void;
 }
 
 export const useGrackleClient = create<GrackleClientState>()((set, get) => ({
@@ -31,6 +45,9 @@ export const useGrackleClient = create<GrackleClientState>()((set, get) => ({
   _ws: null,
   _staticGraphHandlers: new Set(),
   _pendingReadSource: new Map(),
+  _traceSessionStartHandlers: new Set(),
+  _traceEventHandlers: new Set(),
+  _traceSessionEndHandlers: new Set(),
 
   connect: (url: string) => {
     get()._ws?.close();
@@ -73,6 +90,21 @@ export const useGrackleClient = create<GrackleClientState>()((set, get) => ({
             get()._pendingReadSource.delete(envelope.id);
             resolver(envelope as SourceReply);
           }
+        } else if (envelope.type === "trace_session_start") {
+          const msg = envelope as unknown as TraceSessionStartMessage;
+          get()._traceSessionStartHandlers.forEach((h) => {
+            h(msg);
+          });
+        } else if (envelope.type === "trace_event") {
+          const msg = envelope as unknown as TraceEventMessage;
+          get()._traceEventHandlers.forEach((h) => {
+            h(msg.payload);
+          });
+        } else if (envelope.type === "trace_session_end") {
+          const msg = envelope as unknown as TraceSessionEndMessage;
+          get()._traceSessionEndHandlers.forEach((h) => {
+            h(msg);
+          });
         }
       } catch {
         // ignore non-JSON messages
@@ -103,6 +135,27 @@ export const useGrackleClient = create<GrackleClientState>()((set, get) => ({
     get()._staticGraphHandlers.add(handler);
     return () => {
       get()._staticGraphHandlers.delete(handler);
+    };
+  },
+
+  onTraceSessionStart: (handler: (msg: TraceSessionStartMessage) => void) => {
+    get()._traceSessionStartHandlers.add(handler);
+    return () => {
+      get()._traceSessionStartHandlers.delete(handler);
+    };
+  },
+
+  onTraceEvent: (handler: (ev: TraceEvent) => void) => {
+    get()._traceEventHandlers.add(handler);
+    return () => {
+      get()._traceEventHandlers.delete(handler);
+    };
+  },
+
+  onTraceSessionEnd: (handler: (msg: TraceSessionEndMessage) => void) => {
+    get()._traceSessionEndHandlers.add(handler);
+    return () => {
+      get()._traceSessionEndHandlers.delete(handler);
     };
   },
 

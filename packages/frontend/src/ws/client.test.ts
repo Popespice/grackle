@@ -54,6 +54,9 @@ beforeEach(() => {
     _ws: null,
     _staticGraphHandlers: new Set(),
     _pendingReadSource: new Map(),
+    _traceSessionStartHandlers: new Set(),
+    _traceEventHandlers: new Set(),
+    _traceSessionEndHandlers: new Set(),
   });
   MockWsClass.mockClear();
 });
@@ -236,6 +239,95 @@ describe("useGrackleClient", () => {
   it("sendReadSource rejects when not connected", async () => {
     const { sendReadSource } = useGrackleClient.getState();
     await expect(sendReadSource("foo.py")).rejects.toThrow("not connected");
+  });
+
+  it("trace_session_start dispatches to registered handlers", () => {
+    const { connect, onTraceSessionStart } = useGrackleClient.getState();
+    connect("ws://127.0.0.1:7878");
+    mockWs.simulateOpen();
+
+    const received: unknown[] = [];
+    onTraceSessionStart((msg) => received.push(msg));
+
+    mockWs.simulateMessage(
+      JSON.stringify({
+        id: "ts1",
+        type: "trace_session_start",
+        payload: { session_id: "abc", started_ns: 1000, source: "replay" },
+      })
+    );
+
+    expect(received).toHaveLength(1);
+    const msg = received[0] as {
+      type: string;
+      payload: { session_id: string };
+    };
+    expect(msg.type).toBe("trace_session_start");
+    expect(msg.payload.session_id).toBe("abc");
+  });
+
+  it("trace_event dispatches the payload (TraceEvent) to registered handlers", () => {
+    const { connect, onTraceEvent } = useGrackleClient.getState();
+    connect("ws://127.0.0.1:7878");
+    mockWs.simulateOpen();
+
+    const received: unknown[] = [];
+    onTraceEvent((ev) => received.push(ev));
+
+    const fakeEvent = {
+      event: "call",
+      node_id: "app.py:main",
+      ts_ns: 42,
+      thread_id: 1,
+      frame_depth: 0,
+      metadata: {},
+    };
+    mockWs.simulateMessage(
+      JSON.stringify({ id: "te1", type: "trace_event", payload: fakeEvent })
+    );
+
+    expect(received).toHaveLength(1);
+    expect(received[0]).toEqual(fakeEvent);
+  });
+
+  it("trace_session_end dispatches to registered handlers", () => {
+    const { connect, onTraceSessionEnd } = useGrackleClient.getState();
+    connect("ws://127.0.0.1:7878");
+    mockWs.simulateOpen();
+
+    const received: unknown[] = [];
+    onTraceSessionEnd((msg) => received.push(msg));
+
+    mockWs.simulateMessage(
+      JSON.stringify({
+        id: "tse1",
+        type: "trace_session_end",
+        payload: { session_id: "abc", ended_ns: 9999, event_count: 5 },
+      })
+    );
+
+    expect(received).toHaveLength(1);
+    const msg = received[0] as { payload: { event_count: number } };
+    expect(msg.payload.event_count).toBe(5);
+  });
+
+  it("onTraceSessionStart returns an unsubscribe function", () => {
+    const { connect, onTraceSessionStart } = useGrackleClient.getState();
+    connect("ws://127.0.0.1:7878");
+    mockWs.simulateOpen();
+
+    const received: unknown[] = [];
+    const unsub = onTraceSessionStart((msg) => received.push(msg));
+    unsub();
+
+    mockWs.simulateMessage(
+      JSON.stringify({
+        id: "ts2",
+        type: "trace_session_start",
+        payload: { session_id: "xyz", started_ns: 0, source: "live" },
+      })
+    );
+    expect(received).toHaveLength(0);
   });
 
   it("malformed message is ignored without throwing", () => {

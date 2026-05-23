@@ -120,3 +120,24 @@ def test_trace_help_mentions_runpy_caveat() -> None:
     assert result.exit_code == 0
     # The note about runpy + sys.argv is part of the docstring
     assert "sys.argv" in result.output or "cwd" in result.output
+
+
+def test_trace_help_mentions_connect_option() -> None:
+    """``trace --help`` must document the --connect option."""
+    result = CliRunner().invoke(main, ["trace", "--help"])
+    assert result.exit_code == 0
+    assert "--connect" in result.output
+
+
+def test_serve_help_mentions_trace_source() -> None:
+    """``serve --help`` must document the --trace-source option."""
+    result = CliRunner().invoke(main, ["serve", "--help"])
+    assert result.exit_code == 0
+    assert "--trace-source" in result.output
+
+
+def test_serve_help_mentions_no_pace() -> None:
+    """``serve --help`` must document the --no-pace flag."""
+    result = CliRunner().invoke(main, ["serve", "--help"])
+    assert result.exit_code == 0
+    assert "--no-pace" in result.output

@@ -18,6 +18,9 @@ beforeEach(() => {
     hiddenKinds: new Set<string>(),
     searchTerm: "",
     excludeGlobs: [],
+    traceEvents: [],
+    traceSessionId: null,
+    traceSessionComplete: false,
   });
 });
 
@@ -102,5 +105,81 @@ describe("useGraphStore", () => {
     const before = useGraphStore.getState().hiddenKinds;
     useGraphStore.getState().showAllKinds();
     expect(useGraphStore.getState().hiddenKinds).not.toBe(before);
+  });
+
+  // -------------------------------------------------------------------------
+  // Trace slice
+  // -------------------------------------------------------------------------
+
+  it("has correct initial trace state", () => {
+    const state = useGraphStore.getState();
+    expect(state.traceEvents).toEqual([]);
+    expect(state.traceSessionId).toBeNull();
+    expect(state.traceSessionComplete).toBe(false);
+  });
+
+  it("startTraceSession sets sessionId and clears prior events", () => {
+    // Populate events first so we can verify they are cleared.
+    useGraphStore.setState({
+      traceEvents: [
+        {
+          event: "call",
+          node_id: "old.py:f",
+          ts_ns: 1,
+          thread_id: 1,
+          frame_depth: 0,
+        },
+      ],
+      traceSessionComplete: true,
+    });
+
+    useGraphStore.getState().startTraceSession("session-1");
+    const state = useGraphStore.getState();
+    expect(state.traceSessionId).toBe("session-1");
+    expect(state.traceEvents).toEqual([]);
+    expect(state.traceSessionComplete).toBe(false);
+  });
+
+  it("addTraceEvent appends without mutation", () => {
+    useGraphStore.getState().startTraceSession("s1");
+    const ev = {
+      event: "call",
+      node_id: "app.py:main",
+      ts_ns: 42,
+      thread_id: 1,
+      frame_depth: 0,
+    };
+    useGraphStore.getState().addTraceEvent(ev);
+    const state = useGraphStore.getState();
+    expect(state.traceEvents).toHaveLength(1);
+    expect(state.traceEvents[0]).toEqual(ev);
+  });
+
+  it("addTraceEvent accumulates multiple events in order", () => {
+    useGraphStore.getState().startTraceSession("s1");
+    for (let i = 0; i < 5; i++) {
+      useGraphStore.getState().addTraceEvent({
+        event: "call",
+        node_id: `app.py:fn_${i}`,
+        ts_ns: i,
+        thread_id: 1,
+        frame_depth: i,
+      });
+    }
+    const { traceEvents } = useGraphStore.getState();
+    expect(traceEvents).toHaveLength(5);
+    expect(traceEvents[4]?.node_id).toBe("app.py:fn_4");
+  });
+
+  it("endTraceSession marks traceSessionComplete", () => {
+    useGraphStore.getState().startTraceSession("s1");
+    useGraphStore.getState().endTraceSession({
+      id: "e1",
+      type: "trace_session_end",
+      payload: { session_id: "s1", ended_ns: 9999, event_count: 0 },
+    });
+    expect(useGraphStore.getState().traceSessionComplete).toBe(true);
+    // Events still retained (6.3 will allow scrubbing).
+    expect(useGraphStore.getState().traceSessionId).toBe("s1");
   });
 });

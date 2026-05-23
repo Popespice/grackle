@@ -1,14 +1,27 @@
+from __future__ import annotations
+
 import asyncio
 import json
 import platform
 import sys
+import time
 from pathlib import Path
+from typing import TYPE_CHECKING
+from uuid import uuid4
 
 import click
 import structlog
 
+from grackle import protocol as _protocol
 from grackle import server as _server
 from grackle.logging import configure_logging
+
+if TYPE_CHECKING:
+    from grackle.adapters.base import TraceEvent
+
+# Maximum inter-event sleep when streaming a completed trace to a server.
+# Mirrors server._MAX_GAP_S so --connect pacing matches --trace-source pacing.
+_MAX_GAP_S = 0.25
 
 
 @click.group()
@@ -115,12 +128,31 @@ def parse(
         "error if the cap is reached. Default: unlimited."
     ),
 )
+@click.option(
+    "--connect",
+    default=None,
+    metavar="URL",
+    help=(
+        "After tracing completes, stream the collected events to a running "
+        "grackle server at URL (e.g. ws://127.0.0.1:7878). "
+        "May be combined with --output to write a file AND stream. "
+        "Note: this streams a completed trace, not a live in-progress one."
+    ),
+)
+@click.option(
+    "--no-pace",
+    is_flag=True,
+    default=False,
+    help="Disable inter-event pacing when streaming via --connect (push all events immediately).",
+)
 def trace(
     script: Path,
     output: Path | None,
     root: Path,
     lines: bool,
     max_events: int | None,
+    connect: str | None,
+    no_pace: bool,
 ) -> None:
     """Trace SCRIPT and emit runtime events as JSONL.
 
@@ -168,9 +200,17 @@ def trace(
     if output is not None:
         count = write_jsonl(events, output)
         click.echo(f"wrote {count} events → {output}", err=True)
-    else:
+    elif connect is None:
+        # stdout mode: only when neither --output nor --connect is given
         for event in events:
             click.echo(_json.dumps(event, ensure_ascii=False))
+
+    if connect is not None:
+        try:
+            asyncio.run(_stream_events_to_server(events, connect, pace=not no_pace))
+            click.echo(f"streamed {len(events)} events → {connect}", err=True)
+        except Exception as exc:
+            raise click.ClickException(f"stream to {connect} failed: {exc}") from exc
 
 
 @main.command()
@@ -182,7 +222,29 @@ def trace(
     type=click.Path(exists=True, file_okay=False, path_type=Path),
     help="Project root to parse on client connect (default: current directory).",
 )
-def serve(host: str, port: int, root: Path) -> None:
+@click.option(
+    "--trace-source",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help=(
+        "JSONL trace file to replay to every new browser connection after "
+        "the static_graph push.  Each connection replays the file from the "
+        "start.  Omit for live-attach mode (producers stream via --connect)."
+    ),
+)
+@click.option(
+    "--no-pace",
+    is_flag=True,
+    default=False,
+    help="Disable inter-event pacing during file replay (push all events immediately).",
+)
+def serve(
+    host: str,
+    port: int,
+    root: Path,
+    trace_source: Path | None,
+    no_pace: bool,
+) -> None:
     """Start the grackle agent WebSocket server."""
     configure_logging()
     log = structlog.get_logger()
@@ -191,5 +253,40 @@ def serve(host: str, port: int, root: Path) -> None:
         platform=platform.platform(),
         python=sys.version.split()[0],
         root=str(root),
+        trace_source=str(trace_source) if trace_source else None,
     )
-    asyncio.run(_server.serve(host, port, root=root))
+    asyncio.run(_server.serve(host, port, root=root, trace_source=trace_source, pace=not no_pace))
+
+
+async def _stream_events_to_server(
+    events: list[TraceEvent],
+    url: str,
+    pace: bool = True,
+) -> None:
+    """Open a WebSocket to *url* and stream *events* as a completed trace session.
+
+    Sends ``trace_session_start`` → ``trace_event*`` → ``trace_session_end``.
+    When *pace* is True, inter-event gaps are reproduced with a cap of
+    ``_MAX_GAP_S`` per event.  When False, events are pushed immediately.
+    """
+    from websockets.asyncio.client import connect as _ws_connect
+
+    session_id = str(uuid4())
+    started_ns = time.monotonic_ns()
+
+    async with _ws_connect(url) as ws:
+        await ws.send(_protocol.make_trace_session_start(session_id, started_ns, "live"))
+
+        prev_ts_ns: int | None = None
+        for event in events:
+            if pace and prev_ts_ns is not None:
+                gap_s = (event["ts_ns"] - prev_ts_ns) / 1_000_000_000
+                sleep_s = min(gap_s, _MAX_GAP_S)
+                if sleep_s > 0:
+                    await asyncio.sleep(sleep_s)
+            prev_ts_ns = event["ts_ns"]
+            await ws.send(_protocol.make_trace_event(event))
+
+        await ws.send(
+            _protocol.make_trace_session_end(session_id, time.monotonic_ns(), len(events))
+        )
