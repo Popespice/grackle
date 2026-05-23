@@ -39,12 +39,6 @@ export interface StaticGraph {
   edges: readonly unknown[];
 }
 
-/** Phase-1 skeleton — full event schema defined in phase 6. */
-export interface TraceEvent {
-  id: string;
-  /** Unix epoch seconds (float). */
-  timestamp: number;
-  /** Open string. Common values: "call", "return", "exception". See ADR-0004. */
-  type: string;
-  payload: Record<string, unknown>;
-}
+// TraceEvent is defined in messages.ts (part of the WebSocket protocol) and
+// in the Python adapters/base.py (authoritative runtime shape). The Phase-1
+// skeleton that lived here has been superseded by the Phase-6 implementation.

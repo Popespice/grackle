@@ -10,12 +10,15 @@ sanity-check artifact reviewed after schema changes, not a runtime dependency.
 
 import json
 import uuid
-from typing import Any, TypedDict, cast
+from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 import jsonschema
 import jsonschema.exceptions
 
 from grackle.adapters.base import StaticGraph
+
+if TYPE_CHECKING:
+    from grackle.adapters.base import TraceEvent
 
 
 class WsEnvelope(TypedDict):
@@ -81,5 +84,50 @@ def make_source_error(request_id: str, path: str, reason: str) -> str:
             "id": request_id,
             "type": "source_error",
             "payload": {"path": path, "reason": reason},
+        }
+    )
+
+
+def make_trace_session_start(
+    session_id: str,
+    started_ns: int,
+    source: str = "replay",
+) -> str:
+    """Return a serialized trace_session_start envelope with a fresh UUID id."""
+    return json.dumps(
+        {
+            "id": str(uuid.uuid4()),
+            "type": "trace_session_start",
+            "payload": {
+                "session_id": session_id,
+                "started_ns": started_ns,
+                "source": source,
+            },
+        }
+    )
+
+
+def make_trace_event(event: "TraceEvent") -> str:
+    """Return a serialized trace_event envelope wrapping one TraceEvent dict."""
+    return json.dumps(
+        {
+            "id": str(uuid.uuid4()),
+            "type": "trace_event",
+            "payload": dict(event),
+        }
+    )
+
+
+def make_trace_session_end(session_id: str, ended_ns: int, event_count: int) -> str:
+    """Return a serialized trace_session_end envelope with a fresh UUID id."""
+    return json.dumps(
+        {
+            "id": str(uuid.uuid4()),
+            "type": "trace_session_end",
+            "payload": {
+                "session_id": session_id,
+                "ended_ns": ended_ns,
+                "event_count": event_count,
+            },
         }
     )

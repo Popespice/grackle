@@ -147,6 +147,87 @@
           "required": ["type"]
         }
       ]
+    },
+    "TraceSessionStartMessage": {
+      "description": "Agent push signalling the start of a trace session (file replay or live-attach).",
+      "allOf": [
+        { "$ref": "#/$defs/WsEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "trace_session_start" },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "type": "string",
+                  "description": "UUID identifying this trace session."
+                },
+                "started_ns": {
+                  "type": "integer",
+                  "description": "Monotonic start timestamp in nanoseconds."
+                },
+                "source": {
+                  "type": "string",
+                  "enum": ["replay", "live"],
+                  "description": "Whether events come from a file replay or a live-attach producer."
+                }
+              },
+              "required": ["session_id", "started_ns", "source"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["type"]
+        }
+      ]
+    },
+    "TraceEventMessage": {
+      "description": "Single runtime trace event pushed during a trace session. Payload shape is trace.schema.json#/$defs/TraceEvent.",
+      "allOf": [
+        { "$ref": "#/$defs/WsEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "trace_event" },
+            "payload": {
+              "type": "object",
+              "description": "A TraceEvent — see trace.schema.json#/$defs/TraceEvent.",
+              "additionalProperties": true
+            }
+          },
+          "required": ["type"]
+        }
+      ]
+    },
+    "TraceSessionEndMessage": {
+      "description": "Agent push signalling the end of a trace session.",
+      "allOf": [
+        { "$ref": "#/$defs/WsEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "trace_session_end" },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "type": "string",
+                  "description": "UUID matching the corresponding trace_session_start."
+                },
+                "ended_ns": {
+                  "type": "integer",
+                  "description": "Monotonic end timestamp in nanoseconds."
+                },
+                "event_count": {
+                  "type": "integer",
+                  "description": "Total number of trace_event messages sent in this session.",
+                  "minimum": 0
+                }
+              },
+              "required": ["session_id", "ended_ns", "event_count"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["type"]
+        }
+      ]
     }
   }
 }

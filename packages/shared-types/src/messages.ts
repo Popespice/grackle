@@ -49,10 +49,60 @@ export interface ReadSourceError extends WsEnvelope {
   };
 }
 
+/** Shape of a single runtime trace event (mirrors trace.schema.json#/$defs/TraceEvent). */
+export interface TraceEvent {
+  event: string;
+  node_id: string;
+  ts_ns: number;
+  thread_id: number;
+  frame_depth: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface TraceSessionStartMessage extends WsEnvelope {
+  type: "trace_session_start";
+  payload: {
+    session_id: string;
+    started_ns: number;
+    source: "replay" | "live";
+  };
+}
+
+// `TraceEvent` has no index signature — use type intersection for compatibility.
+export type TraceEventMessage = Omit<WsEnvelope, "payload"> & {
+  type: "trace_event";
+  payload: TraceEvent;
+};
+
+export interface TraceSessionEndMessage extends WsEnvelope {
+  type: "trace_session_end";
+  payload: {
+    session_id: string;
+    ended_ns: number;
+    event_count: number;
+  };
+}
+
 export type AnyKnownMessage =
   | PingMessage
   | PongMessage
   | StaticGraphMessage
   | ReadSourceRequest
   | ReadSourceResponse
-  | ReadSourceError;
+  | ReadSourceError
+  | TraceSessionStartMessage
+  | TraceEventMessage
+  | TraceSessionEndMessage;
+
+/** All message type strings recognised by this schema version. */
+export const KNOWN_MESSAGE_TYPES = [
+  "ping",
+  "pong",
+  "static_graph",
+  "read_source",
+  "source_response",
+  "source_error",
+  "trace_session_start",
+  "trace_event",
+  "trace_session_end",
+] as const;
