@@ -313,13 +313,22 @@ class FunctionVisitor(ast.NodeVisitor):
             qualname = f"{self._parent_qualname}.{node.name}.{node.lineno}"
         node_id = f"{self._file_id}:{qualname}"
 
+        # ``line`` must match ``code.co_firstlineno`` at runtime so the
+        # ``NodeResolver`` (Phase 6 runtime tracer) can do an exact lookup.
+        # CPython sets ``co_firstlineno`` to the first decorator's line when
+        # decorators are present; otherwise to the ``def`` keyword line.
+        # ``ast.FunctionDef.lineno`` is always the ``def`` line, so we adjust
+        # explicitly here. Without this, every decorated function falls back
+        # to the file-node ID at trace time.
+        first_line = node.decorator_list[0].lineno if node.decorator_list else node.lineno
+
         self._builder.add_node(
             {
                 "id": node_id,
                 "kind": self._node_kind,
                 "name": node.name,
                 "path": self._file_id,
-                "line": node.lineno,
+                "line": first_line,
                 "metadata": {
                     "qualname": qualname,
                     "is_async": is_async,
@@ -363,13 +372,18 @@ class ClassVisitor(ast.NodeVisitor):
         qualname = f"{self._parent_qualname}.{node.name}" if self._parent_qualname else node.name
         class_id = f"{self._file_id}:{qualname}"
 
+        # Mirror the decorator-line adjustment in FunctionVisitor._emit so the
+        # static graph's ``line`` matches the class code object's
+        # ``co_firstlineno`` at runtime.
+        first_line = node.decorator_list[0].lineno if node.decorator_list else node.lineno
+
         self._builder.add_node(
             {
                 "id": class_id,
                 "kind": "class",
                 "name": node.name,
                 "path": self._file_id,
-                "line": node.lineno,
+                "line": first_line,
                 "metadata": {
                     "qualname": qualname,
                     "decorators": _extract_decorators(node.decorator_list),

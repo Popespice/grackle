@@ -85,6 +85,95 @@ def parse(
 
 
 @main.command()
+@click.argument("script", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option(
+    "--output",
+    "-o",
+    default=None,
+    type=click.Path(dir_okay=False, writable=True, path_type=Path),
+    help="Write JSONL to FILE instead of stdout.",
+)
+@click.option(
+    "--root",
+    "-r",
+    default=".",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="Project root for static-graph ID resolution (default: current directory).",
+)
+@click.option(
+    "--lines",
+    is_flag=True,
+    default=False,
+    help="Include LINE events (one per executed line). Significantly increases event volume.",
+)
+@click.option(
+    "--max-events",
+    default=None,
+    type=click.IntRange(min=1),
+    help=(
+        "Hard cap on collected events (must be >= 1). CLI exits with an "
+        "error if the cap is reached. Default: unlimited."
+    ),
+)
+def trace(
+    script: Path,
+    output: Path | None,
+    root: Path,
+    lines: bool,
+    max_events: int | None,
+) -> None:
+    """Trace SCRIPT and emit runtime events as JSONL.
+
+    Each line of output is a JSON object with fields: event, node_id,
+    ts_ns, thread_id, frame_depth, metadata. Node IDs match those from
+    ``grackle parse ROOT``.
+
+    SCRIPT is executed under sys.monitoring (PEP 669). Only Python
+    functions inside ROOT are traced; stdlib and site-packages are skipped.
+
+    SCRIPT must live inside ROOT — otherwise its frames will not resolve
+    to any node in the static graph and every event will fall back to
+    ``<unresolved>``. The CLI exits with a clear error in that case.
+
+    Note: SCRIPT is executed in this process via ``runpy.run_path`` with
+    ``sys.argv`` and the current working directory unchanged. If the
+    script reads ``sys.argv`` or relies on a specific cwd, pre-set them
+    before invoking ``grackle trace``.
+    """
+    import json as _json
+
+    from grackle.adapters.base import TraceCapExceeded, TraceOptions
+    from grackle.python_runtime.adapter import PythonRuntimeAdapter
+    from grackle.python_runtime.writer import write_jsonl
+
+    # Verify SCRIPT lives inside ROOT — otherwise every frame falls back
+    # to "<unresolved>" because the resolver only indexes files under root.
+    try:
+        script.resolve().relative_to(root.resolve())
+    except ValueError as exc:
+        raise click.UsageError(
+            f"SCRIPT ({script}) is not inside --root ({root}); "
+            "every traced frame would resolve to <unresolved>. "
+            "Pass --root pointing at the project that contains SCRIPT."
+        ) from exc
+
+    options = TraceOptions(include_line_events=lines, max_events=max_events)
+    adapter = PythonRuntimeAdapter()
+
+    try:
+        events = list(adapter.trace(script, root, options))
+    except TraceCapExceeded as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    if output is not None:
+        count = write_jsonl(events, output)
+        click.echo(f"wrote {count} events → {output}", err=True)
+    else:
+        for event in events:
+            click.echo(_json.dumps(event, ensure_ascii=False))
+
+
+@main.command()
 @click.option("--host", default="127.0.0.1", show_default=True, help="Bind address.")
 @click.option("--port", default=7878, show_default=True, help="WebSocket port.")
 @click.option(

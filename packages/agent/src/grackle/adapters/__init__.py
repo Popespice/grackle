@@ -4,7 +4,9 @@ from grackle.adapters.base import (
     RuntimeAdapter,
     StaticGraph,
     StaticParserAdapter,
+    TraceCapExceeded,
     TraceEvent,
+    TraceOptions,
 )
 from grackle.adapters.registry import AdapterRegistry, registry
 
@@ -15,6 +17,8 @@ __all__ = [
     "RuntimeAdapter",
     "StaticGraph",
     "StaticParserAdapter",
+    "TraceCapExceeded",
     "TraceEvent",
+    "TraceOptions",
     "registry",
 ]

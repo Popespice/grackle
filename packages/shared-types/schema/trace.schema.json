@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "trace",
+  "title": "grackle trace event",
+  "description": "Single runtime trace event emitted by a RuntimeAdapter. Produced by the sys.monitoring tracer and serialised as JSONL. The 'event' discriminator is an open string per ADR-0004 — consumers must ignore unknown values.",
+  "$defs": {
+    "TraceEvent": {
+      "type": "object",
+      "description": "A single instrumentation event emitted during script execution.",
+      "properties": {
+        "event": {
+          "type": "string",
+          "description": "Event kind: 'call', 'return', 'line', or 'exception'. Open string — consumers must ignore unknown values.",
+          "examples": ["call", "return", "line", "exception"]
+        },
+        "node_id": {
+          "type": "string",
+          "description": "POSIX-relative node ID from the static graph. Matches a GraphNode id field. Set to the file node id if no function/method node matches the frame."
+        },
+        "ts_ns": {
+          "type": "integer",
+          "description": "Monotonic timestamp in nanoseconds (time.monotonic_ns()). Relative to an arbitrary epoch — only differences are meaningful."
+        },
+        "thread_id": {
+          "type": "integer",
+          "description": "OS thread identifier (threading.get_ident()) at time of event."
+        },
+        "frame_depth": {
+          "type": "integer",
+          "description": "Call stack depth at the time of the event. 0 = outermost frame.",
+          "minimum": 0
+        },
+        "metadata": {
+          "type": "object",
+          "description": "Event-specific payload. 'call': {args_repr?}; 'return': {retval_repr?}; 'exception': {exc_type}.",
+          "additionalProperties": true
+        }
+      },
+      "required": ["event", "node_id", "ts_ns", "thread_id", "frame_depth"]
+    }
+  }
+}
