@@ -258,6 +258,109 @@ def serve(
     asyncio.run(_server.serve(host, port, root=root, trace_source=trace_source, pace=not no_pace))
 
 
+@main.command()
+@click.option("--host", default="127.0.0.1", show_default=True, help="Bind address.")
+@click.option("--port", default=7878, show_default=True, help="WebSocket port.")
+@click.option(
+    "--fixture-root",
+    "fixture_roots_raw",
+    multiple=True,
+    metavar="NAME=PATH",
+    help=(
+        "Named project root (Python/Go/Rust/polyglot). Repeatable. "
+        "Defaults: python/rust/poly/tiny/go — see below."
+    ),
+)
+@click.option(
+    "--default",
+    "default_fixture",
+    default="python",
+    show_default=True,
+    help="Name of the fixture pushed on connect.",
+)
+@click.option(
+    "--loop/--no-loop",
+    default=False,
+    help="Repeat the golden-trace replay after it ends (default --no-loop).",
+)
+@click.option(
+    "--no-pace",
+    is_flag=True,
+    default=False,
+    help="Disable inter-event pacing during trace replay (push all events immediately).",
+)
+def demo(
+    host: str,
+    port: int,
+    fixture_roots_raw: tuple[str, ...],
+    default_fixture: str,
+    loop: bool,
+    no_pace: bool,
+) -> None:
+    """End-product preview: parse real projects + golden-trace overlay.
+
+    Parses each fixture root via parse_all on first connect, then caches the
+    result.  Accepts ``load_fixture`` envelopes to switch mid-session.
+
+    The Python fixture (``tiny-python-app``) ships a golden trace and drives
+    the real Phase 6.3 Timeline panel + node heat-map.  Rust, Go, and polyglot
+    fixtures render as static-only (no trace).
+
+    Default fixtures:
+
+    \b
+        python = fixtures/tiny-python-app  (has golden trace → overlay)
+        rust   = fixtures/tiny-rust-app
+        poly   = fixtures/tiny-polyglot
+        tiny   = fixtures/tiny-app
+        go     = fixtures/tiny-go-app
+    """
+    from grackle import demo as demo_module  # lazy: throwaway module
+
+    configure_logging()
+    log = structlog.get_logger()
+
+    roots_raw = fixture_roots_raw or (
+        "python=fixtures/tiny-python-app",
+        "rust=fixtures/tiny-rust-app",
+        "poly=fixtures/tiny-polyglot",
+        "tiny=fixtures/tiny-app",
+        "go=fixtures/tiny-go-app",
+    )
+    fixture_roots: dict[str, Path] = {}
+    for raw in roots_raw:
+        if "=" not in raw:
+            raise click.UsageError(f"--fixture-root must be NAME=PATH, got: {raw!r}")
+        name, _, path_str = raw.partition("=")
+        name = name.strip()
+        p = Path(path_str.strip())
+        if not p.exists():
+            raise click.UsageError(f"fixture root not found: {p}")
+        if not p.is_dir():
+            raise click.UsageError(f"fixture root must be a directory: {p}")
+        fixture_roots[name] = p
+
+    log.info(
+        "grackle demo starting",
+        platform=platform.platform(),
+        python=sys.version.split()[0],
+        fixture_roots={k: str(v) for k, v in fixture_roots.items()},
+        default=default_fixture,
+        loop=loop,
+        pace=not no_pace,
+    )
+    asyncio.run(
+        demo_module.serve_demo(
+            host,
+            port,
+            fixture_roots,
+            default_fixture,
+            loop_trace=loop,
+            pace=not no_pace,
+        )
+    )
+
+
 async def _stream_events_to_server(
     events: list[TraceEvent],
     url: str,
