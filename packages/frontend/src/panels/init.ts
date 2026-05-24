@@ -7,6 +7,7 @@ import { panels } from "./registry";
 import { SearchFilterPanel } from "./SearchFilterPanel";
 import { SourceViewer } from "./SourceViewer";
 import { StatsPanel } from "./StatsPanel";
+import { TimelinePanel } from "./TimelinePanel";
 
 panels.register({
   slot: "top-bar",
@@ -49,6 +50,12 @@ panels.register({
   id: "cycles-panel",
   component: CyclesPanel,
   order: 30,
+});
+panels.register({
+  slot: "bottom-dock",
+  id: "timeline-panel",
+  component: TimelinePanel,
+  order: 0,
 });
 panels.register({
   slot: "bottom-status",

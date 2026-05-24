@@ -21,6 +21,12 @@ beforeEach(() => {
     traceEvents: [],
     traceSessionId: null,
     traceSessionComplete: false,
+    tracePlayhead: 0,
+    tracePlaying: false,
+    tracePlaybackSpeed: 1,
+    traceEventTypeFilter: new Set<string>(),
+    traceHeatMode: "cumulative",
+    traceWindowSize: 200,
   });
 });
 
@@ -179,7 +185,115 @@ describe("useGraphStore", () => {
       payload: { session_id: "s1", ended_ns: 9999, event_count: 0 },
     });
     expect(useGraphStore.getState().traceSessionComplete).toBe(true);
-    // Events still retained (6.3 will allow scrubbing).
+    // Events still retained (6.3 allows scrubbing).
     expect(useGraphStore.getState().traceSessionId).toBe("s1");
+  });
+
+  // -------------------------------------------------------------------------
+  // Playback slice (Phase 6.3)
+  // -------------------------------------------------------------------------
+
+  it("has correct initial playback state", () => {
+    const state = useGraphStore.getState();
+    expect(state.tracePlayhead).toBe(0);
+    expect(state.tracePlaying).toBe(false);
+    expect(state.tracePlaybackSpeed).toBe(1);
+    expect(state.traceEventTypeFilter.size).toBe(0);
+    expect(state.traceHeatMode).toBe("cumulative");
+    expect(state.traceWindowSize).toBe(200);
+  });
+
+  it("startTraceSession resets playhead and playing, preserves heat mode", () => {
+    useGraphStore.setState({
+      traceHeatMode: "sliding",
+      tracePlayhead: 5,
+      tracePlaying: true,
+    });
+    useGraphStore.getState().startTraceSession("s2");
+    const state = useGraphStore.getState();
+    expect(state.tracePlayhead).toBe(0);
+    expect(state.tracePlaying).toBe(false);
+    expect(state.traceHeatMode).toBe("sliding"); // preserved
+  });
+
+  it("setPlayhead clamps to [0, events.length] and pauses", () => {
+    useGraphStore.setState({
+      traceEvents: [
+        { event: "call", node_id: "a", ts_ns: 0, thread_id: 1, frame_depth: 0 },
+        { event: "call", node_id: "b", ts_ns: 1, thread_id: 1, frame_depth: 0 },
+      ],
+      tracePlaying: true,
+    });
+    useGraphStore.getState().setPlayhead(10); // overshoot
+    expect(useGraphStore.getState().tracePlayhead).toBe(2); // clamped
+    expect(useGraphStore.getState().tracePlaying).toBe(false);
+
+    useGraphStore.getState().setPlayhead(-5); // undershoot
+    expect(useGraphStore.getState().tracePlayhead).toBe(0);
+  });
+
+  it("play sets tracePlaying:true and rewinds if at end", () => {
+    useGraphStore.setState({
+      traceEvents: [
+        { event: "call", node_id: "a", ts_ns: 0, thread_id: 1, frame_depth: 0 },
+      ],
+      tracePlayhead: 1, // at end
+    });
+    useGraphStore.getState().play();
+    expect(useGraphStore.getState().tracePlaying).toBe(true);
+    expect(useGraphStore.getState().tracePlayhead).toBe(0); // rewound
+  });
+
+  it("play does not rewind if not at end", () => {
+    useGraphStore.setState({
+      traceEvents: [
+        { event: "call", node_id: "a", ts_ns: 0, thread_id: 1, frame_depth: 0 },
+        { event: "call", node_id: "b", ts_ns: 1, thread_id: 1, frame_depth: 0 },
+      ],
+      tracePlayhead: 1,
+    });
+    useGraphStore.getState().play();
+    expect(useGraphStore.getState().tracePlayhead).toBe(1); // unchanged
+    expect(useGraphStore.getState().tracePlaying).toBe(true);
+  });
+
+  it("pause sets tracePlaying:false", () => {
+    useGraphStore.setState({ tracePlaying: true });
+    useGraphStore.getState().pause();
+    expect(useGraphStore.getState().tracePlaying).toBe(false);
+  });
+
+  it("setSpeed updates tracePlaybackSpeed", () => {
+    useGraphStore.getState().setSpeed(4);
+    expect(useGraphStore.getState().tracePlaybackSpeed).toBe(4);
+  });
+
+  it("toggleEventType adds and removes event kind", () => {
+    useGraphStore.getState().toggleEventType("call");
+    expect(useGraphStore.getState().traceEventTypeFilter.has("call")).toBe(
+      true
+    );
+    useGraphStore.getState().toggleEventType("call");
+    expect(useGraphStore.getState().traceEventTypeFilter.has("call")).toBe(
+      false
+    );
+  });
+
+  it("toggleEventType creates a new Set instance (immutability)", () => {
+    const before = useGraphStore.getState().traceEventTypeFilter;
+    useGraphStore.getState().toggleEventType("return");
+    expect(useGraphStore.getState().traceEventTypeFilter).not.toBe(before);
+  });
+
+  it("setHeatMode updates traceHeatMode", () => {
+    useGraphStore.getState().setHeatMode("sliding");
+    expect(useGraphStore.getState().traceHeatMode).toBe("sliding");
+    useGraphStore.getState().setHeatMode("cumulative");
+    expect(useGraphStore.getState().traceHeatMode).toBe("cumulative");
+  });
+
+  it("setWindowSize updates traceWindowSize", () => {
+    useGraphStore.getState().setWindowSize(500);
+    expect(useGraphStore.getState().traceWindowSize).toBe(500);
   });
 });

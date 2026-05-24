@@ -9,8 +9,10 @@ import {
   type GrackleMultiGraph,
   type NodeAttributes,
 } from "./buildGraphology";
+import { COLD_HEX, heatColor } from "./heatColor";
 import { isNodeVisible } from "./matching";
 import { useGraphStore } from "./useGraphStore";
+import { useHeatmap } from "./useHeatmap";
 
 const KIND_COLORS: Record<string, string> = {
   file: "#3b82f6",
@@ -46,7 +48,10 @@ function makeNodeReducer(
   excludeGlobs: string[],
   selectedNodeId: string | null,
   highlightedNodeIds: Set<string> | null,
-  container: HTMLElement
+  container: HTMLElement,
+  heat: Map<string, number>,
+  maxHeat: number,
+  heatActive: boolean
 ) {
   return (node: string, data: NodeAttributes): Partial<NodeDisplayData> => {
     const hidden = !isNodeVisible(
@@ -70,11 +75,23 @@ function makeNodeReducer(
     const dimmed =
       (highlightActive && !isHighlighted) ||
       (!highlightActive && selectedNodeId !== null && node !== selectedNodeId);
-    const color = isHighlighted
-      ? cssVar(container, "--color-highlight-cycle") || "#f97316"
-      : dimmed
-        ? "#cbd5e1"
-        : resolveNodeColor(data.kind, container);
+
+    // Color cascade:
+    //   highlighted → dimmed → heat (if active + data) → resolved kind color
+    // All colors passed to Sigma must be hex/rgb — never oklch/hsl/CSS-var.
+    // See ADR-0015: Sigma 3.x parseColor silently maps unknown formats to black.
+    let color: string;
+    if (isHighlighted) {
+      // --color-highlight-cycle is hex since the ADR-0015 token fix.
+      color = cssVar(container, "--color-highlight-cycle") || "#e6863c";
+    } else if (dimmed) {
+      color = "#cbd5e1";
+    } else if (heatActive && maxHeat > 0) {
+      const count = heat.get(node) ?? 0;
+      color = count > 0 ? heatColor(count / maxHeat) : COLD_HEX;
+    } else {
+      color = resolveNodeColor(data.kind, container);
+    }
 
     return { color, size, hidden };
   };
@@ -92,12 +109,15 @@ export function GraphCanvas(): JSX.Element {
   const excludeGlobs = useGraphStore((s) => s.excludeGlobs);
   const selectedNodeId = useGraphStore((s) => s.selectedNodeId);
   const highlightedNodeIds = useGraphStore((s) => s.highlightedNodeIds);
+  const traceSessionId = useGraphStore((s) => s.traceSessionId);
   const selectNode = useGraphStore((s) => s.selectNode);
   const setHighlightedNodes = useGraphStore((s) => s.setHighlightedNodes);
 
+  const { heat, maxHeat } = useHeatmap();
+  const heatActive = traceSessionId !== null;
+
   // Rebuild sigma + FA2 when the graph data changes.
-  // hiddenKinds/searchTerm/excludeGlobs/selectedNodeId are intentionally omitted
-  // from deps: effect 2 below handles those changes without tearing down sigma.
+  // Filter/heat state is handled by effect 2 so sigma is not torn down.
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentional two-effect pattern
   useEffect(() => {
     if (!containerRef.current || !graph) return;
@@ -123,7 +143,10 @@ export function GraphCanvas(): JSX.Element {
           excludeGlobs,
           selectedNodeId,
           highlightedNodeIds,
-          container
+          container,
+          heat,
+          maxHeat,
+          heatActive
         ),
         edgeReducer: (_edge, data) => ({
           color: resolveEdgeColor(data.kind, container),
@@ -161,7 +184,9 @@ export function GraphCanvas(): JSX.Element {
     };
   }, [graph]);
 
-  // Update node reducer + refresh when filter state changes, without rebuilding sigma.
+  // Update node reducer + refresh when filter/heat state changes,
+  // without rebuilding sigma. Reuses the setSetting("nodeReducer") +
+  // sigma.refresh() path — same mechanism as cycle-highlight wiring.
   useEffect(() => {
     const sigma = sigmaRef.current;
     const graphology = graphologyRef.current;
@@ -177,7 +202,10 @@ export function GraphCanvas(): JSX.Element {
         excludeGlobs,
         selectedNodeId,
         highlightedNodeIds,
-        container
+        container,
+        heat,
+        maxHeat,
+        heatActive
       )
     );
     sigma.refresh();
@@ -187,6 +215,9 @@ export function GraphCanvas(): JSX.Element {
     excludeGlobs,
     selectedNodeId,
     highlightedNodeIds,
+    heat,
+    maxHeat,
+    heatActive,
   ]);
 
   return (
