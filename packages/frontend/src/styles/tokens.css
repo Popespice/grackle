@@ -81,8 +81,11 @@
   --color-node-enum: #fb923c;
   --color-node-struct: #f87171;
 
-  /* === Cycle highlight === */
-  --color-highlight-cycle: oklch(72% 0.2 40);
+  /* === Cycle highlight ===
+   * MUST be hex/rgb — Sigma 3.x parseColor() only accepts #hex and rgb/rgba.
+   * oklch/hsl silently fall through to opaque black. See ADR-0015.
+   * oklch(72% 0.2 40) ≈ warm orange #e6863c */
+  --color-highlight-cycle: #e6863c;
 
   /* === Edge-kind colors === */
   --color-edge-import: #5eead4;

@@ -5,6 +5,7 @@ export type Slot =
   | "left-sidebar"
   | "right-sidebar"
   | "floating-overlay"
+  | "bottom-dock"
   | "bottom-status";
 
 export interface PanelEntry {

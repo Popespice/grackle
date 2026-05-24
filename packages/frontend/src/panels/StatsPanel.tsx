@@ -4,6 +4,7 @@ import type { CycleEntry, HubEntry } from "../graph/analysis";
 import { useAnalysis } from "../graph/analysis";
 import type { DegreeEntry, KindCount } from "../graph/stats";
 import { useGraphStore } from "../graph/useGraphStore";
+import { useRuntimeCoverage } from "../graph/useRuntimeCoverage";
 
 const _sep = (
   <span
@@ -19,11 +20,13 @@ const _sep = (
 
 export function StatsPanel(): JSX.Element | null {
   const graph = useGraphStore((s) => s.graph);
+  const traceEvents = useGraphStore((s) => s.traceEvents);
   const kinds = useAnalysis<KindCount[]>("count-by-kind");
   const top = useAnalysis<DegreeEntry[]>("top-in-degree");
   const orphanList = useAnalysis<GraphNode[]>("orphans");
   const hubs = useAnalysis<HubEntry[]>("hub-score");
   const cycles = useAnalysis<CycleEntry[]>("cycles");
+  const coverage = useRuntimeCoverage();
 
   if (!graph) return null;
 
@@ -143,6 +146,33 @@ export function StatsPanel(): JSX.Element | null {
               {" "}
               ({httpEdges} HTTP, {spawnEdges} subprocess)
             </span>
+          </span>
+        </>
+      )}
+
+      {traceEvents.length > 0 && coverage && (
+        <>
+          {_sep}
+          <span>
+            <span style={{ color: "var(--color-text-subtle)" }}>Runtime: </span>
+            <span style={{ color: "var(--color-text)" }}>
+              {traceEvents.length}
+            </span>
+            <span style={{ color: "var(--color-text-subtle)" }}>
+              {" "}
+              events ·{" "}
+            </span>
+            <span style={{ color: "var(--color-text)" }}>
+              {coverage.touchedCount}
+            </span>
+            <span style={{ color: "var(--color-text-subtle)" }}>
+              {" "}
+              touched ·{" "}
+            </span>
+            <span style={{ color: "var(--color-text)" }}>
+              {coverage.hotCount}
+            </span>
+            <span style={{ color: "var(--color-text-subtle)" }}> hot</span>
           </span>
         </>
       )}

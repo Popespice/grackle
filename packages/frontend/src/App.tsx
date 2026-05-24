@@ -44,7 +44,7 @@ export function App(): JSX.Element {
     <div
       style={{
         display: "grid",
-        gridTemplateRows: "auto 1fr auto",
+        gridTemplateRows: "auto 1fr auto auto",
         gridTemplateColumns: "auto 1fr auto",
         height: "100dvh",
       }}
@@ -74,6 +74,9 @@ export function App(): JSX.Element {
         }}
       >
         <SlotContainer slot="right-sidebar" />
+      </div>
+      <div style={{ gridColumn: "1 / -1" }}>
+        <SlotContainer slot="bottom-dock" />
       </div>
       <div style={{ gridColumn: "1 / -1" }}>
         <SlotContainer slot="bottom-status" />
