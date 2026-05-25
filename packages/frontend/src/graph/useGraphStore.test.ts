@@ -146,6 +146,91 @@ describe("useGraphStore", () => {
     expect(state.traceSessionComplete).toBe(false);
   });
 
+  // -------------------------------------------------------------------------
+  // addTraceEvents (Phase 7.1 — batched ingest)
+  // -------------------------------------------------------------------------
+
+  it("addTraceEvents appends a batch in insertion order", () => {
+    useGraphStore.getState().startTraceSession("s1");
+    const batch = [
+      { event: "call", node_id: "a", ts_ns: 1, thread_id: 1, frame_depth: 0 },
+      { event: "call", node_id: "b", ts_ns: 2, thread_id: 1, frame_depth: 1 },
+      { event: "return", node_id: "a", ts_ns: 3, thread_id: 1, frame_depth: 0 },
+    ];
+    useGraphStore.getState().addTraceEvents(batch);
+    const { traceEvents } = useGraphStore.getState();
+    expect(traceEvents).toHaveLength(3);
+    expect(traceEvents[0]?.node_id).toBe("a");
+    expect(traceEvents[1]?.node_id).toBe("b");
+    expect(traceEvents[2]?.node_id).toBe("a");
+  });
+
+  it("addTraceEvents appends to existing events", () => {
+    useGraphStore.getState().startTraceSession("s1");
+    useGraphStore.getState().addTraceEvent({
+      event: "call",
+      node_id: "pre",
+      ts_ns: 0,
+      thread_id: 1,
+      frame_depth: 0,
+    });
+    useGraphStore
+      .getState()
+      .addTraceEvents([
+        { event: "call", node_id: "x", ts_ns: 1, thread_id: 1, frame_depth: 0 },
+      ]);
+    const { traceEvents } = useGraphStore.getState();
+    expect(traceEvents).toHaveLength(2);
+    expect(traceEvents[0]?.node_id).toBe("pre");
+    expect(traceEvents[1]?.node_id).toBe("x");
+  });
+
+  it("addTraceEvents with empty batch is a no-op", () => {
+    useGraphStore.getState().startTraceSession("s1");
+    useGraphStore.getState().addTraceEvents([]);
+    expect(useGraphStore.getState().traceEvents).toHaveLength(0);
+  });
+
+  it("addTraceEvents does not affect tracePlayhead", () => {
+    useGraphStore.setState({
+      tracePlayhead: 3,
+      traceEvents: [
+        { event: "call", node_id: "a", ts_ns: 0, thread_id: 1, frame_depth: 0 },
+        { event: "call", node_id: "b", ts_ns: 1, thread_id: 1, frame_depth: 0 },
+        { event: "call", node_id: "c", ts_ns: 2, thread_id: 1, frame_depth: 0 },
+      ],
+    });
+    useGraphStore
+      .getState()
+      .addTraceEvents([
+        { event: "call", node_id: "d", ts_ns: 3, thread_id: 1, frame_depth: 0 },
+      ]);
+    expect(useGraphStore.getState().tracePlayhead).toBe(3);
+    expect(useGraphStore.getState().traceEvents).toHaveLength(4);
+  });
+
+  it("addTraceEvents produces same result as N addTraceEvent calls", () => {
+    const evs = Array.from({ length: 5 }, (_, i) => ({
+      event: "call",
+      node_id: `fn_${i}`,
+      ts_ns: i,
+      thread_id: 1,
+      frame_depth: i,
+    }));
+
+    // One by one
+    useGraphStore.getState().startTraceSession("s-one-by-one");
+    for (const ev of evs) useGraphStore.getState().addTraceEvent(ev);
+    const oneByOne = useGraphStore.getState().traceEvents;
+
+    // As a batch
+    useGraphStore.getState().startTraceSession("s-batch");
+    useGraphStore.getState().addTraceEvents(evs);
+    const batched = useGraphStore.getState().traceEvents;
+
+    expect(batched).toEqual(oneByOne);
+  });
+
   it("addTraceEvent appends without mutation", () => {
     useGraphStore.getState().startTraceSession("s1");
     const ev = {

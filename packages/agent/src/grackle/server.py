@@ -39,6 +39,23 @@ def _trace_buffer_seconds() -> float:
     return _DEFAULT_BUFFER_SECONDS
 
 
+def _trace_buffer_max_events() -> int | None:
+    """Return the ring-buffer event count cap from env, or None (unbounded).
+
+    Set ``GRACKLE_TRACE_BUFFER_MAX_EVENTS`` to a positive integer to evict the
+    oldest events when the buffer exceeds that count.  Values < 1 and
+    non-integer strings are treated as None (unbounded).
+    """
+    raw = os.environ.get("GRACKLE_TRACE_BUFFER_MAX_EVENTS")
+    if raw is not None:
+        try:
+            v = int(raw)
+            return v if v >= 1 else None
+        except (ValueError, TypeError):
+            pass
+    return None
+
+
 def _allowed_origins() -> list[str]:
     env = os.environ.get("GRACKLE_ALLOWED_ORIGINS")
     if env:
@@ -117,11 +134,28 @@ def _trim_ring_buffer(
     ring_buffer: collections.deque[tuple[int, str]],
     now_ns: int,
     buffer_seconds: float,
+    max_events: int | None = None,
 ) -> None:
-    """Discard entries older than buffer_seconds from the front of the ring-buffer."""
+    """Discard entries from the front of the ring-buffer.
+
+    Two independent eviction passes (both run each call):
+
+    1. **Age trim** — entries whose timestamp is older than ``buffer_seconds``
+       are evicted from the front.
+    2. **Count cap** — if ``max_events`` is not None and the buffer still
+       exceeds that count after the age trim, the oldest entries are evicted
+       until ``len(ring_buffer) <= max_events``.
+
+    Applying the count cap *after* the age trim means a narrow time window
+    with a high event count is bounded, but a small time window that happens
+    to be quiet is not artificially inflated.
+    """
     cutoff_ns = now_ns - int(buffer_seconds * 1_000_000_000)
     while ring_buffer and ring_buffer[0][0] < cutoff_ns:
         ring_buffer.popleft()
+    if max_events is not None:
+        while len(ring_buffer) > max_events:
+            ring_buffer.popleft()
 
 
 async def _flush_ring_buffer(
@@ -159,6 +193,7 @@ async def _receive_loop(
     connections: set[ServerConnection],
     ring_buffer: collections.deque[tuple[int, str]],
     buffer_seconds: float,
+    max_events: int | None = None,
 ) -> None:
     """Process inbound messages from one connection.
 
@@ -195,9 +230,12 @@ async def _receive_loop(
         elif etype in ("trace_session_start", "trace_event", "trace_session_end"):
             # Live-ingest path: a producer process is streaming events into
             # this server.  Buffer each message and broadcast to all consumers.
+            # Append before trim so the count cap is enforced immediately after
+            # each message lands — the buffer never exceeds max_events by more
+            # than 0 (vs. trim-before-append which allows a transient +1).
             now_ns = time.monotonic_ns()
-            _trim_ring_buffer(ring_buffer, now_ns, buffer_seconds)
             ring_buffer.append((now_ns, msg))
+            _trim_ring_buffer(ring_buffer, now_ns, buffer_seconds, max_events)
             await _broadcast(msg, connections, exclude=ws)
 
 
@@ -280,6 +318,7 @@ async def serve(
     # not used in file-replay mode (each connection re-reads the file).
     ring_buffer: collections.deque[tuple[int, str]] = collections.deque()
     buffer_seconds = _trace_buffer_seconds()
+    max_events = _trace_buffer_max_events()
 
     async def _handler(ws: ServerConnection) -> None:
         origin = ws.request.headers.get("Origin", "") if ws.request is not None else ""
@@ -301,7 +340,7 @@ async def serve(
 
             # Receive loop handles ping, read_source, and live-ingest.
             receive_task: asyncio.Task[None] = asyncio.create_task(
-                _receive_loop(ws, root_real, connections, ring_buffer, buffer_seconds)
+                _receive_loop(ws, root_real, connections, ring_buffer, buffer_seconds, max_events)
             )
             tasks.append(receive_task)
 

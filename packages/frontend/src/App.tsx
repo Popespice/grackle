@@ -1,6 +1,7 @@
 import "./panels/init";
 import type { JSX } from "react";
 import { useEffect } from "react";
+import { useBufferedTraceEvents } from "./graph/useBufferedTraceEvents";
 import { useGraphStore } from "./graph/useGraphStore";
 import { SlotContainer } from "./panels/SlotContainer";
 import { useGrackleClient } from "./ws/client";
@@ -11,12 +12,13 @@ export function App(): JSX.Element {
   const connect = useGrackleClient((s) => s.connect);
   const onStaticGraph = useGrackleClient((s) => s.onStaticGraph);
   const onTraceSessionStart = useGrackleClient((s) => s.onTraceSessionStart);
-  const onTraceEvent = useGrackleClient((s) => s.onTraceEvent);
-  const onTraceSessionEnd = useGrackleClient((s) => s.onTraceSessionEnd);
   const setGraph = useGraphStore((s) => s.setGraph);
   const startTraceSession = useGraphStore((s) => s.startTraceSession);
-  const addTraceEvent = useGraphStore((s) => s.addTraceEvent);
-  const endTraceSession = useGraphStore((s) => s.endTraceSession);
+
+  // Phase 7.1: coalescing rAF buffer replaces the per-event addTraceEvent
+  // subscription and also owns the onTraceSessionEnd → endTraceSession wiring
+  // (force-flush before marking the session complete).
+  useBufferedTraceEvents();
 
   useEffect(() => {
     connect(WS_URL);
@@ -31,14 +33,6 @@ export function App(): JSX.Element {
       startTraceSession(msg.payload.session_id)
     );
   }, [onTraceSessionStart, startTraceSession]);
-
-  useEffect(() => {
-    return onTraceEvent(addTraceEvent);
-  }, [onTraceEvent, addTraceEvent]);
-
-  useEffect(() => {
-    return onTraceSessionEnd(endTraceSession);
-  }, [onTraceSessionEnd, endTraceSession]);
 
   return (
     <div
