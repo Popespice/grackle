@@ -13,7 +13,11 @@
  * observe the result immediately without rAF control.
  */
 
-import type { TraceEvent, TraceSessionEndMessage } from "@grackle/shared-types";
+import type {
+  TraceEvent,
+  TraceSessionEndMessage,
+  TraceSessionStartMessage,
+} from "@grackle/shared-types";
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useGrackleClient } from "../ws/client";
@@ -51,6 +55,17 @@ function pushTraceEvent(ev: TraceEvent): void {
 function pushSessionEnd(count = 0): void {
   const msg = mkSessionEnd(count);
   for (const h of useGrackleClient.getState()._traceSessionEndHandlers) h(msg);
+}
+
+/** Fire session_start directly through all registered handlers. */
+function pushSessionStart(sessionId = "s2"): void {
+  const msg: TraceSessionStartMessage = {
+    id: "start-1",
+    type: "trace_session_start",
+    payload: { session_id: sessionId, started_ns: 1_000, source: "live" },
+  };
+  for (const h of useGrackleClient.getState()._traceSessionStartHandlers)
+    h(msg);
 }
 
 // ---------------------------------------------------------------------------
@@ -109,6 +124,17 @@ describe("useBufferedTraceEvents — subscription wiring", () => {
     expect(useGrackleClient.getState()._traceEventHandlers.size).toBe(0);
   });
 
+  it("registers exactly one onTraceSessionStart handler", () => {
+    renderHook(() => useBufferedTraceEvents());
+    expect(useGrackleClient.getState()._traceSessionStartHandlers.size).toBe(1);
+  });
+
+  it("removes the onTraceSessionStart handler on unmount", () => {
+    const { unmount } = renderHook(() => useBufferedTraceEvents());
+    unmount();
+    expect(useGrackleClient.getState()._traceSessionStartHandlers.size).toBe(0);
+  });
+
   it("registers exactly one onTraceSessionEnd handler", () => {
     renderHook(() => useBufferedTraceEvents());
     expect(useGrackleClient.getState()._traceSessionEndHandlers.size).toBe(1);
@@ -118,6 +144,24 @@ describe("useBufferedTraceEvents — subscription wiring", () => {
     const { unmount } = renderHook(() => useBufferedTraceEvents());
     unmount();
     expect(useGrackleClient.getState()._traceSessionEndHandlers.size).toBe(0);
+  });
+
+  it("cancels a pending rAF on unmount", () => {
+    const cancelMock = vi.fn();
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn(() => 99)
+    );
+    vi.stubGlobal("cancelAnimationFrame", cancelMock);
+
+    const { unmount } = renderHook(() => useBufferedTraceEvents());
+
+    act(() => {
+      pushTraceEvent(mkEv(0)); // schedules a rAF
+    });
+
+    unmount();
+    expect(cancelMock).toHaveBeenCalledWith(99);
   });
 });
 
@@ -344,6 +388,87 @@ describe("useBufferedTraceEvents — session_end force-flush", () => {
       "fn_2",
       "fn_3",
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// session_start clear — stale pending events discarded on session restart
+// ---------------------------------------------------------------------------
+
+describe("useBufferedTraceEvents — session_start clear", () => {
+  it("registers exactly one onTraceSessionStart handler", () => {
+    // Duplicated from wiring tests as a sanity guard for this describe block.
+    renderHook(() => useBufferedTraceEvents());
+    expect(useGrackleClient.getState()._traceSessionStartHandlers.size).toBe(1);
+  });
+
+  it("session_start clears pendingRef so stale events cannot bleed into new session", () => {
+    // Simulate: producer sends events, then disconnects WITHOUT trace_session_end.
+    // A new session_start arrives.  The stale events must be discarded, not
+    // flushed into the freshly-reset store.
+    const rafCbs: FrameRequestCallback[] = [];
+    let handleCounter = 100;
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      rafCbs.push(cb);
+      return ++handleCounter;
+    });
+    const cancelMock = vi.fn();
+    vi.stubGlobal("cancelAnimationFrame", cancelMock);
+
+    renderHook(() => useBufferedTraceEvents());
+
+    // Session A: push events, rAF scheduled but NOT yet flushed.
+    act(() => {
+      pushTraceEvent(mkEv(0));
+      pushTraceEvent(mkEv(1));
+    });
+
+    // rAF was scheduled for session A (handle = 101).
+    expect(rafCbs).toHaveLength(1);
+    expect(useGraphStore.getState().traceEvents).toHaveLength(0);
+
+    // New session starts — the store is reset by the caller (e.g. App) and
+    // session_start fires through the handler.
+    act(() => {
+      useGraphStore.getState().startTraceSession("s2");
+      pushSessionStart("s2");
+    });
+
+    // rAF for session A must have been cancelled.
+    expect(cancelMock).toHaveBeenCalledWith(101);
+
+    // Session B: push a new event and flush via rAF.
+    act(() => {
+      pushTraceEvent(mkEv(99));
+    });
+
+    // Fire the session B rAF callback.
+    act(() => {
+      rafCbs[1]!(0);
+    });
+
+    // Only the new event lands in the store — stale session A events are gone.
+    const events = useGraphStore.getState().traceEvents;
+    expect(events).toHaveLength(1);
+    expect(events[0]?.node_id).toBe("fn_99");
+  });
+
+  it("session_start with no pending rAF is a no-op for cancelAnimationFrame", () => {
+    const cancelMock = vi.fn();
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn(() => 1)
+    );
+    vi.stubGlobal("cancelAnimationFrame", cancelMock);
+
+    renderHook(() => useBufferedTraceEvents());
+
+    // No events pushed, so no rAF is scheduled.
+    act(() => {
+      pushSessionStart("s3");
+    });
+
+    expect(cancelMock).not.toHaveBeenCalled();
   });
 });
 

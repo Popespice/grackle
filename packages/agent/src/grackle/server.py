@@ -162,8 +162,14 @@ async def _flush_ring_buffer(
     ws: ServerConnection,
     ring_buffer: collections.deque[tuple[int, str]],
 ) -> None:
-    """Push all buffered live-ingest messages to a newly-joined consumer."""
-    for _ts_ns, raw in ring_buffer:
+    """Push all buffered live-ingest messages to a newly-joined consumer.
+
+    Takes a snapshot of the ring-buffer at call time (``list(ring_buffer)``)
+    so that concurrent producer appends or trim-evictions in ``_receive_loop``
+    cannot mutate the deque mid-iteration and raise
+    ``RuntimeError: deque mutated during iteration``.
+    """
+    for _ts_ns, raw in list(ring_buffer):
         try:
             await ws.send(raw)
         except websockets.exceptions.ConnectionClosed:

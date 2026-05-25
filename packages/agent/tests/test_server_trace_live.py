@@ -313,8 +313,8 @@ def test_trim_ring_buffer_default_max_events_is_none() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_trace_buffer_max_events_default_is_none() -> None:
-    os.environ.pop("GRACKLE_TRACE_BUFFER_MAX_EVENTS", None)
+def test_trace_buffer_max_events_default_is_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GRACKLE_TRACE_BUFFER_MAX_EVENTS", raising=False)
     assert _trace_buffer_max_events() is None
 
 
@@ -401,4 +401,10 @@ async def test_late_consumer_receives_at_most_max_events(capped_live_server: int
 
     trace_msgs = [m for m in received if m["type"] != "pong"]
     types = [m["type"] for m in trace_msgs]
-    assert len(trace_msgs) <= 3, f"expected ≤3 buffered trace msgs, got {len(trace_msgs)}: {types}"
+    assert len(trace_msgs) == 3, (
+        f"expected exactly 3 buffered trace msgs, got {len(trace_msgs)}: {types}"
+    )
+    # The 3 retained entries must all be trace-protocol messages.
+    assert all(t in ("trace_session_start", "trace_event", "trace_session_end") for t in types), (
+        f"unexpected message types in ring-buffer flush: {types}"
+    )

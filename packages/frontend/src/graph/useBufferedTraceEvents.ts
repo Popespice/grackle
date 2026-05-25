@@ -16,17 +16,24 @@ import { useGraphStore } from "./useGraphStore";
  * session end lands in the store before `endTraceSession` marks the session
  * complete, so no tail events are lost.
  *
+ * **Clear on `trace_session_start`** — if a previous session ended without a
+ * `trace_session_end` (e.g. producer disconnect in live-attach mode), any
+ * events still pending in the rAF queue are discarded so they cannot bleed
+ * into the incoming session's store after `startTraceSession` resets it.
+ *
  * **Testing** — jsdom provides `requestAnimationFrame` (backed by setTimeout).
  * Tests that need to control when the rAF callback fires should stub it with
  * `vi.stubGlobal("requestAnimationFrame", cb => { captured = cb; return 1; })`
  * and invoke the captured callback manually; or use `vi.useFakeTimers()` with
  * `vi.runAllTimers()` to drain the scheduled call.
  *
- * **Mounting:** call this once in `App`.  It owns the `onTraceEvent` and
- * `onTraceSessionEnd` subscriptions for the lifetime of the component.
+ * **Mounting:** call this once in `App`.  It owns the `onTraceEvent`,
+ * `onTraceSessionStart`, and `onTraceSessionEnd` subscriptions for the
+ * lifetime of the component.
  */
 export function useBufferedTraceEvents(): void {
   const onTraceEvent = useGrackleClient((s) => s.onTraceEvent);
+  const onTraceSessionStart = useGrackleClient((s) => s.onTraceSessionStart);
   const onTraceSessionEnd = useGrackleClient((s) => s.onTraceSessionEnd);
 
   const pendingRef = useRef<TraceEvent[]>([]);
@@ -43,13 +50,35 @@ export function useBufferedTraceEvents(): void {
       }
     };
 
-    return onTraceEvent((ev) => {
+    const unsubscribe = onTraceEvent((ev) => {
       pendingRef.current.push(ev);
       if (rafRef.current === null) {
         rafRef.current = requestAnimationFrame(flush);
       }
     });
+
+    // Cancel any pending rAF when the effect is cleaned up so a stale frame
+    // callback cannot fire after unmount.
+    return () => {
+      unsubscribe();
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+    };
   }, [onTraceEvent]);
+
+  // On session start, discard any stale pending events from a previous session
+  // that ended without a trace_session_end (e.g. live-attach producer disconnect).
+  useEffect(() => {
+    return onTraceSessionStart(() => {
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      pendingRef.current = [];
+    });
+  }, [onTraceSessionStart]);
 
   // Force-flush pending events and cancel any scheduled rAF before
   // endTraceSession so no tail events are silently dropped.
