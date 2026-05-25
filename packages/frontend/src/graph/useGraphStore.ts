@@ -15,9 +15,9 @@ interface GraphStoreState {
   // ---------------------------------------------------------------------------
   // Trace slice — populated by the runtime overlay (Phase 6.2+).
   // Append-only during a session.
-  // NOTE: addTraceEvent uses [...spread] which is O(n²). Batching is deferred
-  // to Phase 7 — render cadence is decoupled via the rAF playback loop so
-  // individual appends do not trigger per-event Sigma refreshes.
+  // Phase 7.1: addTraceEvents(batch) is the preferred path — one concat per
+  // rAF frame instead of one spread per event, lowering ingest cost from
+  // O(n²) to O(n²/B) where B = batch size.
   // ---------------------------------------------------------------------------
   traceEvents: TraceEvent[];
   traceSessionId: string | null;
@@ -40,6 +40,8 @@ interface GraphStoreState {
   // Trace session actions
   startTraceSession: (sessionId: string) => void;
   addTraceEvent: (ev: TraceEvent) => void;
+  /** Batch append — O(n) single concat instead of O(n²) per-event spread. */
+  addTraceEvents: (batch: TraceEvent[]) => void;
   endTraceSession: (msg: TraceSessionEndMessage) => void;
   // Playback actions
   setPlayhead: (i: number) => void;
@@ -95,7 +97,9 @@ export const useGraphStore = create<GraphStoreState>()((set) => ({
       tracePlaying: false,
     }),
   addTraceEvent: (ev) =>
-    set((state) => ({ traceEvents: [...state.traceEvents, ev] })),
+    set((state) => ({ traceEvents: state.traceEvents.concat([ev]) })),
+  addTraceEvents: (batch) =>
+    set((state) => ({ traceEvents: state.traceEvents.concat(batch) })),
   endTraceSession: (_msg: TraceSessionEndMessage) =>
     set({ traceSessionComplete: true }),
   setPlayhead: (i) =>
