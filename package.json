@@ -16,11 +16,11 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.0.0",
-    "@commitlint/cli": "^19.0.0",
-    "@commitlint/config-conventional": "^19.0.0",
+    "@commitlint/cli": "^21.0.1",
+    "@commitlint/config-conventional": "^21.0.1",
     "concurrently": "^9.0.0",
-    "json-schema-to-typescript": "^14.0.0",
-    "lefthook": "^1.0.0",
+    "json-schema-to-typescript": "^15.0.4",
+    "lefthook": "^2.1.8",
     "typescript": "^6.0.3"
   }
 }
