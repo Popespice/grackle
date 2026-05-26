@@ -17,7 +17,7 @@ from grackle.python_runtime.node_resolution import NodeResolver
 from grackle.python_runtime.tracer import Tracer
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
     from pathlib import Path
 
 
@@ -51,7 +51,51 @@ class PythonRuntimeAdapter:
         Raises:
             TraceCapExceeded: if ``options.max_events`` is set and reached.
         """
-        # Build the static graph so the resolver can map filenames→node IDs.
+        tracer = self._build_tracer(root, options)
+        events = tracer.run(script)
+        yield from events
+
+    def trace_streaming(
+        self,
+        script: Path,
+        root: Path,
+        options: TraceOptions,
+        sink: Callable[[TraceEvent], None],
+    ) -> None:
+        """Execute *script* routing each event to *sink* instead of a list.
+
+        Intended for real-time streaming (``grackle trace --stream``).  The
+        *sink* is called directly from ``sys.monitoring`` callbacks on the
+        hot path — it must be non-blocking (no I/O, no ``await``).
+
+        Unlike :meth:`trace`, this method returns ``None``; the caller is
+        responsible for the session lifecycle (``session_start`` / ``session_end``
+        are handled by ``TraceStreamSender``).
+
+        Args:
+            script:  Path to the Python script to run.
+            root:    Project root for static-graph ID resolution.
+            options: Tracing configuration (line events, event cap).
+            sink:    Non-blocking callable receiving each ``TraceEvent``.
+
+        Raises:
+            TraceCapExceeded: if ``options.max_events`` is set and reached.
+        """
+        tracer = self._build_tracer(root, options, sink=sink)
+        tracer.run(script)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _build_tracer(
+        self,
+        root: Path,
+        options: TraceOptions,
+        *,
+        sink: Callable[[TraceEvent], None] | None = None,
+    ) -> Tracer:
+        """Build and return a configured :class:`Tracer` for *root*."""
         from grackle.adapters import registry
         from grackle.adapters.base import ParseOptions
 
@@ -61,6 +105,4 @@ class PythonRuntimeAdapter:
 
         graph = static_adapter.parse(root, ParseOptions())
         resolver = NodeResolver(root, graph)
-        tracer = Tracer(resolver, options)
-        events = tracer.run(script)
-        yield from events
+        return Tracer(resolver, options, sink=sink)

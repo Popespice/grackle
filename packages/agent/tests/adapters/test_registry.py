@@ -9,7 +9,7 @@ from grackle.adapters.base import Capabilities, ParseOptions, StaticGraph
 from grackle.adapters.registry import AdapterRegistry
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
     from grackle.adapters.base import TraceEvent, TraceOptions
 
@@ -38,6 +38,15 @@ class _RuntimeStub:
 
     def trace(self, script: Path, root: Path, options: TraceOptions) -> Iterator[TraceEvent]:
         yield from ()
+
+    def trace_streaming(
+        self,
+        script: Path,
+        root: Path,
+        options: TraceOptions,
+        sink: Callable[[TraceEvent], None],
+    ) -> None:
+        pass
 
 
 def test_register_and_retrieve_static() -> None:

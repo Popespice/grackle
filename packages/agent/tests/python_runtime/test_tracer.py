@@ -371,3 +371,100 @@ def test_generator_does_not_crash_tracer(tmp_path: Path) -> None:
     # Depths must be non-negative throughout (the C3 fix also covers this).
     for e in events:
         assert e["frame_depth"] >= 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 7.2 — custom sink= parameter
+# ---------------------------------------------------------------------------
+
+
+def test_custom_sink_receives_all_events() -> None:
+    """A custom sink callable is invoked for every event (no list accumulation)."""
+    from grackle.adapters import registry
+    from grackle.adapters.base import ParseOptions
+    from grackle.adapters.base import TraceEvent as _TraceEvent
+
+    received: list[_TraceEvent] = []
+    graph = registry.get_static("python").parse(_FIXTURE_ROOT, ParseOptions())  # type: ignore[union-attr]
+    resolver = NodeResolver(_FIXTURE_ROOT, graph)
+    tracer2 = Tracer(resolver, TraceOptions(), sink=received.append)
+    events_from_list = tracer2.run(_SCRIPT)
+
+    # With custom sink, run() returns an empty list.
+    assert events_from_list == []
+    # All events went to the sink.
+    assert len(received) > 0
+    assert all("event" in e for e in received)
+
+
+def test_custom_sink_count_matches_default_sink() -> None:
+    """Custom-sink event count equals the default (list) event count."""
+    from grackle.adapters import registry
+    from grackle.adapters.base import ParseOptions
+    from grackle.adapters.base import TraceEvent as _TraceEvent
+
+    received: list[_TraceEvent] = []
+    graph = registry.get_static("python").parse(_FIXTURE_ROOT, ParseOptions())  # type: ignore[union-attr]
+    resolver = NodeResolver(_FIXTURE_ROOT, graph)
+
+    default_tracer = Tracer(resolver, TraceOptions())
+    default_events = default_tracer.run(_SCRIPT)
+
+    resolver2 = NodeResolver(_FIXTURE_ROOT, graph)
+    sink_tracer = Tracer(resolver2, TraceOptions(), sink=received.append)
+    sink_tracer.run(_SCRIPT)
+
+    assert len(received) == len(default_events)
+
+
+def test_custom_sink_cap_fires() -> None:
+    """Event cap works correctly with a custom sink."""
+    from grackle.adapters import registry
+    from grackle.adapters.base import ParseOptions
+    from grackle.adapters.base import TraceEvent as _TraceEvent
+
+    received: list[_TraceEvent] = []
+    graph = registry.get_static("python").parse(_FIXTURE_ROOT, ParseOptions())  # type: ignore[union-attr]
+    resolver = NodeResolver(_FIXTURE_ROOT, graph)
+    tracer = Tracer(resolver, TraceOptions(max_events=3), sink=received.append)
+
+    with pytest.raises(TraceCapExceeded):
+        tracer.run(_SCRIPT)
+
+    assert len(received) == 3
+
+
+def test_sink_exception_still_calls_stop(tmp_path: Path) -> None:
+    """If the sink raises, _stop() is still called (tracer is cleanly torn down)."""
+    script = tmp_path / "s.py"
+    script.write_text("def f():\n    pass\nf()\n", encoding="utf-8")
+
+    from grackle.adapters import registry
+    from grackle.adapters.base import ParseOptions
+
+    graph = registry.get_static("python").parse(tmp_path, ParseOptions())  # type: ignore[union-attr]
+    resolver = NodeResolver(tmp_path, graph)
+
+    call_count = 0
+
+    def exploding_sink(event: object) -> None:
+        nonlocal call_count
+        call_count += 1
+        if call_count >= 2:
+            raise RuntimeError("sink exploded")
+
+    tracer = Tracer(resolver, TraceOptions(), sink=exploding_sink)
+
+    # The exception from the sink propagates out of run() because it is not
+    # a TraceCapExceeded — but _stop() must still have run (no leftover
+    # sys.monitoring registrations).
+    with pytest.raises(RuntimeError, match="sink exploded"):
+        tracer.run(script)
+
+    # Verify sys.monitoring tool ID is free (no ResourceWarning / "already in use").
+
+    # Trying to register a fresh tracer on the same tool ID should succeed.
+    resolver2 = NodeResolver(tmp_path, graph)
+    fresh = Tracer(resolver2, TraceOptions())
+    events = fresh.run(script)
+    assert len(events) > 0

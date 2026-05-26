@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NotRequired, Protocol, TypedDict, runtime_checkable
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
     from pathlib import Path
 
 
@@ -34,8 +34,11 @@ class TraceOptions:
         include_line_events: Emit an event for every executed line in addition
             to call/return/exception events. Significantly increases event
             volume; disabled by default.
-        max_events: Hard cap on emitted events (``None`` = unlimited). When the
-            cap is reached the tracer stops and raises ``TraceCapExceeded``.
+        max_events: Hard cap on events *emitted* (``None`` = unlimited). When
+            the cap is reached the tracer stops and raises ``TraceCapExceeded``.
+            Under real-time streaming (``--stream``), the cap counts events
+            passed to the sink, not events successfully delivered over the
+            network: backpressure-dropped events still count toward the cap.
     """
 
     include_line_events: bool = False
@@ -108,3 +111,10 @@ class RuntimeAdapter(Protocol):
 
     def capabilities(self) -> Capabilities: ...
     def trace(self, script: Path, root: Path, options: TraceOptions) -> Iterator[TraceEvent]: ...
+    def trace_streaming(
+        self,
+        script: Path,
+        root: Path,
+        options: TraceOptions,
+        sink: Callable[[TraceEvent], None],
+    ) -> None: ...
