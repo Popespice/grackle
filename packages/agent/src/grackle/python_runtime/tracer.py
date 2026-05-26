@@ -32,6 +32,7 @@ import time
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
     from types import CodeType
 
@@ -51,14 +52,36 @@ class Tracer:
     Args:
         resolver: Pre-built node resolver for the project.
         options:  Trace configuration (line events, event cap).
+        sink:     Optional callable invoked with each ``TraceEvent`` instead
+                  of appending to an internal list.  When provided, the list
+                  returned by :meth:`run` will be empty — the caller is
+                  responsible for consuming events via the sink.  The sink
+                  must be non-blocking (it is called on the hot path inside
+                  ``sys.monitoring`` callbacks).
     """
 
-    def __init__(self, resolver: NodeResolver, options: TraceOptions) -> None:
+    def __init__(
+        self,
+        resolver: NodeResolver,
+        options: TraceOptions,
+        *,
+        sink: Callable[[TraceEvent], None] | None = None,
+    ) -> None:
         self._resolver = resolver
         self._options = options
         self._events: list[TraceEvent] = []
         # Per-thread call-stack depth counters.
         self._depth: dict[int, int] = {}
+        # Optional hot-path sink.  When set, events are routed to the sink
+        # instead of self._events.
+        self._sink = sink
+        # Event count decoupled from len(self._events) so the cap check works
+        # correctly when a custom sink is active (self._events stays empty).
+        self._count: int = 0
+        # If the sink raises, the exception propagates through sys.monitoring
+        # into the script and is caught by run()'s BaseException handler.
+        # We store it here so it can be re-raised after _stop() completes.
+        self._sink_exc: BaseException | None = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -71,10 +94,12 @@ class Tracer:
         which call ``sys.exit()`` (raises ``SystemExit``) or are interrupted
         with Ctrl-C (raises ``KeyboardInterrupt``) still get a clean
         teardown and a populated event list. ``TraceCapExceeded`` is
-        re-raised because callers need to know the cap fired.
+        re-raised because callers need to know the cap fired.  If the sink
+        raises, the exception propagates out after ``_stop()`` completes.
 
         Raises:
             TraceCapExceeded: if ``options.max_events`` is set and reached.
+            BaseException: if the sink raises (re-raised after teardown).
         """
         import runpy
 
@@ -87,9 +112,12 @@ class Tracer:
             # The script raised — SystemExit, KeyboardInterrupt, or any
             # other exception. The RAISE callback already captured it; we
             # just need to fall through to ``finally`` so _stop() runs.
+            # (Sink exceptions also arrive here — we re-raise them below.)
             pass
         finally:
             self._stop()
+        if self._sink_exc is not None:
+            raise self._sink_exc
         return self._events
 
     # ------------------------------------------------------------------
@@ -248,8 +276,20 @@ class Tracer:
 
     def _emit(self, event: TraceEvent) -> None:
         cap = self._options.max_events
-        if cap is not None and len(self._events) >= cap:
+        if cap is not None and self._count >= cap:
             raise TraceCapExceeded(
                 f"trace event cap of {cap} reached; set TraceOptions.max_events=None to disable"
             )
-        self._events.append(event)
+        self._count += 1
+        if self._sink is not None:
+            try:
+                self._sink(event)
+            except BaseException as exc:
+                # Store the first sink exception so run() can re-raise it
+                # after _stop() completes.  Re-raise here so sys.monitoring
+                # propagates it through the monitored code, stopping execution.
+                if self._sink_exc is None:
+                    self._sink_exc = exc
+                raise
+        else:
+            self._events.append(event)

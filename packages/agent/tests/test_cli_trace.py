@@ -141,3 +141,91 @@ def test_serve_help_mentions_no_pace() -> None:
     result = CliRunner().invoke(main, ["serve", "--help"])
     assert result.exit_code == 0
     assert "--no-pace" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Phase 7.2 — --stream flag
+# ---------------------------------------------------------------------------
+
+
+def test_trace_stream_flag_in_help() -> None:
+    """``trace --help`` must document the --stream option."""
+    result = CliRunner().invoke(main, ["trace", "--help"])
+    assert result.exit_code == 0
+    assert "--stream" in result.output
+
+
+def test_trace_stream_without_connect_rejected(tmp_path: Path) -> None:
+    """``--stream`` without ``--connect`` must fail with a UsageError."""
+    script = _write_simple_script(tmp_path)
+    result = CliRunner().invoke(
+        main,
+        ["trace", str(script), "--root", str(tmp_path), "--stream"],
+    )
+    assert result.exit_code != 0
+    assert "--connect" in result.output or "connect" in result.output.lower()
+
+
+def test_trace_stream_with_output_rejected(tmp_path: Path) -> None:
+    """``--stream`` combined with ``--output`` must fail with a UsageError."""
+    script = _write_simple_script(tmp_path)
+    out = tmp_path / "trace.jsonl"
+    result = CliRunner().invoke(
+        main,
+        [
+            "trace",
+            str(script),
+            "--root",
+            str(tmp_path),
+            "--stream",
+            "--connect",
+            "ws://127.0.0.1:7878",
+            "--output",
+            str(out),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "--output" in result.output or "incompatible" in result.output.lower()
+
+
+def test_trace_no_pace_does_not_error_with_stream(tmp_path: Path) -> None:
+    """``--stream --no-pace`` must not cause a usage error (--no-pace is a no-op)."""
+    # We don't connect for real; just verify validation passes (will fail on connect).
+    script = _write_simple_script(tmp_path)
+    result = CliRunner().invoke(
+        main,
+        [
+            "trace",
+            str(script),
+            "--root",
+            str(tmp_path),
+            "--stream",
+            "--no-pace",
+            "--connect",
+            "ws://127.0.0.1:1",  # guaranteed unreachable
+        ],
+    )
+    # Should fail on connection, not on argument validation.
+    assert result.exit_code != 0
+    assert "--output" not in result.output  # no usage error about --output
+
+
+def test_trace_stream_connect_failure_surfaces_clean_error(tmp_path: Path) -> None:
+    """Connection failure must produce a clean ClickException, not a traceback."""
+    script = _write_simple_script(tmp_path)
+    result = CliRunner().invoke(
+        main,
+        [
+            "trace",
+            str(script),
+            "--root",
+            str(tmp_path),
+            "--stream",
+            "--connect",
+            "ws://127.0.0.1:1",  # port 1 — nothing listening
+        ],
+    )
+    assert result.exit_code != 0
+    # Must not be an unhandled exception (no traceback in output).
+    assert "Traceback" not in result.output
+    assert "Error" in result.output

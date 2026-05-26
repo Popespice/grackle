@@ -202,7 +202,7 @@ describe("useBufferedTraceEvents — rAF batching", () => {
     expect(spy).not.toHaveBeenCalled();
 
     act(() => {
-      capturedCb!(0);
+      capturedCb?.(0);
     });
 
     expect(spy).toHaveBeenCalledOnce();
@@ -223,7 +223,7 @@ describe("useBufferedTraceEvents — rAF batching", () => {
     });
 
     act(() => {
-      capturedCb!(0);
+      capturedCb?.(0);
     });
 
     const events = useGraphStore.getState().traceEvents;
@@ -252,13 +252,13 @@ describe("useBufferedTraceEvents — rAF batching", () => {
       pushTraceEvent(mkEv(0));
     });
     act(() => {
-      capturedCb!(0);
+      capturedCb?.(0);
     });
 
     // Fire again with nothing pending — addTraceEvents must not be called
     spy.mockClear();
     act(() => {
-      capturedCb!(1);
+      capturedCb?.(1);
     });
 
     expect(spy).not.toHaveBeenCalled();
@@ -279,7 +279,7 @@ describe("useBufferedTraceEvents — rAF batching", () => {
       pushTraceEvent(mkEv(0));
     });
     act(() => {
-      rafCbs[0]!(0); // flush first batch
+      rafCbs[0]?.(0); // flush first batch
     });
 
     // Second batch — a new rAF should be scheduled
@@ -287,7 +287,7 @@ describe("useBufferedTraceEvents — rAF batching", () => {
       pushTraceEvent(mkEv(1));
     });
     act(() => {
-      rafCbs[1]!(1); // flush second batch
+      rafCbs[1]?.(1); // flush second batch
     });
 
     expect(useGraphStore.getState().traceEvents).toHaveLength(2);
@@ -444,7 +444,7 @@ describe("useBufferedTraceEvents — session_start clear", () => {
 
     // Fire the session B rAF callback.
     act(() => {
-      rafCbs[1]!(0);
+      rafCbs[1]?.(0);
     });
 
     // Only the new event lands in the store — stale session A events are gone.

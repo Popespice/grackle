@@ -136,14 +136,27 @@ def parse(
         "After tracing completes, stream the collected events to a running "
         "grackle server at URL (e.g. ws://127.0.0.1:7878). "
         "May be combined with --output to write a file AND stream. "
-        "Note: this streams a completed trace, not a live in-progress one."
+        "Note: without --stream this streams a *completed* trace, not a live one."
+    ),
+)
+@click.option(
+    "--stream",
+    is_flag=True,
+    default=False,
+    help=(
+        "Stream events to the server in real time as the script runs "
+        "(requires --connect). Events appear in the browser during execution. "
+        "Incompatible with --output."
     ),
 )
 @click.option(
     "--no-pace",
     is_flag=True,
     default=False,
-    help="Disable inter-event pacing when streaming via --connect (push all events immediately).",
+    help=(
+        "Disable inter-event pacing when streaming a completed trace via --connect. "
+        "Ignored when --stream is active (real-time mode has no pacing)."
+    ),
 )
 def trace(
     script: Path,
@@ -152,6 +165,7 @@ def trace(
     lines: bool,
     max_events: int | None,
     connect: str | None,
+    stream: bool,
     no_pace: bool,
 ) -> None:
     """Trace SCRIPT and emit runtime events as JSONL.
@@ -178,6 +192,14 @@ def trace(
     from grackle.python_runtime.adapter import PythonRuntimeAdapter
     from grackle.python_runtime.writer import write_jsonl
 
+    # ------------------------------------------------------------------
+    # Option validation
+    # ------------------------------------------------------------------
+    if stream and connect is None:
+        raise click.UsageError("--stream requires --connect URL")
+    if stream and output is not None:
+        raise click.UsageError("--stream is incompatible with --output (use --connect only)")
+
     # Verify SCRIPT lives inside ROOT — otherwise every frame falls back
     # to "<unresolved>" because the resolver only indexes files under root.
     try:
@@ -192,6 +214,36 @@ def trace(
     options = TraceOptions(include_line_events=lines, max_events=max_events)
     adapter = PythonRuntimeAdapter()
 
+    # ------------------------------------------------------------------
+    # Real-time streaming path  (--connect URL --stream)
+    # ------------------------------------------------------------------
+    if stream:
+        assert connect is not None  # guarded above
+        from uuid import uuid4 as _uuid4
+
+        from grackle.python_runtime.stream_sender import TraceStreamSender
+
+        session_id = str(_uuid4())
+        sender = TraceStreamSender(connect, session_id)
+        try:
+            sender.start()
+        except ConnectionError as exc:
+            raise click.ClickException(f"could not connect to {connect}: {exc}") from exc
+
+        sent = 0
+        try:
+            adapter.trace_streaming(script, root, options, sender.sink)
+        except TraceCapExceeded as exc:
+            raise click.ClickException(str(exc)) from exc
+        finally:
+            sent = sender.finish()
+
+        click.echo(f"streamed {sent} events → {connect}", err=True)
+        return
+
+    # ------------------------------------------------------------------
+    # Completed-trace path  (default, or --connect without --stream)
+    # ------------------------------------------------------------------
     try:
         events = list(adapter.trace(script, root, options))
     except TraceCapExceeded as exc:
