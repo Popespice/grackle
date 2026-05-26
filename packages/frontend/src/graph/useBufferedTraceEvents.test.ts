@@ -252,6 +252,8 @@ describe("useBufferedTraceEvents — rAF batching", () => {
       pushTraceEvent(mkEv(0));
     });
     act(() => {
+      // Confirm rAF was actually scheduled; ?.() would silently pass if null.
+      expect(capturedCb).not.toBeNull();
       capturedCb?.(0);
     });
 

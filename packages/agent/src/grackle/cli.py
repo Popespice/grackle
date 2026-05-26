@@ -235,10 +235,18 @@ def trace(
             adapter.trace_streaming(script, root, options, sender.sink)
         except TraceCapExceeded as exc:
             raise click.ClickException(str(exc)) from exc
+        except Exception as exc:
+            raise click.ClickException(f"trace error: {exc}") from exc
         finally:
             sent = sender.finish()
 
-        click.echo(f"streamed {sent} events → {connect}", err=True)
+        if sender.connection_lost:
+            click.echo(
+                f"WARNING: connection lost after {sent} events; session_end not sent",
+                err=True,
+            )
+        else:
+            click.echo(f"streamed {sent} events → {connect}", err=True)
         return
 
     # ------------------------------------------------------------------

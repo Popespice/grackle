@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from grackle.adapters.base import Capabilities, ParseOptions, StaticGraph
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
     from pathlib import Path
 
     from grackle.adapters.base import TraceEvent, TraceOptions
@@ -32,3 +32,12 @@ class NoOpRuntimeAdapter:
 
     def trace(self, script: Path, root: Path, options: TraceOptions) -> Iterator[TraceEvent]:
         yield from ()
+
+    def trace_streaming(
+        self,
+        script: Path,
+        root: Path,
+        options: TraceOptions,
+        sink: Callable[[TraceEvent], None],
+    ) -> None:
+        pass

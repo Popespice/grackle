@@ -206,13 +206,15 @@ async def test_sender_no_tail_loss(live_server: int) -> None:
     port = live_server
     url = f"ws://127.0.0.1:{port}"
 
-    consumer_task = asyncio.create_task(_collect_until_end(port, timeout=10.0))
+    consumer_task = asyncio.create_task(_collect_until_end(port, timeout=15.0))
     await asyncio.sleep(0.05)
 
     sender = TraceStreamSender(url, "no-loss-session")
     await asyncio.get_event_loop().run_in_executor(None, sender.start)
 
-    n = 200
+    # Large burst so the producer genuinely outpaces the drain loop on the
+    # first several poll cycles — this exercises the sentinel-ordering guarantee.
+    n = 2_000
     for i in range(n):
         sender.sink(_make_event(i))
 
@@ -268,8 +270,8 @@ async def test_sender_backpressure_bounds_memory(live_server: int) -> None:
 
     # dropped + sent must equal produced (no events unaccounted for).
     assert sender.dropped + sent == produced
-    # Memory was bounded: queue never held more than cap + 1 at once.
-    assert sent <= cap + 1 or sender.dropped > 0
+    # With a tiny cap, backpressure must have dropped some events.
+    assert sender.dropped > 0
 
     await consumer_task  # drain consumer so server is clean
 
@@ -283,20 +285,22 @@ async def test_sender_no_pacing(live_server: int) -> None:
     await asyncio.sleep(0.05)
 
     n = 20
-    # Events with 100 ms gaps between them — if paced that would take 2 s.
+    # Events 500 ms apart — if paced, that would take 10 s.  Real-time mode
+    # ignores ts_ns gaps entirely, so elapsed should be well under 5 s on any
+    # reasonable hardware, giving generous headroom on slow CI runners.
     sender = TraceStreamSender(url, "pace-session")
     await asyncio.get_event_loop().run_in_executor(None, sender.start)
 
     t0 = time.monotonic()
     for i in range(n):
         ev = _make_event(i)
-        ev["ts_ns"] = i * 100_000_000  # 100 ms apart
+        ev["ts_ns"] = i * 500_000_000  # 500 ms apart
         sender.sink(ev)
     sent = await asyncio.get_event_loop().run_in_executor(None, sender.finish)
     elapsed = time.monotonic() - t0
 
-    # Real-time mode sends immediately — expect well under 2 s regardless of ts_ns.
-    assert elapsed < 2.0, f"real-time sender paced events (took {elapsed:.2f} s)"
+    # Real-time mode sends immediately — expect well under 5 s regardless of ts_ns.
+    assert elapsed < 5.0, f"real-time sender paced events (took {elapsed:.2f} s)"
     assert sent == n
 
     await consumer_task

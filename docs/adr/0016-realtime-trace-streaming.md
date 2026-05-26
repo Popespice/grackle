@@ -30,16 +30,16 @@ and events appear in the browser *as the script executes*, not after.
 
 ## Decision
 
-### Hot path: unchanged — no I/O, no `await`, no lock
+### Hot path: no I/O, no `await`, minimal lock
 
 ADR-0013's core constraint stands: `sys.monitoring` callbacks must remain
 synchronous and non-blocking.  The only change to the hot path is the
 introduction of an optional `sink: Callable[[TraceEvent], None]` on `Tracer`.
 
 The default sink is `self._events.append` — **all existing behaviour preserved**.
-The real-time sink calls `queue.SimpleQueue.put_nowait`, a C-level O(1)
-operation that takes the GIL for one reference increment.  No syscall; no
-user-space lock; no `await`.
+The real-time sink acquires a lightweight `threading.Lock` (non-contended in
+the common case; ~50 ns) to update the `_inflight` counter, then calls
+`queue.SimpleQueue.put_nowait` (C-level O(1)).  No syscall; no `await`.
 
 ### Sender thread: owns all I/O
 
@@ -66,31 +66,30 @@ Bounded mode (`Queue(maxsize=N)`) would block or raise on the producer
 when full — both are forbidden on the hot path.  Backpressure is instead
 enforced by the **drop-newest** mechanism (see below).
 
-### Backpressure: drop-newest with an approximate inflight counter
+### Backpressure: drop-newest with a lock-protected inflight counter
 
 The queue is unbounded (no blocking on overflow).  To prevent unbounded
 memory growth under a fast producer + slow network, `sink()` checks an
-approximate `_inflight` counter before enqueuing:
+`_inflight` counter before enqueuing:
 
 ```python
-if self._inflight >= self._max_inflight:
-    self._dropped += 1
-    return
-self._inflight += 1
+with self._counter_lock:
+    if self._inflight >= self._max_inflight:
+        self._dropped += 1
+        return
+    self._inflight += 1
 self._queue.put_nowait(event)
 ```
 
-`_inflight` is decremented after each `ws.send()` in the drain loop.
-There is **no lock** on the counter: in CPython, `int += 1` and `int -= 1`
-are each individually atomic under the GIL.  The counter may transiently
-over- or under-count by one between the increment and the enqueue, but
-this only affects the drop threshold — it never causes data corruption.
-The invariant we need is "drop before the queue grows arbitrarily large",
-which the approximate check satisfies.
+`_inflight` is decremented (also under `_counter_lock`) after each
+`ws.send()` in the drain loop.  A lock is required because the
+read-modify-write `+=`/`-=` is non-atomic at the Python level: without a
+lock, lost decrements can permanently wedge `sink()` at low caps.
+The lock is non-contended in the common case and adds ~50 ns per event.
 
 `GRACKLE_STREAM_MAX_INFLIGHT` (default 100 000) configures the threshold.
 
-### Sentinel-drain lifecycle — no tail loss
+### Sentinel-drain lifecycle — no tail loss on a live connection
 
 ```
 main thread:  tracer.run(script) → sink(ev₁) … sink(evₙ) → finish()
@@ -100,9 +99,20 @@ sender thread:                   drain_loop … sees _SENTINEL → session_end �
 ```
 
 Because the queue is FIFO and single-producer, `_SENTINEL` arrives *after*
-all events.  `finish()` joins the thread, so `session_end` is guaranteed to
-be sent — and sent only after the full event stream — before `finish()`
-returns.
+all events.  `finish()` joins the thread, so `session_end` is sent — and
+sent only after the full event stream — before `finish()` returns, **provided
+the connection stays open**.
+
+If the WebSocket closes mid-drain, the drain loop flushes remaining queue
+items to the sentinel (so `finish()` can join without blocking), sets
+`connection_lost = True`, and exits without sending `session_end`.  Callers
+should check `sender.connection_lost` after `finish()` returns and warn
+accordingly.
+
+Note: `start()` sets `_connected` after the first `ws.send()` succeeds.
+TCP write-buffering means the channel may appear open on a half-open
+connection; the first reliable bidirectional confirmation comes from the
+concurrent `_recv_drain` task which reads server frames.
 
 ### No pacing
 
@@ -141,7 +151,10 @@ needed for Phase 7.2.
 - Drop-newest backpressure means real-time streams are not lossless under
   extreme load.  Lossless options remain: `--output` (file), `--connect`
   without `--stream` (post-run replay).
-- `_inflight` is approximate; over/under by at most 1 is documented.
+- `session_end` is best-effort: if the connection is lost mid-stream,
+  `connection_lost` is `True` and `session_end` is not sent.
+- `sink()` now acquires a counter lock (~50 ns); the "truly lock-free"
+  hot-path claim from the initial design is relaxed.
 - `--stream + --output` tee is deferred (Phase 8).
 
 ---
