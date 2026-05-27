@@ -29,6 +29,13 @@ interface GraphStoreState {
   traceEventTypeFilter: Set<string>; // empty = all event kinds count
   traceHeatMode: "cumulative" | "sliding";
   traceWindowSize: number; // event span for sliding mode
+  // Server-side seek (Phase 7.3+)
+  /** True when the server supports trace_seek_request for the current session. */
+  traceSeekable: boolean;
+  /** Total number of events in the trace file (for scrubber sizing in seekable mode). */
+  traceTotal: number;
+  /** Absolute index of the first event in the current traceEvents window (seekable mode). */
+  traceWindowStart: number;
   // Graph actions
   setGraph: (graph: Graph) => void;
   selectNode: (nodeId: string | null) => void;
@@ -38,11 +45,19 @@ interface GraphStoreState {
   setSearch: (term: string) => void;
   setExcludes: (globs: string[]) => void;
   // Trace session actions
-  startTraceSession: (sessionId: string) => void;
+  startTraceSession: (sessionId: string, seekable?: boolean) => void;
   addTraceEvent: (ev: TraceEvent) => void;
   /** Batch append — O(n) single concat instead of O(n²) per-event spread. */
   addTraceEvents: (batch: TraceEvent[]) => void;
   endTraceSession: (msg: TraceSessionEndMessage) => void;
+  /**
+   * Replace the current event window with a seek result (seekable sessions).
+   *
+   * Sets ``traceWindowStart``, ``traceTotal``, and ``traceEvents`` to the
+   * window returned by a ``trace_window`` response.  ``tracePlayhead`` is
+   * clamped to ``[0, events.length]`` so it stays within the new window.
+   */
+  setTraceWindow: (start: number, events: TraceEvent[], total: number) => void;
   // Playback actions
   setPlayhead: (i: number) => void;
   play: () => void;
@@ -69,6 +84,9 @@ export const useGraphStore = create<GraphStoreState>()((set) => ({
   traceEventTypeFilter: new Set<string>(),
   traceHeatMode: "cumulative",
   traceWindowSize: 200,
+  traceSeekable: false,
+  traceTotal: 0,
+  traceWindowStart: 0,
   setGraph: (graph) =>
     set({ graph, selectedNodeId: null, highlightedNodeIds: null }),
   selectNode: (nodeId) => set({ selectedNodeId: nodeId }),
@@ -87,7 +105,7 @@ export const useGraphStore = create<GraphStoreState>()((set) => ({
   showAllKinds: () => set({ hiddenKinds: new Set<string>() }),
   setSearch: (term) => set({ searchTerm: term }),
   setExcludes: (globs) => set({ excludeGlobs: globs }),
-  startTraceSession: (sessionId) =>
+  startTraceSession: (sessionId, seekable = false) =>
     set({
       traceSessionId: sessionId,
       traceEvents: [],
@@ -95,6 +113,10 @@ export const useGraphStore = create<GraphStoreState>()((set) => ({
       // Reset playback position; keep filter + heat mode across re-runs
       tracePlayhead: 0,
       tracePlaying: false,
+      // Seek state — reset on each new session
+      traceSeekable: seekable,
+      traceTotal: 0,
+      traceWindowStart: 0,
     }),
   addTraceEvent: (ev) =>
     set((state) => ({ traceEvents: state.traceEvents.concat([ev]) })),
@@ -102,6 +124,14 @@ export const useGraphStore = create<GraphStoreState>()((set) => ({
     set((state) => ({ traceEvents: state.traceEvents.concat(batch) })),
   endTraceSession: (_msg: TraceSessionEndMessage) =>
     set({ traceSessionComplete: true }),
+  setTraceWindow: (start, events, total) =>
+    set((state) => ({
+      traceWindowStart: start,
+      traceEvents: events,
+      traceTotal: total,
+      // Clamp playhead into the new window
+      tracePlayhead: Math.max(0, Math.min(state.tracePlayhead, events.length)),
+    })),
   setPlayhead: (i) =>
     set((state) => ({
       tracePlayhead: Math.max(0, Math.min(i, state.traceEvents.length)),

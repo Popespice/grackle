@@ -170,6 +170,10 @@
                   "type": "string",
                   "enum": ["replay", "live"],
                   "description": "Whether events come from a file replay or a live-attach producer."
+                },
+                "seekable": {
+                  "type": "boolean",
+                  "description": "When true, the server supports trace_seek_request for this session. Omitted (false) for live/real-time sessions."
                 }
               },
               "required": ["session_id", "started_ns", "source"],
@@ -222,6 +226,108 @@
                 }
               },
               "required": ["session_id", "ended_ns", "event_count"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["type"]
+        }
+      ]
+    },
+    "TraceSeekRequest": {
+      "description": "Browser requests a window of events from a seekable trace session. Agent replies with TraceWindowMessage or TraceSeekError. id is echoed verbatim.",
+      "allOf": [
+        { "$ref": "#/$defs/WsEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "trace_seek_request" },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "type": "string",
+                  "description": "UUID of the seekable trace session."
+                },
+                "start_index": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Zero-based absolute index of the first event to return."
+                },
+                "count": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "Maximum number of events to return."
+                }
+              },
+              "required": ["session_id", "start_index", "count"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["type"]
+        }
+      ]
+    },
+    "TraceWindowMessage": {
+      "description": "Agent reply to TraceSeekRequest — a window of trace events. id echoes the request id.",
+      "allOf": [
+        { "$ref": "#/$defs/WsEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "trace_window" },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "type": "string",
+                  "description": "UUID of the trace session."
+                },
+                "start_index": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Absolute index of the first event in this window."
+                },
+                "events": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "description": "A TraceEvent — see trace.schema.json#/$defs/TraceEvent.",
+                    "additionalProperties": true
+                  },
+                  "description": "The requested window of trace events."
+                },
+                "total": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Total number of events in the trace file (for scrubber sizing)."
+                }
+              },
+              "required": ["session_id", "start_index", "events", "total"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["type"]
+        }
+      ]
+    },
+    "TraceSeekError": {
+      "description": "Agent error reply when TraceSeekRequest cannot be fulfilled. id echoes the request id.",
+      "allOf": [
+        { "$ref": "#/$defs/WsEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "trace_seek_error" },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "type": "string",
+                  "description": "UUID from the failed request."
+                },
+                "reason": {
+                  "type": "string",
+                  "description": "Human-readable reason (open string — e.g. 'session not found', 'not seekable')."
+                }
+              },
+              "required": ["session_id", "reason"],
               "additionalProperties": false
             }
           },

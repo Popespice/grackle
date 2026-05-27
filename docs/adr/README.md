@@ -37,4 +37,5 @@ NNNN-short-title.md
 | [0013](0013-runtime-trace-event-schema.md) | Runtime trace event schema: sys.monitoring, JSONL output, node-ID resolution | accepted |
 | [0014](0014-trace-transport.md) | Trace transport: WebSocket file replay + live-attach | accepted |
 | [0015](0015-runtime-overlay-ui.md) | Runtime overlay UI: Timeline, heat-map, and coverage | accepted |
-| [0016](0016-realtime-trace-streaming.md) | Real-time trace streaming via daemon sender thread | Accepted |
+| [0016](0016-realtime-trace-streaming.md) | Real-time trace streaming via daemon sender thread | accepted |
+| [0017](0017-server-side-trace-seek.md) | Server-side trace seek: byte-offset index + WS request/response | accepted |

@@ -65,6 +65,8 @@ export interface TraceSessionStartMessage extends WsEnvelope {
     session_id: string;
     started_ns: number;
     source: "replay" | "live";
+    /** When true, the server supports trace_seek_request for this session. */
+    seekable?: boolean;
   };
 }
 
@@ -83,6 +85,36 @@ export interface TraceSessionEndMessage extends WsEnvelope {
   };
 }
 
+/** Browser request for a window of events from a seekable trace session. */
+export interface TraceSeekRequest extends WsEnvelope {
+  type: "trace_seek_request";
+  payload: {
+    session_id: string;
+    start_index: number;
+    count: number;
+  };
+}
+
+/** Agent reply to TraceSeekRequest — a window of trace events. id echoes the request. */
+export interface TraceWindowMessage extends WsEnvelope {
+  type: "trace_window";
+  payload: {
+    session_id: string;
+    start_index: number;
+    events: TraceEvent[];
+    total: number;
+  };
+}
+
+/** Agent error reply when TraceSeekRequest cannot be fulfilled. id echoes the request. */
+export interface TraceSeekError extends WsEnvelope {
+  type: "trace_seek_error";
+  payload: {
+    session_id: string;
+    reason: string;
+  };
+}
+
 export type AnyKnownMessage =
   | PingMessage
   | PongMessage
@@ -92,7 +124,10 @@ export type AnyKnownMessage =
   | ReadSourceError
   | TraceSessionStartMessage
   | TraceEventMessage
-  | TraceSessionEndMessage;
+  | TraceSessionEndMessage
+  | TraceSeekRequest
+  | TraceWindowMessage
+  | TraceSeekError;
 
 /** All message type strings recognised by this schema version. */
 export const KNOWN_MESSAGE_TYPES = [
@@ -105,4 +140,7 @@ export const KNOWN_MESSAGE_TYPES = [
   "trace_session_start",
   "trace_event",
   "trace_session_end",
+  "trace_seek_request",
+  "trace_window",
+  "trace_seek_error",
 ] as const;

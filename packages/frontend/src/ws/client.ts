@@ -6,8 +6,11 @@ import type {
   StaticGraphMessage,
   TraceEvent,
   TraceEventMessage,
+  TraceSeekError,
+  TraceSeekRequest,
   TraceSessionEndMessage,
   TraceSessionStartMessage,
+  TraceWindowMessage,
   WsEnvelope,
 } from "@grackle/shared-types";
 import { create } from "zustand";
@@ -15,6 +18,7 @@ import { create } from "zustand";
 export type ConnectionStatus = "disconnected" | "connecting" | "connected";
 
 type SourceReply = ReadSourceResponse | ReadSourceError;
+type SeekReply = TraceWindowMessage | TraceSeekError;
 
 interface GrackleClientState {
   status: ConnectionStatus;
@@ -22,6 +26,7 @@ interface GrackleClientState {
   _ws: WebSocket | null;
   _staticGraphHandlers: Set<(graph: Graph) => void>;
   _pendingReadSource: Map<string, (msg: SourceReply) => void>;
+  _pendingTraceWindow: Map<string, (msg: SeekReply) => void>;
   _traceSessionStartHandlers: Set<(msg: TraceSessionStartMessage) => void>;
   _traceEventHandlers: Set<(ev: TraceEvent) => void>;
   _traceSessionEndHandlers: Set<(msg: TraceSessionEndMessage) => void>;
@@ -30,6 +35,17 @@ interface GrackleClientState {
   ping: () => void;
   onStaticGraph: (handler: (graph: Graph) => void) => () => void;
   sendReadSource: (path: string) => Promise<SourceReply>;
+  /**
+   * Request a window of events from a seekable trace session.
+   *
+   * Sends a ``trace_seek_request`` and resolves when the server replies with
+   * ``trace_window``.  Rejects on ``trace_seek_error`` or after a 5 s timeout.
+   */
+  requestTraceWindow: (
+    sessionId: string,
+    startIndex: number,
+    count: number
+  ) => Promise<TraceWindowMessage>;
   onTraceSessionStart: (
     handler: (msg: TraceSessionStartMessage) => void
   ) => () => void;
@@ -45,6 +61,7 @@ export const useGrackleClient = create<GrackleClientState>()((set, get) => ({
   _ws: null,
   _staticGraphHandlers: new Set(),
   _pendingReadSource: new Map(),
+  _pendingTraceWindow: new Map(),
   _traceSessionStartHandlers: new Set(),
   _traceEventHandlers: new Set(),
   _traceSessionEndHandlers: new Set(),
@@ -105,6 +122,16 @@ export const useGrackleClient = create<GrackleClientState>()((set, get) => ({
           get()._traceSessionEndHandlers.forEach((h) => {
             h(msg);
           });
+        } else if (
+          envelope.type === "trace_window" ||
+          envelope.type === "trace_seek_error"
+        ) {
+          // Seek reply — resolve the pending request by envelope id.
+          const resolver = get()._pendingTraceWindow.get(envelope.id);
+          if (resolver) {
+            get()._pendingTraceWindow.delete(envelope.id);
+            resolver(envelope as SeekReply);
+          }
         }
       } catch {
         // ignore non-JSON messages
@@ -181,6 +208,45 @@ export const useGrackleClient = create<GrackleClientState>()((set, get) => ({
         id,
         type: "read_source",
         payload: { path },
+      };
+      _ws.send(JSON.stringify(envelope));
+    });
+  },
+
+  requestTraceWindow: (
+    sessionId: string,
+    startIndex: number,
+    count: number
+  ) => {
+    return new Promise<TraceWindowMessage>((resolve, reject) => {
+      const { _ws, status } = get();
+      if (_ws === null || status !== "connected") {
+        reject(new Error("not connected"));
+        return;
+      }
+      const id = crypto.randomUUID();
+      const timeoutId = setTimeout(() => {
+        get()._pendingTraceWindow.delete(id);
+        reject(new Error("trace_seek_request timeout"));
+      }, 5000);
+
+      get()._pendingTraceWindow.set(id, (msg: SeekReply) => {
+        clearTimeout(timeoutId);
+        if (msg.type === "trace_window") {
+          resolve(msg as TraceWindowMessage);
+        } else {
+          reject(
+            new Error(
+              `trace_seek_error: ${(msg as TraceSeekError).payload.reason}`
+            )
+          );
+        }
+      });
+
+      const envelope: TraceSeekRequest = {
+        id,
+        type: "trace_seek_request",
+        payload: { session_id: sessionId, start_index: startIndex, count },
       };
       _ws.send(JSON.stringify(envelope));
     });
