@@ -18,6 +18,7 @@ from grackle import protocol
 
 if TYPE_CHECKING:
     from grackle.adapters.base import TraceEvent
+    from grackle.python_runtime.jsonl_index import JsonlIndex
 
 log = structlog.get_logger()
 
@@ -26,6 +27,10 @@ _MAX_SOURCE_BYTES = 1 * 1024 * 1024  # 1 MiB
 # bounded even for traces with large idle gaps between calls.
 _MAX_GAP_S = 0.25
 _DEFAULT_BUFFER_SECONDS = 60.0
+# Maximum events returned per trace_seek_request.  Bounds per-request I/O and
+# prevents a single malicious/buggy client from issuing a count=2**31 seek that
+# reads the whole file synchronously on the event loop.
+_MAX_SEEK_COUNT = 1000
 
 
 def _trace_buffer_seconds() -> float:
@@ -200,13 +205,22 @@ async def _receive_loop(
     ring_buffer: collections.deque[tuple[int, str]],
     buffer_seconds: float,
     max_events: int | None = None,
+    *,
+    trace_index: JsonlIndex | None = None,
+    file_session_id: str | None = None,
 ) -> None:
     """Process inbound messages from one connection.
 
-    Handles ping/pong, read_source, and live-ingest trace messages.
+    Handles ping/pong, read_source, live-ingest trace messages, and
+    (when ``trace_index`` is set) ``trace_seek_request`` for server-side seek.
+
     Live-ingest messages (trace_session_start / trace_event /
     trace_session_end) are appended to the ring-buffer and broadcast to
     all other connected consumers.
+
+    ``trace_seek_request`` is answered directly to the requesting client only:
+    ``trace_window`` on success, ``trace_seek_error`` if the session ID does
+    not match or no index is loaded.
     """
     async for raw in ws:
         try:
@@ -233,6 +247,48 @@ async def _receive_loop(
             else:
                 reply = protocol.make_source_error(envelope["id"], path_val, enc_or_reason)
             await ws.send(reply)
+        elif etype == "trace_seek_request":
+            # Server-side seek (Phase 7.3).  Only file-replay mode supports
+            # this; live-attach sessions are not seekable.
+            seek_sid = envelope["payload"].get("session_id", "")
+            if not isinstance(seek_sid, str):
+                continue
+            if trace_index is None or seek_sid != file_session_id:
+                await ws.send(
+                    protocol.make_trace_seek_error(envelope["id"], seek_sid, "session not found")
+                )
+                continue
+            start_raw = envelope["payload"].get("start_index", 0)
+            count_raw = envelope["payload"].get("count", 0)
+            if not isinstance(start_raw, int) or not isinstance(count_raw, int):
+                await ws.send(
+                    protocol.make_trace_seek_error(
+                        envelope["id"], seek_sid, "invalid start_index or count"
+                    )
+                )
+                continue
+            # Cap count to bound per-request I/O.  Compute clamped start here
+            # (mirrors read_window's own clamping) so the response payload
+            # echoes the actual start index rather than the raw unclamped value.
+            count_capped = min(max(0, count_raw), _MAX_SEEK_COUNT)
+            total = len(trace_index)
+            clamped_start = max(0, min(start_raw, total))
+            try:
+                loop = asyncio.get_running_loop()
+                seek_events: list[TraceEvent] = await loop.run_in_executor(
+                    None, trace_index.read_window, start_raw, count_capped
+                )
+            except Exception as exc:
+                log.warning("trace seek: read_window failed", error=str(exc))
+                await ws.send(
+                    protocol.make_trace_seek_error(envelope["id"], seek_sid, "read error")
+                )
+                continue
+            await ws.send(
+                protocol.make_trace_window(
+                    envelope["id"], seek_sid, clamped_start, seek_events, total
+                )
+            )
         elif etype in ("trace_session_start", "trace_event", "trace_session_end"):
             # Live-ingest path: a producer process is streaming events into
             # this server.  Buffer each message and broadcast to all consumers.
@@ -250,6 +306,9 @@ async def _replay_trace(
     trace_source: Path,
     pace: bool,
     session_id: str,
+    *,
+    seekable: bool = False,
+    total_events: int = 0,
 ) -> None:
     """Stream a trace file to one connection as a session_start / events / session_end sequence.
 
@@ -257,9 +316,35 @@ async def _replay_trace(
     clamped to ``_MAX_GAP_S`` so long idle stretches don't stall the replay.
     ``pace=False`` pushes all events as fast as the network allows (for tests).
 
+    When ``seekable=True`` the replay runs in **window-only mode**: only the
+    ``trace_session_start`` and ``trace_session_end`` markers are sent — no
+    individual ``trace_event`` messages are streamed.  The browser fetches
+    event windows on demand via ``trace_seek_request``.  ``total_events``
+    must be ``len(file_index)`` from the caller so the session_end payload
+    reports the correct count without a second full-file scan.
+
+    When ``seekable=False`` (default) all events are streamed as before.
+
     Load or parse failure → logs a warning, emits an empty session
     (event_count=0), then returns.  The server continues running.
     """
+    started_ns = time.monotonic_ns()
+    try:
+        await ws.send(protocol.make_trace_session_start(session_id, started_ns, seekable=seekable))
+    except websockets.exceptions.ConnectionClosed:
+        return
+
+    if seekable:
+        # Window-only mode: no event stream.  The browser uses trace_seek_request
+        # to fetch event windows.  total_events is pre-computed from the
+        # JsonlIndex so the file is not scanned a second time here.
+        with contextlib.suppress(websockets.exceptions.ConnectionClosed):
+            await ws.send(
+                protocol.make_trace_session_end(session_id, time.monotonic_ns(), total_events)
+            )
+        return
+
+    # Non-seekable streaming path: load the full trace and stream every event.
     from grackle.python_runtime.writer import read_jsonl
 
     events: list[TraceEvent]
@@ -268,12 +353,6 @@ async def _replay_trace(
     except Exception as exc:
         log.warning("trace replay: failed to load", path=str(trace_source), error=str(exc))
         events = []
-
-    started_ns = time.monotonic_ns()
-    try:
-        await ws.send(protocol.make_trace_session_start(session_id, started_ns))
-    except websockets.exceptions.ConnectionClosed:
-        return
 
     prev_ts_ns: int | None = None
     for event in events:
@@ -326,6 +405,30 @@ async def serve(
     buffer_seconds = _trace_buffer_seconds()
     max_events = _trace_buffer_max_events()
 
+    # File-replay mode: build the byte-offset index once at startup so every
+    # connection can seek into the file without re-scanning it.  The session_id
+    # is also stable across all connections — the browser receives the same id
+    # on reconnect and can continue using it in seek requests.
+    file_index: JsonlIndex | None = None
+    file_session_id: str | None = None
+    if trace_source is not None:
+        from grackle.python_runtime.jsonl_index import JsonlIndex as _JsonlIndex
+
+        try:
+            file_index = _JsonlIndex.build(trace_source)
+            log.info(
+                "trace index built",
+                path=str(trace_source),
+                events=len(file_index),
+            )
+        except Exception as exc:
+            log.warning(
+                "trace index build failed — seek disabled",
+                path=str(trace_source),
+                error=str(exc),
+            )
+        file_session_id = str(uuid4())
+
     async def _handler(ws: ServerConnection) -> None:
         origin = ws.request.headers.get("Origin", "") if ws.request is not None else ""
         if origin and origin not in _allowed_origins():
@@ -344,16 +447,37 @@ async def serve(
             if trace_source is None:
                 await _flush_ring_buffer(ws, ring_buffer)
 
-            # Receive loop handles ping, read_source, and live-ingest.
+            # Receive loop handles ping, read_source, live-ingest, and seek.
             receive_task: asyncio.Task[None] = asyncio.create_task(
-                _receive_loop(ws, root_real, connections, ring_buffer, buffer_seconds, max_events)
+                _receive_loop(
+                    ws,
+                    root_real,
+                    connections,
+                    ring_buffer,
+                    buffer_seconds,
+                    max_events,
+                    trace_index=file_index,
+                    file_session_id=file_session_id,
+                )
             )
             tasks.append(receive_task)
 
             # File-replay task (one per connection, independent of live ingest).
+            # Uses the stable file_session_id and advertises seekable=True so
+            # the browser can send trace_seek_request messages.
+            # total_events is pre-computed from the index so _replay_trace does
+            # not need to scan the file a second time in seekable mode.
             if trace_source is not None:
+                assert file_session_id is not None  # set above when trace_source is set
                 replay_task: asyncio.Task[None] = asyncio.create_task(
-                    _replay_trace(ws, trace_source, pace, str(uuid4()))
+                    _replay_trace(
+                        ws,
+                        trace_source,
+                        pace,
+                        file_session_id,
+                        seekable=file_index is not None,
+                        total_events=len(file_index) if file_index is not None else 0,
+                    )
                 )
                 tasks.append(replay_task)
 

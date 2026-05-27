@@ -92,17 +92,31 @@ def make_trace_session_start(
     session_id: str,
     started_ns: int,
     source: str = "replay",
+    *,
+    seekable: bool = False,
 ) -> str:
-    """Return a serialized trace_session_start envelope with a fresh UUID id."""
+    """Return a serialized trace_session_start envelope with a fresh UUID id.
+
+    Args:
+        session_id:  UUID identifying this session.
+        started_ns:  Monotonic start timestamp in nanoseconds.
+        source:      ``"replay"`` or ``"live"`` (open string per ADR-0004).
+        seekable:    When ``True``, includes ``seekable: true`` in the payload
+                     so the browser knows it may send ``trace_seek_request``
+                     messages for this session.
+    """
+    payload: dict[str, Any] = {
+        "session_id": session_id,
+        "started_ns": started_ns,
+        "source": source,
+    }
+    if seekable:
+        payload["seekable"] = True
     return json.dumps(
         {
             "id": str(uuid.uuid4()),
             "type": "trace_session_start",
-            "payload": {
-                "session_id": session_id,
-                "started_ns": started_ns,
-                "source": source,
-            },
+            "payload": payload,
         }
     )
 
@@ -128,6 +142,56 @@ def make_trace_session_end(session_id: str, ended_ns: int, event_count: int) -> 
                 "session_id": session_id,
                 "ended_ns": ended_ns,
                 "event_count": event_count,
+            },
+        }
+    )
+
+
+def make_trace_window(
+    request_id: str,
+    session_id: str,
+    start_index: int,
+    events: "list[TraceEvent]",
+    total: int,
+) -> str:
+    """Return a serialized trace_window envelope echoing the request id.
+
+    Args:
+        request_id:   ``id`` from the ``trace_seek_request`` being answered.
+        session_id:   UUID of the trace session.
+        start_index:  Absolute index of the first event in *events*.
+        events:       The requested window of ``TraceEvent`` dicts.
+        total:        Total number of events in the trace file.
+    """
+    return json.dumps(
+        {
+            "id": request_id,
+            "type": "trace_window",
+            "payload": {
+                "session_id": session_id,
+                "start_index": start_index,
+                "events": [dict(ev) for ev in events],
+                "total": total,
+            },
+        }
+    )
+
+
+def make_trace_seek_error(request_id: str, session_id: str, reason: str) -> str:
+    """Return a serialized trace_seek_error envelope echoing the request id.
+
+    Args:
+        request_id:  ``id`` from the ``trace_seek_request`` being answered.
+        session_id:  UUID from the failed request.
+        reason:      Human-readable reason (open string; e.g. "session not found").
+    """
+    return json.dumps(
+        {
+            "id": request_id,
+            "type": "trace_seek_error",
+            "payload": {
+                "session_id": session_id,
+                "reason": reason,
             },
         }
     )

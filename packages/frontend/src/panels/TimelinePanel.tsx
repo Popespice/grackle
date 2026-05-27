@@ -1,7 +1,8 @@
 import type { JSX } from "react";
-import { useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useGraphStore } from "../graph/useGraphStore";
 import { useTracePlayback } from "../graph/useTracePlayback";
+import { useGrackleClient } from "../ws/client";
 
 // ----- Shared token-based styles -----
 const PANEL_STYLE: React.CSSProperties = {
@@ -55,6 +56,8 @@ export function TimelinePanel(): JSX.Element | null {
   const traceEventTypeFilter = useGraphStore((s) => s.traceEventTypeFilter);
   const traceHeatMode = useGraphStore((s) => s.traceHeatMode);
   const traceWindowSize = useGraphStore((s) => s.traceWindowSize);
+  const traceSeekable = useGraphStore((s) => s.traceSeekable);
+  const traceTotal = useGraphStore((s) => s.traceTotal);
 
   const setPlayhead = useGraphStore((s) => s.setPlayhead);
   const play = useGraphStore((s) => s.play);
@@ -63,6 +66,91 @@ export function TimelinePanel(): JSX.Element | null {
   const toggleEventType = useGraphStore((s) => s.toggleEventType);
   const setHeatMode = useGraphStore((s) => s.setHeatMode);
   const setWindowSize = useGraphStore((s) => s.setWindowSize);
+  const setTraceWindow = useGraphStore((s) => s.setTraceWindow);
+  const setTraceSeekable = useGraphStore((s) => s.setTraceSeekable);
+
+  const requestTraceWindow = useGrackleClient((s) => s.requestTraceWindow);
+
+  // Keep a ref of traceWindowSize so the initial-fetch effect can read the
+  // current value without including it in the dependency array (changing the
+  // window size control should not re-fire the initial fetch and jump back to
+  // the beginning of the trace).
+  const traceWindowSizeRef = useRef(traceWindowSize);
+  traceWindowSizeRef.current = traceWindowSize;
+
+  // Debounced seek: when the scrubber changes in seekable mode, fire a
+  // trace_seek_request after 150 ms of idle time.  The ref holds the pending
+  // timer so we can cancel it on the next scrub or unmount.
+  const seekTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleSeekablePlayheadChange = useCallback(
+    (position: number) => {
+      setPlayhead(position);
+      if (!traceSeekable || traceSessionId === null) return;
+      if (seekTimerRef.current !== null) clearTimeout(seekTimerRef.current);
+      seekTimerRef.current = setTimeout(() => {
+        seekTimerRef.current = null;
+        const windowSize = traceWindowSizeRef.current;
+        const halfWindow = Math.floor(windowSize / 2);
+        const start = Math.max(0, position - halfWindow);
+        requestTraceWindow(traceSessionId, start, windowSize)
+          .then((msg) => {
+            setTraceWindow(
+              msg.payload.start_index,
+              msg.payload.events,
+              msg.payload.total
+            );
+          })
+          .catch(() => {
+            // Seek error is non-fatal — the scrubber retains its current position.
+          });
+      }, 150);
+    },
+    [
+      setPlayhead,
+      traceSeekable,
+      traceSessionId,
+      requestTraceWindow,
+      setTraceWindow,
+    ]
+  );
+
+  // On session start with seekable=true, auto-fetch the initial window to
+  // populate traceTotal for scrubber sizing.
+  // NOTE: traceWindowSize is intentionally NOT in the dependency array.
+  // Including it would re-fire this effect every time the user edits the
+  // sliding-window size control, resetting the scrubber position to 0.
+  // The ref above captures the current value at fire time.
+  useEffect(() => {
+    if (!traceSeekable || traceSessionId === null) return;
+    requestTraceWindow(traceSessionId, 0, traceWindowSizeRef.current)
+      .then((msg) => {
+        setTraceWindow(
+          msg.payload.start_index,
+          msg.payload.events,
+          msg.payload.total
+        );
+      })
+      .catch(() => {
+        // Initial seek failed — fall back to non-seekable (buffered) mode so
+        // the scrubber does not freeze at 0 with an unknown total.
+        setTraceSeekable(false);
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    traceSeekable,
+    traceSessionId,
+    requestTraceWindow,
+    setTraceWindow,
+    setTraceSeekable,
+  ]);
+
+  // Cancel any pending debounce timer on unmount.
+  useEffect(() => {
+    return () => {
+      if (seekTimerRef.current !== null) clearTimeout(seekTimerRef.current);
+    };
+  }, []);
 
   // Distinct event kinds present in the full session (for filter chips).
   const eventKinds = useMemo(
@@ -73,7 +161,10 @@ export function TimelinePanel(): JSX.Element | null {
   // ── EARLY RETURN (after all hooks) ──────────────────────────────────────
   if (traceSessionId === null) return null;
 
-  const total = traceEvents.length;
+  // In seekable mode the scrubber represents the *full* trace; traceTotal is
+  // known after the first seek response.  In non-seekable mode use the buffered
+  // event count (may grow during live streaming).
+  const total = traceSeekable ? traceTotal : traceEvents.length;
   const isAtEnd = tracePlayhead >= total && total > 0;
 
   return (
@@ -93,7 +184,14 @@ export function TimelinePanel(): JSX.Element | null {
           value={tracePlayhead}
           step={1}
           style={{ flex: 1, minWidth: 80 }}
-          onChange={(e) => setPlayhead(Number(e.target.value))}
+          onChange={(e) => {
+            const pos = Number(e.target.value);
+            if (traceSeekable) {
+              handleSeekablePlayheadChange(pos);
+            } else {
+              setPlayhead(pos);
+            }
+          }}
         />
 
         <span

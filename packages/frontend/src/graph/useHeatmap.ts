@@ -8,6 +8,10 @@ import { useGraphStore } from "./useGraphStore";
  * Recalculates only when the relevant slice changes, keeping Sigma
  * refreshes decoupled from the store's append-only `traceEvents` array
  * (which updates on every incoming trace event).
+ *
+ * In seekable mode, ``traceWindowStart`` is passed to ``computeHeat`` so that
+ * the absolute ``tracePlayhead`` is translated to a window-relative position
+ * before indexing into the (partial) ``traceEvents`` window.
  */
 export function useHeatmap(): {
   heat: Map<string, number>;
@@ -18,6 +22,7 @@ export function useHeatmap(): {
   const traceEventTypeFilter = useGraphStore((s) => s.traceEventTypeFilter);
   const traceHeatMode = useGraphStore((s) => s.traceHeatMode);
   const traceWindowSize = useGraphStore((s) => s.traceWindowSize);
+  const traceWindowStart = useGraphStore((s) => s.traceWindowStart);
 
   return useMemo(
     () =>
@@ -26,15 +31,16 @@ export function useHeatmap(): {
         tracePlayhead,
         traceEventTypeFilter,
         traceHeatMode,
-        traceWindowSize
+        traceWindowSize,
+        traceWindowStart
       ),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       traceEvents,
       tracePlayhead,
       traceEventTypeFilter,
       traceHeatMode,
       traceWindowSize,
+      traceWindowStart,
     ]
   );
 }

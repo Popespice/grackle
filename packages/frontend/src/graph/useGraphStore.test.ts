@@ -27,6 +27,10 @@ beforeEach(() => {
     traceEventTypeFilter: new Set<string>(),
     traceHeatMode: "cumulative",
     traceWindowSize: 200,
+    // Phase 7.3 seek state — always reset so tests are hermetic.
+    traceSeekable: false,
+    traceTotal: 0,
+    traceWindowStart: 0,
   });
 });
 
@@ -380,5 +384,85 @@ describe("useGraphStore", () => {
   it("setWindowSize updates traceWindowSize", () => {
     useGraphStore.getState().setWindowSize(500);
     expect(useGraphStore.getState().traceWindowSize).toBe(500);
+  });
+
+  // -------------------------------------------------------------------------
+  // Server-side seek (Phase 7.3)
+  // -------------------------------------------------------------------------
+
+  it("startTraceSession with seekable=true sets traceSeekable and resets seek state", () => {
+    useGraphStore.setState({ traceTotal: 999, traceWindowStart: 50 });
+    useGraphStore.getState().startTraceSession("seek-session", true);
+    const state = useGraphStore.getState();
+    expect(state.traceSeekable).toBe(true);
+    expect(state.traceTotal).toBe(0);
+    expect(state.traceWindowStart).toBe(0);
+    expect(state.tracePlayhead).toBe(0);
+  });
+
+  it("startTraceSession without seekable argument defaults to non-seekable", () => {
+    useGraphStore.getState().startTraceSession("plain-session");
+    expect(useGraphStore.getState().traceSeekable).toBe(false);
+  });
+
+  it("setTraceSeekable toggles traceSeekable flag", () => {
+    useGraphStore.getState().setTraceSeekable(true);
+    expect(useGraphStore.getState().traceSeekable).toBe(true);
+    useGraphStore.getState().setTraceSeekable(false);
+    expect(useGraphStore.getState().traceSeekable).toBe(false);
+  });
+
+  it("setTraceWindow updates window fields and preserves absolute playhead", () => {
+    // Playhead at absolute position 5000; window is [3000..3200].
+    useGraphStore.setState({ traceSeekable: true, tracePlayhead: 5000 });
+    const window = [
+      { event: "call", node_id: "a", ts_ns: 0, thread_id: 1, frame_depth: 0 },
+    ];
+    useGraphStore.getState().setTraceWindow(3000, window, 10000);
+    const state = useGraphStore.getState();
+    expect(state.traceWindowStart).toBe(3000);
+    expect(state.traceEvents).toBe(window);
+    expect(state.traceTotal).toBe(10000);
+    // Absolute playhead is preserved — NOT clamped to window size (1).
+    expect(state.tracePlayhead).toBe(5000);
+  });
+
+  it("setTraceWindow clamps playhead only when it exceeds the new total", () => {
+    useGraphStore.setState({ traceSeekable: true, tracePlayhead: 99999 });
+    useGraphStore.getState().setTraceWindow(0, [], 10000);
+    expect(useGraphStore.getState().tracePlayhead).toBe(10000);
+  });
+
+  it("setPlayhead in seekable mode clamps to traceTotal, not window size", () => {
+    useGraphStore.setState({
+      traceSeekable: true,
+      traceTotal: 10000,
+      traceEvents: [
+        { event: "call", node_id: "a", ts_ns: 0, thread_id: 1, frame_depth: 0 },
+      ], // window size = 1
+    });
+    useGraphStore.getState().setPlayhead(5000);
+    // Must not clamp to 1 (window size); must accept up to 10000 (total).
+    expect(useGraphStore.getState().tracePlayhead).toBe(5000);
+  });
+
+  it("setPlayhead in seekable mode clamps above traceTotal", () => {
+    useGraphStore.setState({ traceSeekable: true, traceTotal: 100 });
+    useGraphStore.getState().setPlayhead(999);
+    expect(useGraphStore.getState().tracePlayhead).toBe(100);
+  });
+
+  it("play in seekable mode rewinds based on traceTotal", () => {
+    useGraphStore.setState({
+      traceSeekable: true,
+      traceTotal: 100,
+      tracePlayhead: 100, // at end by total
+      traceEvents: [
+        { event: "call", node_id: "a", ts_ns: 0, thread_id: 1, frame_depth: 0 },
+      ], // window size = 1 (not the bound)
+    });
+    useGraphStore.getState().play();
+    expect(useGraphStore.getState().tracePlayhead).toBe(0); // rewound
+    expect(useGraphStore.getState().tracePlaying).toBe(true);
   });
 });

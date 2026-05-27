@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "grackle"
-version = "0.6.0"
+version = "0.7.0"
 description = "Local-first live code visualizer for Python"
 license = { text = "MIT" }
 authors = [{ name = "Connor Allen", email = "connor.allen9@icloud.com" }]

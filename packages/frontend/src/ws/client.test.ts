@@ -54,6 +54,7 @@ beforeEach(() => {
     _ws: null,
     _staticGraphHandlers: new Set(),
     _pendingReadSource: new Map(),
+    _pendingTraceWindow: new Map(),
     _traceSessionStartHandlers: new Set(),
     _traceEventHandlers: new Set(),
     _traceSessionEndHandlers: new Set(),
@@ -337,6 +338,109 @@ describe("useGrackleClient", () => {
 
     expect(() => mockWs.simulateMessage("not json")).not.toThrow();
     expect(useGrackleClient.getState().status).toBe("connected");
+  });
+
+  it("trace_window resolves a pending requestTraceWindow promise", async () => {
+    const { connect, requestTraceWindow } = useGrackleClient.getState();
+    connect("ws://127.0.0.1:7878");
+    mockWs.simulateOpen();
+
+    const promise = requestTraceWindow("session-1", 0, 5);
+    expect(mockWs.sent).toHaveLength(1);
+    const sent = JSON.parse(mockWs.sent[0] ?? "{}") as {
+      id: string;
+      type: string;
+      payload: { session_id: string; start_index: number; count: number };
+    };
+    expect(sent.type).toBe("trace_seek_request");
+    expect(sent.payload.session_id).toBe("session-1");
+    expect(sent.payload.start_index).toBe(0);
+    expect(sent.payload.count).toBe(5);
+
+    // Simulate agent reply — echo the request id.
+    const fakeEvents = [
+      {
+        event: "call",
+        node_id: "fn_0",
+        ts_ns: 0,
+        thread_id: 1,
+        frame_depth: 0,
+      },
+    ];
+    mockWs.simulateMessage(
+      JSON.stringify({
+        id: sent.id,
+        type: "trace_window",
+        payload: {
+          session_id: "session-1",
+          start_index: 0,
+          events: fakeEvents,
+          total: 42,
+        },
+      })
+    );
+
+    const result = await promise;
+    expect(result.type).toBe("trace_window");
+    expect(result.payload.session_id).toBe("session-1");
+    expect(result.payload.start_index).toBe(0);
+    expect(result.payload.total).toBe(42);
+    expect(result.payload.events).toEqual(fakeEvents);
+  });
+
+  it("trace_seek_error rejects a pending requestTraceWindow promise", async () => {
+    const { connect, requestTraceWindow } = useGrackleClient.getState();
+    connect("ws://127.0.0.1:7878");
+    mockWs.simulateOpen();
+
+    const promise = requestTraceWindow("bad-session", 0, 5);
+    const sent = JSON.parse(mockWs.sent[0] ?? "{}") as { id: string };
+
+    mockWs.simulateMessage(
+      JSON.stringify({
+        id: sent.id,
+        type: "trace_seek_error",
+        payload: { session_id: "bad-session", reason: "session not found" },
+      })
+    );
+
+    await expect(promise).rejects.toThrow("session not found");
+  });
+
+  it("requestTraceWindow rejects when not connected", async () => {
+    const { requestTraceWindow } = useGrackleClient.getState();
+    await expect(requestTraceWindow("s", 0, 5)).rejects.toThrow(
+      "not connected"
+    );
+  });
+
+  it("_pendingTraceWindow is cleared when a new trace_session_start arrives", async () => {
+    const { connect, requestTraceWindow } = useGrackleClient.getState();
+    connect("ws://127.0.0.1:7878");
+    mockWs.simulateOpen();
+
+    // Issue a seek request — it will be left pending (no reply).
+    const promise = requestTraceWindow("session-old", 0, 5);
+
+    // Simulate a new session start — must discard the pending request.
+    mockWs.simulateMessage(
+      JSON.stringify({
+        id: "new-ss",
+        type: "trace_session_start",
+        payload: {
+          session_id: "session-new",
+          started_ns: 1000,
+          source: "replay",
+        },
+      })
+    );
+
+    // The map should now be empty.
+    expect(useGrackleClient.getState()._pendingTraceWindow.size).toBe(0);
+
+    // The pending promise must never resolve (it will timeout eventually).
+    // We just confirm the map is clean — suppress the unhandled rejection.
+    promise.catch(() => undefined);
   });
 
   it("late events from a stale socket are ignored (StrictMode guard)", () => {

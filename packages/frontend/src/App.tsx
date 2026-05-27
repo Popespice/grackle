@@ -30,7 +30,7 @@ export function App(): JSX.Element {
 
   useEffect(() => {
     return onTraceSessionStart((msg) =>
-      startTraceSession(msg.payload.session_id)
+      startTraceSession(msg.payload.session_id, msg.payload.seekable === true)
     );
   }, [onTraceSessionStart, startTraceSession]);
 

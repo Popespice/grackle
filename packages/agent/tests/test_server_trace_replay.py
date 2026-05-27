@@ -1,9 +1,13 @@
 """Tests for ``grackle serve --trace-source`` file-replay mode.
 
-The server replays a JSONL trace file to every new browser connection
-after the static_graph push:
+Phase 7.3 introduced **window-only seekable mode**: when the ``JsonlIndex``
+builds successfully, the server switches to:
 
-    static_graph → trace_session_start → trace_event* → trace_session_end
+    static_graph → trace_session_start(seekable=true) → trace_session_end
+
+No individual ``trace_event`` messages are streamed — the browser fetches event
+windows on demand via ``trace_seek_request``.  The ``trace_session_end`` payload
+still carries the correct ``event_count`` (from the index).
 
 Tests use pace=False so they complete in milliseconds.
 """
@@ -115,10 +119,14 @@ async def test_static_graph_arrives_before_session_start(
     assert sg_idx < start_idx, f"static_graph at {sg_idx} must precede session_start at {start_idx}"
 
 
-async def test_session_start_then_events_then_session_end(
+async def test_session_start_then_session_end_no_events(
     replay_server: tuple[int, Path, int],
 ) -> None:
-    """Full sequence: session_start comes before any trace_event, session_end is last."""
+    """Seekable mode: session_start is first trace message, session_end is last; no events streamed.
+
+    Phase 7.3 window-only mode: the browser fetches event windows on demand via
+    trace_seek_request.  No individual trace_event messages are sent during replay.
+    """
     port, _root, _n = replay_server
     async with connect(f"ws://127.0.0.1:{port}") as ws:
         msgs = await _recv_all_until_session_end(ws)
@@ -127,22 +135,28 @@ async def test_session_start_then_events_then_session_end(
     types = [m["type"] for m in trace_msgs]
     assert types[0] == "trace_session_start"
     assert types[-1] == "trace_session_end"
-    event_types = types[1:-1]
-    assert all(t == "trace_event" for t in event_types)
+    # In window-only seekable mode no events are streamed — the middle is empty.
+    assert not any(t == "trace_event" for t in types)
 
 
 async def test_event_count_in_session_end_matches(
     replay_server: tuple[int, Path, int],
 ) -> None:
-    """session_end.payload.event_count must equal the number of trace_event messages sent."""
+    """session_end.payload.event_count must equal the total events in the trace file.
+
+    In seekable mode the count comes from the JsonlIndex (no events are streamed),
+    so event_count is the full file total and received trace_event count is 0.
+    """
     port, _root, expected_count = replay_server
     async with connect(f"ws://127.0.0.1:{port}") as ws:
         msgs = await _recv_all_until_session_end(ws)
 
     session_end = next(m for m in msgs if m["type"] == "trace_session_end")
     trace_events = [m for m in msgs if m["type"] == "trace_event"]
+    # event_count in session_end must be the file total (from JsonlIndex).
     assert session_end["payload"]["event_count"] == expected_count
-    assert len(trace_events) == expected_count
+    # No individual events are streamed in seekable window-only mode.
+    assert len(trace_events) == 0
 
 
 async def test_no_pace_completes_fast(free_port: int, tmp_path: Path) -> None:
@@ -278,12 +292,14 @@ async def test_golden_trace_replays_correctly(free_port: int) -> None:
 
         session_end = next(m for m in msgs if m["type"] == "trace_session_end")
         trace_events = [m for m in msgs if m["type"] == "trace_event"]
-        assert session_end["payload"]["event_count"] == len(trace_events)
-        assert len(trace_events) > 0
+        # Seekable window-only mode: event_count > 0 (from index), no events streamed.
+        assert session_end["payload"]["event_count"] > 0
+        assert len(trace_events) == 0
 
-        # All trace_session_start payloads must include source="replay"
+        # trace_session_start must include source="replay" and seekable=true.
         session_start = next(m for m in msgs if m["type"] == "trace_session_start")
         assert session_start["payload"]["source"] == "replay"
+        assert session_start["payload"].get("seekable") is True
     finally:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
