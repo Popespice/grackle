@@ -82,5 +82,10 @@ class JsonlIndex:
             for i in range(start, end):
                 f.seek(self._offsets[i])
                 raw_line = f.readline()
-                events.append(json.loads(raw_line.decode("utf-8")))
+                try:
+                    events.append(json.loads(raw_line.decode("utf-8")))
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    # Skip lines that cannot be parsed — the file may have been
+                    # mutated or truncated after the index was built at startup.
+                    continue
         return events

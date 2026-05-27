@@ -91,4 +91,41 @@ describe("computeHeat", () => {
     );
     expect(overshot.heat).toEqual(full.heat);
   });
+
+  it("windowStart: absolute playhead translated to window-relative position", () => {
+    // Window events are EVENTS (5 events) starting at absolute index 1000.
+    // Absolute playhead 1003 → window-relative 3 → counts events[0..2] = a,b,a.
+    const { heat } = computeHeat(
+      EVENTS,
+      1003,
+      new Set(),
+      "cumulative",
+      200,
+      1000
+    );
+    expect(heat.get("a")).toBe(2); // events[0] and [2]
+    expect(heat.get("b")).toBe(1); // events[1]
+    expect(heat.has("c")).toBe(false); // events[3] not yet reached
+  });
+
+  it("windowStart: playhead at window start returns empty heat", () => {
+    // Absolute playhead equals windowStart → window-relative 0 → no events counted.
+    const { heat, maxHeat } = computeHeat(
+      EVENTS,
+      500,
+      new Set(),
+      "cumulative",
+      200,
+      500
+    );
+    expect(heat.size).toBe(0);
+    expect(maxHeat).toBe(0);
+  });
+
+  it("windowStart=0 (default) behaves identically to omitting the argument", () => {
+    const withDefault = computeHeat(EVENTS, 5, new Set(), "cumulative", 200, 0);
+    const withoutArg = computeHeat(EVENTS, 5, new Set(), "cumulative", 200);
+    expect(withDefault.heat).toEqual(withoutArg.heat);
+    expect(withDefault.maxHeat).toEqual(withoutArg.maxHeat);
+  });
 });

@@ -21,6 +21,8 @@ const _sep = (
 export function StatsPanel(): JSX.Element | null {
   const graph = useGraphStore((s) => s.graph);
   const traceEvents = useGraphStore((s) => s.traceEvents);
+  const traceSeekable = useGraphStore((s) => s.traceSeekable);
+  const traceTotal = useGraphStore((s) => s.traceTotal);
   const kinds = useAnalysis<KindCount[]>("count-by-kind");
   const top = useAnalysis<DegreeEntry[]>("top-in-degree");
   const orphanList = useAnalysis<GraphNode[]>("orphans");
@@ -156,7 +158,7 @@ export function StatsPanel(): JSX.Element | null {
           <span>
             <span style={{ color: "var(--color-text-subtle)" }}>Runtime: </span>
             <span style={{ color: "var(--color-text)" }}>
-              {traceEvents.length}
+              {traceSeekable ? traceTotal : traceEvents.length}
             </span>
             <span style={{ color: "var(--color-text-subtle)" }}>
               {" "}

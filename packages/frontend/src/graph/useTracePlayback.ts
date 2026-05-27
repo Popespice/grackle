@@ -18,6 +18,12 @@ const EVENTS_PER_MS = 0.05; // 50 events/s at 1×
  * - The effect depends only on `[tracePlaying]` — it is not restarted on every
  *   playhead advance, avoiding drift from effect re-scheduling.
  *
+ * **Seekable mode:** in seekable mode the playhead is an absolute index
+ * (0..traceTotal).  The playback loop uses ``traceTotal`` as the stop bound so
+ * it advances through the full trace rather than stopping at the end of the
+ * current in-memory window.  The window itself is updated by scrubber seek
+ * requests — playback and windowing are independent concerns.
+ *
  * **jsdom guard:** `requestAnimationFrame` is not available in jsdom; tests that
  * exercise the loop should `vi.stubGlobal("requestAnimationFrame", ...)`.
  */
@@ -38,6 +44,8 @@ export function useTracePlayback(): void {
         tracePlaybackSpeed,
         traceEvents,
         tracePlayhead,
+        traceSeekable,
+        traceTotal,
         setPlayhead,
         pause,
       } = useGraphStore.getState();
@@ -54,8 +62,13 @@ export function useTracePlayback(): void {
       );
       const next = tracePlayhead + advance;
 
-      if (next >= traceEvents.length) {
-        setPlayhead(traceEvents.length);
+      // In seekable mode the playhead is absolute (0..traceTotal); use the
+      // full-trace total as the stop condition.  In buffered mode stop at the
+      // end of the in-memory window.
+      const bound = traceSeekable ? traceTotal : traceEvents.length;
+
+      if (next >= bound) {
+        setPlayhead(bound);
         pause();
         return;
       }

@@ -23,7 +23,8 @@ interface GraphStoreState {
   traceSessionId: string | null;
   traceSessionComplete: boolean;
   // Playback state (Phase 6.3+)
-  tracePlayhead: number; // index into traceEvents, 0..N
+  /** Absolute index into the trace (0..traceTotal in seekable mode, 0..traceEvents.length otherwise). */
+  tracePlayhead: number;
   tracePlaying: boolean;
   tracePlaybackSpeed: number; // multiplier: 1, 2, 4, …
   traceEventTypeFilter: Set<string>; // empty = all event kinds count
@@ -54,10 +55,16 @@ interface GraphStoreState {
    * Replace the current event window with a seek result (seekable sessions).
    *
    * Sets ``traceWindowStart``, ``traceTotal``, and ``traceEvents`` to the
-   * window returned by a ``trace_window`` response.  ``tracePlayhead`` is
-   * clamped to ``[0, events.length]`` so it stays within the new window.
+   * window returned by a ``trace_window`` response.  ``tracePlayhead`` is an
+   * absolute index (0..traceTotal) and is preserved; it is only clamped down
+   * to ``total`` if it somehow exceeds the total event count.
    */
   setTraceWindow: (start: number, events: TraceEvent[], total: number) => void;
+  /**
+   * Directly set ``traceSeekable``.  Used to fall back to non-seekable mode
+   * if the initial seek request fails at session start.
+   */
+  setTraceSeekable: (seekable: boolean) => void;
   // Playback actions
   setPlayhead: (i: number) => void;
   play: () => void;
@@ -129,23 +136,38 @@ export const useGraphStore = create<GraphStoreState>()((set) => ({
       traceWindowStart: start,
       traceEvents: events,
       traceTotal: total,
-      // Clamp playhead into the new window
-      tracePlayhead: Math.max(0, Math.min(state.tracePlayhead, events.length)),
+      // Preserve the absolute playhead — only clamp it down to total if it
+      // somehow exceeds the new total (e.g. server trace was truncated).
+      // Do NOT clamp to events.length (the window size) — the playhead is an
+      // absolute position in the full trace, not an index into the window.
+      tracePlayhead: Math.min(state.tracePlayhead, total),
     })),
+  setTraceSeekable: (seekable) => set({ traceSeekable: seekable }),
   setPlayhead: (i) =>
     set((state) => ({
-      tracePlayhead: Math.max(0, Math.min(i, state.traceEvents.length)),
+      // In seekable mode the scrubber represents the full trace; clamp to
+      // traceTotal.  In buffered mode clamp to the accumulated event count.
+      tracePlayhead: Math.max(
+        0,
+        Math.min(
+          i,
+          state.traceSeekable ? state.traceTotal : state.traceEvents.length
+        )
+      ),
       tracePlaying: false,
     })),
   play: () =>
-    set((state) => ({
-      // Rewind to 0 if already at the end
-      tracePlayhead:
-        state.tracePlayhead >= state.traceEvents.length
-          ? 0
-          : state.tracePlayhead,
-      tracePlaying: true,
-    })),
+    set((state) => {
+      // In seekable mode, "at the end" means the playhead is at or past
+      // the full trace total; in buffered mode it means past the window.
+      const bound = state.traceSeekable
+        ? state.traceTotal
+        : state.traceEvents.length;
+      return {
+        tracePlayhead: state.tracePlayhead >= bound ? 0 : state.tracePlayhead,
+        tracePlaying: true,
+      };
+    }),
   pause: () => set({ tracePlaying: false }),
   setSpeed: (speed) => set({ tracePlaybackSpeed: speed }),
   toggleEventType: (kind) =>

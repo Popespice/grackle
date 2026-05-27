@@ -302,6 +302,59 @@ async def test_seek_error_echoes_request_id(
 # ---------------------------------------------------------------------------
 
 
+async def test_seek_start_index_echoed_is_clamped(
+    live_server_with_trace: tuple[int, Path],
+) -> None:
+    """trace_window.start_index must be the clamped value, not the raw client value.
+
+    Sending start_index=-5 should be clamped to 0; the response must echo 0.
+    """
+    port, _ = live_server_with_trace
+    async with connect(f"ws://127.0.0.1:{port}") as ws:
+        session_msg = await _recv_until(ws, "trace_session_start")
+        sid = session_msg["payload"]["session_id"]
+
+        reply = await _send_seek(ws, sid, -5, 3)
+        assert reply["type"] == "trace_window"
+        # Clamped start must be reported, not -5.
+        assert reply["payload"]["start_index"] == 0
+        assert len(reply["payload"]["events"]) == 3
+
+
+async def test_seek_count_capped_at_server_limit(
+    live_server_with_trace: tuple[int, Path],
+) -> None:
+    """count > _MAX_SEEK_COUNT must be silently capped; response is still trace_window."""
+    port, _ = live_server_with_trace
+    async with connect(f"ws://127.0.0.1:{port}") as ws:
+        session_msg = await _recv_until(ws, "trace_session_start")
+        sid = session_msg["payload"]["session_id"]
+
+        # Our trace has 10 events.  Requesting 2^20 should be capped and return
+        # only the available 10 events (10 < _MAX_SEEK_COUNT).
+        reply = await _send_seek(ws, sid, 0, 2**20)
+        assert reply["type"] == "trace_window"
+        # Should return all 10 events (still less than the cap).
+        assert len(reply["payload"]["events"]) == 10
+
+
+async def test_seekable_session_sends_no_trace_events(
+    live_server_with_trace: tuple[int, Path],
+) -> None:
+    """In window-only seekable mode, the server must not stream trace_event messages.
+
+    The browser fetches windows on demand; streaming all events concurrently
+    would cause a double-writer race on the traceEvents store.
+    """
+    port, _ = live_server_with_trace
+    async with connect(f"ws://127.0.0.1:{port}") as ws:
+        # Collect messages until trace_session_end arrives.
+        session_end_msg = await _recv_until(ws, "trace_session_end", timeout=5.0)
+        # session_end.event_count should reflect the full trace (10 events)
+        # even though no trace_event messages were streamed.
+        assert session_end_msg["payload"]["event_count"] == 10
+
+
 async def test_live_mode_seek_returns_error(free_port: int, tmp_path: Path) -> None:
     """In live-attach mode (no --trace-source), seek requests return trace_seek_error."""
     task = asyncio.create_task(serve("127.0.0.1", free_port, root=tmp_path))

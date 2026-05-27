@@ -56,9 +56,16 @@ def read_jsonl(path: Path) -> list[TraceEvent]:
 
     Blank lines are skipped. Raises ``json.JSONDecodeError`` if a non-blank
     line is not valid JSON.
+
+    Uses ``str.split("\\n")`` rather than ``str.splitlines()`` to match the
+    binary-``\\n`` line splitting in ``JsonlIndex.build``.  Both treat only
+    the ASCII newline (U+000A) as a line boundary.  With ``ensure_ascii=False``
+    in ``write_jsonl``, JSON values may embed U+0085 / U+2028 / U+2029 as raw
+    characters; ``splitlines()`` would incorrectly treat those as additional
+    line boundaries and break JSON parsing of the affected lines.
     """
     events: list[TraceEvent] = []
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
+    for raw_line in path.read_text(encoding="utf-8").split("\n"):
         line = raw_line.strip()
         if not line:
             continue

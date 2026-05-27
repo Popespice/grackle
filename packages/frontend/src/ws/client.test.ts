@@ -414,6 +414,35 @@ describe("useGrackleClient", () => {
     );
   });
 
+  it("_pendingTraceWindow is cleared when a new trace_session_start arrives", async () => {
+    const { connect, requestTraceWindow } = useGrackleClient.getState();
+    connect("ws://127.0.0.1:7878");
+    mockWs.simulateOpen();
+
+    // Issue a seek request — it will be left pending (no reply).
+    const promise = requestTraceWindow("session-old", 0, 5);
+
+    // Simulate a new session start — must discard the pending request.
+    mockWs.simulateMessage(
+      JSON.stringify({
+        id: "new-ss",
+        type: "trace_session_start",
+        payload: {
+          session_id: "session-new",
+          started_ns: 1000,
+          source: "replay",
+        },
+      })
+    );
+
+    // The map should now be empty.
+    expect(useGrackleClient.getState()._pendingTraceWindow.size).toBe(0);
+
+    // The pending promise must never resolve (it will timeout eventually).
+    // We just confirm the map is clean — suppress the unhandled rejection.
+    promise.catch(() => undefined);
+  });
+
   it("late events from a stale socket are ignored (StrictMode guard)", () => {
     const { connect } = useGrackleClient.getState();
 

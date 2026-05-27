@@ -67,8 +67,16 @@ export function TimelinePanel(): JSX.Element | null {
   const setHeatMode = useGraphStore((s) => s.setHeatMode);
   const setWindowSize = useGraphStore((s) => s.setWindowSize);
   const setTraceWindow = useGraphStore((s) => s.setTraceWindow);
+  const setTraceSeekable = useGraphStore((s) => s.setTraceSeekable);
 
   const requestTraceWindow = useGrackleClient((s) => s.requestTraceWindow);
+
+  // Keep a ref of traceWindowSize so the initial-fetch effect can read the
+  // current value without including it in the dependency array (changing the
+  // window size control should not re-fire the initial fetch and jump back to
+  // the beginning of the trace).
+  const traceWindowSizeRef = useRef(traceWindowSize);
+  traceWindowSizeRef.current = traceWindowSize;
 
   // Debounced seek: when the scrubber changes in seekable mode, fire a
   // trace_seek_request after 150 ms of idle time.  The ref holds the pending
@@ -82,9 +90,10 @@ export function TimelinePanel(): JSX.Element | null {
       if (seekTimerRef.current !== null) clearTimeout(seekTimerRef.current);
       seekTimerRef.current = setTimeout(() => {
         seekTimerRef.current = null;
-        const halfWindow = Math.floor(traceWindowSize / 2);
+        const windowSize = traceWindowSizeRef.current;
+        const halfWindow = Math.floor(windowSize / 2);
         const start = Math.max(0, position - halfWindow);
-        requestTraceWindow(traceSessionId, start, traceWindowSize)
+        requestTraceWindow(traceSessionId, start, windowSize)
           .then((msg) => {
             setTraceWindow(
               msg.payload.start_index,
@@ -93,7 +102,7 @@ export function TimelinePanel(): JSX.Element | null {
             );
           })
           .catch(() => {
-            // Seek error is non-fatal — the buffered stream is still active.
+            // Seek error is non-fatal — the scrubber retains its current position.
           });
       }, 150);
     },
@@ -101,7 +110,6 @@ export function TimelinePanel(): JSX.Element | null {
       setPlayhead,
       traceSeekable,
       traceSessionId,
-      traceWindowSize,
       requestTraceWindow,
       setTraceWindow,
     ]
@@ -109,9 +117,13 @@ export function TimelinePanel(): JSX.Element | null {
 
   // On session start with seekable=true, auto-fetch the initial window to
   // populate traceTotal for scrubber sizing.
+  // NOTE: traceWindowSize is intentionally NOT in the dependency array.
+  // Including it would re-fire this effect every time the user edits the
+  // sliding-window size control, resetting the scrubber position to 0.
+  // The ref above captures the current value at fire time.
   useEffect(() => {
     if (!traceSeekable || traceSessionId === null) return;
-    requestTraceWindow(traceSessionId, 0, traceWindowSize)
+    requestTraceWindow(traceSessionId, 0, traceWindowSizeRef.current)
       .then((msg) => {
         setTraceWindow(
           msg.payload.start_index,
@@ -120,14 +132,17 @@ export function TimelinePanel(): JSX.Element | null {
         );
       })
       .catch(() => {
-        // Seek error on initial load — non-fatal, buffered stream still active.
+        // Initial seek failed — fall back to non-seekable (buffered) mode so
+        // the scrubber does not freeze at 0 with an unknown total.
+        setTraceSeekable(false);
       });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     traceSeekable,
     traceSessionId,
-    traceWindowSize,
     requestTraceWindow,
     setTraceWindow,
+    setTraceSeekable,
   ]);
 
   // Cancel any pending debounce timer on unmount.

@@ -27,6 +27,10 @@ _MAX_SOURCE_BYTES = 1 * 1024 * 1024  # 1 MiB
 # bounded even for traces with large idle gaps between calls.
 _MAX_GAP_S = 0.25
 _DEFAULT_BUFFER_SECONDS = 60.0
+# Maximum events returned per trace_seek_request.  Bounds per-request I/O and
+# prevents a single malicious/buggy client from issuing a count=2**31 seek that
+# reads the whole file synchronously on the event loop.
+_MAX_SEEK_COUNT = 1000
 
 
 def _trace_buffer_seconds() -> float:
@@ -263,10 +267,26 @@ async def _receive_loop(
                     )
                 )
                 continue
-            events = trace_index.read_window(start_raw, count_raw)
+            # Cap count to bound per-request I/O.  Compute clamped start here
+            # (mirrors read_window's own clamping) so the response payload
+            # echoes the actual start index rather than the raw unclamped value.
+            count_capped = min(max(0, count_raw), _MAX_SEEK_COUNT)
+            total = len(trace_index)
+            clamped_start = max(0, min(start_raw, total))
+            try:
+                loop = asyncio.get_running_loop()
+                seek_events: list[TraceEvent] = await loop.run_in_executor(
+                    None, trace_index.read_window, start_raw, count_capped
+                )
+            except Exception as exc:
+                log.warning("trace seek: read_window failed", error=str(exc))
+                await ws.send(
+                    protocol.make_trace_seek_error(envelope["id"], seek_sid, "read error")
+                )
+                continue
             await ws.send(
                 protocol.make_trace_window(
-                    envelope["id"], seek_sid, start_raw, events, len(trace_index)
+                    envelope["id"], seek_sid, clamped_start, seek_events, total
                 )
             )
         elif etype in ("trace_session_start", "trace_event", "trace_session_end"):
@@ -288,6 +308,7 @@ async def _replay_trace(
     session_id: str,
     *,
     seekable: bool = False,
+    total_events: int = 0,
 ) -> None:
     """Stream a trace file to one connection as a session_start / events / session_end sequence.
 
@@ -295,14 +316,35 @@ async def _replay_trace(
     clamped to ``_MAX_GAP_S`` so long idle stretches don't stall the replay.
     ``pace=False`` pushes all events as fast as the network allows (for tests).
 
-    When ``seekable=True`` the ``trace_session_start`` payload includes
-    ``seekable: true`` so the browser knows it may send ``trace_seek_request``
-    messages.  The stable ``session_id`` (same across all connections in
-    file-replay mode) is echoed in seek responses.
+    When ``seekable=True`` the replay runs in **window-only mode**: only the
+    ``trace_session_start`` and ``trace_session_end`` markers are sent — no
+    individual ``trace_event`` messages are streamed.  The browser fetches
+    event windows on demand via ``trace_seek_request``.  ``total_events``
+    must be ``len(file_index)`` from the caller so the session_end payload
+    reports the correct count without a second full-file scan.
+
+    When ``seekable=False`` (default) all events are streamed as before.
 
     Load or parse failure → logs a warning, emits an empty session
     (event_count=0), then returns.  The server continues running.
     """
+    started_ns = time.monotonic_ns()
+    try:
+        await ws.send(protocol.make_trace_session_start(session_id, started_ns, seekable=seekable))
+    except websockets.exceptions.ConnectionClosed:
+        return
+
+    if seekable:
+        # Window-only mode: no event stream.  The browser uses trace_seek_request
+        # to fetch event windows.  total_events is pre-computed from the
+        # JsonlIndex so the file is not scanned a second time here.
+        with contextlib.suppress(websockets.exceptions.ConnectionClosed):
+            await ws.send(
+                protocol.make_trace_session_end(session_id, time.monotonic_ns(), total_events)
+            )
+        return
+
+    # Non-seekable streaming path: load the full trace and stream every event.
     from grackle.python_runtime.writer import read_jsonl
 
     events: list[TraceEvent]
@@ -311,12 +353,6 @@ async def _replay_trace(
     except Exception as exc:
         log.warning("trace replay: failed to load", path=str(trace_source), error=str(exc))
         events = []
-
-    started_ns = time.monotonic_ns()
-    try:
-        await ws.send(protocol.make_trace_session_start(session_id, started_ns, seekable=seekable))
-    except websockets.exceptions.ConnectionClosed:
-        return
 
     prev_ts_ns: int | None = None
     for event in events:
@@ -429,6 +465,8 @@ async def serve(
             # File-replay task (one per connection, independent of live ingest).
             # Uses the stable file_session_id and advertises seekable=True so
             # the browser can send trace_seek_request messages.
+            # total_events is pre-computed from the index so _replay_trace does
+            # not need to scan the file a second time in seekable mode.
             if trace_source is not None:
                 assert file_session_id is not None  # set above when trace_source is set
                 replay_task: asyncio.Task[None] = asyncio.create_task(
@@ -438,6 +476,7 @@ async def serve(
                         pace,
                         file_session_id,
                         seekable=file_index is not None,
+                        total_events=len(file_index) if file_index is not None else 0,
                     )
                 )
                 tasks.append(replay_task)

@@ -108,6 +108,12 @@ export const useGrackleClient = create<GrackleClientState>()((set, get) => ({
             resolver(envelope as SourceReply);
           }
         } else if (envelope.type === "trace_session_start") {
+          // Discard pending seek requests from the prior session before the
+          // new session starts.  A stale trace_window reply arriving after the
+          // session restart could otherwise match a new session's pending
+          // entry (same envelope id is astronomically unlikely, but the map
+          // should be empty between sessions on principle).
+          get()._pendingTraceWindow.clear();
           const msg = envelope as unknown as TraceSessionStartMessage;
           get()._traceSessionStartHandlers.forEach((h) => {
             h(msg);
