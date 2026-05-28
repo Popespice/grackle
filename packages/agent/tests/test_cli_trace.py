@@ -5,10 +5,13 @@ Covers:
 - ``--max-events`` rejects non-positive values (I3)
 - SCRIPT outside ``--root`` is rejected with a clear error (I5)
 - ``--max-events`` cap is propagated to the tracer
+- Phase 8.1: ``--stream + --output`` tee mode
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 from typing import TYPE_CHECKING
 
@@ -166,28 +169,6 @@ def test_trace_stream_without_connect_rejected(tmp_path: Path) -> None:
     assert "--connect" in result.output or "connect" in result.output.lower()
 
 
-def test_trace_stream_with_output_rejected(tmp_path: Path) -> None:
-    """``--stream`` combined with ``--output`` must fail with a UsageError."""
-    script = _write_simple_script(tmp_path)
-    out = tmp_path / "trace.jsonl"
-    result = CliRunner().invoke(
-        main,
-        [
-            "trace",
-            str(script),
-            "--root",
-            str(tmp_path),
-            "--stream",
-            "--connect",
-            "ws://127.0.0.1:7878",
-            "--output",
-            str(out),
-        ],
-    )
-    assert result.exit_code != 0
-    assert "--output" in result.output or "incompatible" in result.output.lower()
-
-
 def test_trace_no_pace_does_not_error_with_stream(tmp_path: Path) -> None:
     """``--stream --no-pace`` must not cause a usage error (--no-pace is a no-op)."""
     # We don't connect for real; just verify validation passes (will fail on connect).
@@ -229,3 +210,131 @@ def test_trace_stream_connect_failure_surfaces_clean_error(tmp_path: Path) -> No
     # Must not be an unhandled exception (no traceback in output).
     assert "Traceback" not in result.output
     assert "Error" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Phase 8.1 — --stream + --output tee mode
+# ---------------------------------------------------------------------------
+
+
+def test_trace_stream_with_output_accepted(tmp_path: Path) -> None:
+    """``--stream + --output`` is now valid; previously rejected, now a tee.
+
+    Uses an unreachable server so the test validates argument acceptance,
+    not a live connection.  The failure must come from the connection
+    attempt, not from a UsageError about --output.
+    """
+    script = _write_simple_script(tmp_path)
+    out = tmp_path / "trace.jsonl"
+    result = CliRunner().invoke(
+        main,
+        [
+            "trace",
+            str(script),
+            "--root",
+            str(tmp_path),
+            "--stream",
+            "--connect",
+            "ws://127.0.0.1:1",
+            "--output",
+            str(out),
+        ],
+    )
+    # Must fail on connection, not on --output argument validation.
+    assert result.exit_code != 0
+    assert "incompatible" not in result.output.lower()
+    assert "Traceback" not in result.output
+
+
+async def test_trace_stream_tee_writes_file(free_port: int, tmp_path: Path) -> None:
+    """``--stream + --output`` writes a JSONL file and streams to server simultaneously.
+
+    Verifies:
+    - exit code 0
+    - output file exists with valid JSONL events
+    - server received ``trace_session_start`` and ``trace_session_end``
+    - file event count equals events actually streamed
+    """
+    import json as _json
+
+    from websockets.asyncio.client import connect as _ws_connect
+
+    from grackle.server import serve as _serve
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    script = _write_simple_script(root)
+    out = tmp_path / "tee.jsonl"
+    url = f"ws://127.0.0.1:{free_port}"
+
+    # Start server in live-attach mode.
+    server_task = asyncio.create_task(_serve("127.0.0.1", free_port, root=root))
+    await asyncio.sleep(0.05)
+
+    # Consumer collects all trace messages until session_end.
+    received: list[dict[str, object]] = []
+    consumer_done = asyncio.Event()
+
+    async def _consume() -> None:
+        async with _ws_connect(url) as ws:
+            await ws.send(_json.dumps({"id": "ping0", "type": "ping", "payload": {}}))
+            async for raw in ws:
+                msg = _json.loads(raw)
+                received.append(msg)
+                if msg["type"] == "trace_session_end":
+                    consumer_done.set()
+                    break
+
+    consumer_task = asyncio.create_task(_consume())
+    await asyncio.sleep(0.05)  # let consumer connect before CLI starts
+
+    # Run CLI in a thread (CliRunner.invoke is synchronous).
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None,
+        lambda: CliRunner().invoke(
+            main,
+            [
+                "trace",
+                str(script),
+                "--root",
+                str(root),
+                "--stream",
+                "--connect",
+                url,
+                "--output",
+                str(out),
+            ],
+        ),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "wrote" in result.output
+    assert "streamed" in result.output
+
+    # File must exist with valid events.
+    assert out.exists()
+    file_lines = out.read_text(encoding="utf-8").splitlines()
+    assert len(file_lines) > 0
+    for raw in file_lines:
+        e = _json.loads(raw)
+        assert "event" in e
+        assert "node_id" in e
+
+    # Wait for consumer to receive session_end (or time out).
+    await asyncio.wait_for(consumer_done.wait(), timeout=5.0)
+
+    types = [m["type"] for m in received]
+    assert "trace_session_start" in types
+    assert "trace_session_end" in types
+
+    # File event count must equal the events the server received.
+    streamed_count = sum(1 for m in received if m["type"] == "trace_event")
+    assert len(file_lines) == streamed_count
+
+    server_task.cancel()
+    consumer_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await server_task
+    with contextlib.suppress(asyncio.CancelledError):
+        await consumer_task
