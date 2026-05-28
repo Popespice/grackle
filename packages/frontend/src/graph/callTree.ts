@@ -109,8 +109,10 @@ export function frameLabel(nodeId: string): string {
 interface ThreadState {
   stack: CallFrame[];
   roots: CallFrame[];
-  /** ts_ns of the most recent event seen on this thread (stream-end fallback). */
-  lastNs: number;
+  /** Running max ts_ns seen on this thread — the stream-end close stamp. A
+   *  running max (not the last raw ts) keeps a parent's end >= its children's
+   *  even if an imported stream has out-of-order timestamps. */
+  maxNs: number;
 }
 
 function makeFrame(ev: TraceEvent): CallFrame {
@@ -187,11 +189,11 @@ export function buildCallTree(events: TraceEvent[]): CallTree {
 
     let state = threadStates.get(ev.thread_id);
     if (!state) {
-      state = { stack: [], roots: [], lastNs: ev.ts_ns };
+      state = { stack: [], roots: [], maxNs: ev.ts_ns };
       threadStates.set(ev.thread_id, state);
       threads.push(ev.thread_id);
     }
-    state.lastNs = ev.ts_ns;
+    if (ev.ts_ns > state.maxNs) state.maxNs = ev.ts_ns;
 
     if (ev.event === "call") {
       // Anything open at depth >= d unwound silently (exception) — close it.
@@ -244,7 +246,7 @@ export function buildCallTree(events: TraceEvent[]): CallTree {
   for (const tid of threads) {
     const state = threadStates.get(tid);
     if (!state) continue;
-    if (closeFramesAtOrAbove(state, 0, state.lastNs) > 0) hadSynthetic = true;
+    if (closeFramesAtOrAbove(state, 0, state.maxNs) > 0) hadSynthetic = true;
     for (const root of state.roots) {
       finalizeTimings(root);
       roots.push(root);
@@ -273,7 +275,29 @@ function hasSyntheticFrame(frame: CallFrame): boolean {
  * only *siblings* merge, never ancestors into descendants.
  */
 export function aggregateCallTree(roots: CallFrame[]): CallFrame[] {
-  return aggregateSiblings(roots);
+  // Aggregate WITHIN each thread, never across threads: independent per-thread
+  // root stacks have no shared parent, so two threads rooted at the same
+  // node_id must stay separate "side-by-side" stacks (ADR-0019) rather than
+  // merging into one bar with summed concurrent wall-time. Children always
+  // share their frame's thread, so the recursive sibling merge below is
+  // already thread-safe one level down.
+  const byThread = new Map<number, CallFrame[]>();
+  const order: number[] = [];
+  for (const r of roots) {
+    let g = byThread.get(r.threadId);
+    if (!g) {
+      g = [];
+      byThread.set(r.threadId, g);
+      order.push(r.threadId);
+    }
+    g.push(r);
+  }
+  const out: CallFrame[] = [];
+  for (const tid of order) {
+    const threadRoots = byThread.get(tid);
+    if (threadRoots) out.push(...aggregateSiblings(threadRoots));
+  }
+  return out;
 }
 
 function aggregateSiblings(frames: CallFrame[]): CallFrame[] {

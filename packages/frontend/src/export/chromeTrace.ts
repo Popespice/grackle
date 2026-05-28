@@ -110,6 +110,23 @@ export function exportChromeTrace(tree: CallTree): ChromeTraceFile {
  */
 export function parseChromeTrace(file: ChromeTraceFile): TraceEvent[] {
   const raw = file.traceEvents ?? [];
+
+  // chrome://tracing nesting is keyed on (pid, tid), not tid alone. When the
+  // file spans multiple processes, fold pid into the thread key so a tid reused
+  // across processes is not conflated into one stack; with a single process
+  // (incl. grackle's own pid:1 exports) the key stays the bare tid so
+  // round-trips and the reconstructed thread ids are unchanged.
+  const pids = new Set<number>();
+  for (const e of raw) pids.add(e.pid ?? 0);
+  const multiProcess = pids.size > 1;
+  const threadKey = (e: ChromeTraceEvent): number =>
+    multiProcess ? (e.pid ?? 0) * 1_000_000 + (e.tid ?? 0) : (e.tid ?? 0);
+  // Numbers may arrive as JSON strings from a foreign exporter; coerce defensively.
+  const num = (v: unknown): number => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+
   const byTid = new Map<number, Interval[]>();
   const beStacks = new Map<number, { name: string; start: number }[]>();
   const pushInterval = (tid: number, iv: Interval): void => {
@@ -119,24 +136,24 @@ export function parseChromeTrace(file: ChromeTraceFile): TraceEvent[] {
   };
 
   for (const e of raw) {
-    const tid = e.tid ?? 0;
+    const tid = threadKey(e);
     if (e.ph === "X") {
-      const start = e.ts ?? 0;
+      const start = num(e.ts);
       pushInterval(tid, {
         start,
-        end: start + (e.dur ?? 0),
+        end: start + num(e.dur),
         name: e.name ?? "<unresolved>",
       });
     } else if (e.ph === "B") {
       const s = beStacks.get(tid) ?? [];
-      s.push({ name: e.name ?? "<unresolved>", start: e.ts ?? 0 });
+      s.push({ name: e.name ?? "<unresolved>", start: num(e.ts) });
       beStacks.set(tid, s);
     } else if (e.ph === "E") {
       const open = beStacks.get(tid)?.pop();
       if (open) {
         pushInterval(tid, {
           start: open.start,
-          end: e.ts ?? 0,
+          end: num(e.ts),
           name: open.name,
         });
       }

@@ -112,8 +112,10 @@ function triggerDownload(filename: string, data: unknown): void {
 export function FlameGraphPanel(): JSX.Element | null {
   // ── ALL HOOKS FIRST (ADR-0007) ──────────────────────────────────────────
   const traceSessionId = useGraphStore((s) => s.traceSessionId);
+  const traceSessionComplete = useGraphStore((s) => s.traceSessionComplete);
   const storeEvents = useGraphStore((s) => s.traceEvents);
   const selectedNodeId = useGraphStore((s) => s.selectedNodeId);
+  const graph = useGraphStore((s) => s.graph);
   const traceSeekable = useGraphStore((s) => s.traceSeekable);
   const traceTotal = useGraphStore((s) => s.traceTotal);
   const selectNode = useGraphStore((s) => s.selectNode);
@@ -140,6 +142,14 @@ export function FlameGraphPanel(): JSX.Element | null {
   const [error, setError] = useState<string | null>(null);
 
   const { tree, aggregated, hot } = useCallTree(fullEvents);
+
+  // Set of static-graph node ids, so click-to-focus only selects a node that
+  // actually exists in the graph (an unresolved/imported frame would otherwise
+  // dim the whole Sigma view to grey with nothing highlighted).
+  const graphNodeIds = useMemo(
+    () => new Set(graph?.nodes.map((n) => n.id) ?? []),
+    [graph]
+  );
 
   const rects = useMemo(
     () =>
@@ -190,7 +200,9 @@ export function FlameGraphPanel(): JSX.Element | null {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, canvasHeight);
     ctx.textBaseline = "middle";
-    ctx.font = "11px var(--font-mono), monospace";
+    // Literal font stack — the 2D context can't resolve CSS var(); a var() here
+    // is silently ignored and labels fall back to the default 10px sans.
+    ctx.font = '11px ui-monospace, "SF Mono", Menlo, Consolas, monospace';
     const hotActive = hot.size > 0;
 
     for (const r of rects) {
@@ -221,14 +233,17 @@ export function FlameGraphPanel(): JSX.Element | null {
       if (!canvas) return;
       const box = canvas.getBoundingClientRect();
       const hitRect = hitTest(rects, e.clientX - box.left, e.clientY - box.top);
-      if (hitRect) {
-        // Clear any active multi-node highlight so the selection is visible
-        // (highlight takes colour precedence over selection — see GraphCanvas).
-        setHighlightedNodes(null);
-        selectNode(hitRect.frame.nodeId);
-      }
+      if (!hitRect) return;
+      // Only focus a frame that maps to a real static-graph node. An
+      // unresolved/imported frame id isn't in the graph; selecting it would dim
+      // every node to grey with nothing highlighted (GraphCanvas's reducer).
+      if (!graphNodeIds.has(hitRect.frame.nodeId)) return;
+      // Clear any active multi-node highlight so the selection is visible
+      // (highlight takes colour precedence over selection — see GraphCanvas).
+      setHighlightedNodes(null);
+      selectNode(hitRect.frame.nodeId);
     },
-    [rects, selectNode, setHighlightedNodes]
+    [rects, selectNode, setHighlightedNodes, graphNodeIds]
   );
 
   const onCanvasMove = useCallback(
@@ -296,6 +311,14 @@ export function FlameGraphPanel(): JSX.Element | null {
   const windowed =
     traceSeekable && fullEvents === null && storeEvents.length < traceTotal;
   const empty = aggregated.length === 0;
+  // Exporting a windowed (partial) reconstruction would silently produce a
+  // file that looks complete — require "Load full trace" first.
+  const canExport = !empty && !windowed;
+  // A buffered session that is still streaming keeps appending live events into
+  // the store; importing over it would mix the live and imported traces. Allow
+  // import only when idle: no session, a finished session, or a seekable replay.
+  const liveStreaming =
+    traceSessionId !== null && !traceSessionComplete && !traceSeekable;
 
   return (
     <section aria-label="Flame graph" style={PANEL_STYLE}>
@@ -342,7 +365,10 @@ export function FlameGraphPanel(): JSX.Element | null {
               exportSpeedscope(tree)
             )
           }
-          disabled={empty}
+          disabled={!canExport}
+          title={
+            windowed ? "Load the full trace first to export the whole run" : ""
+          }
           style={BUTTON_STYLE}
         >
           ↓ speedscope
@@ -355,7 +381,10 @@ export function FlameGraphPanel(): JSX.Element | null {
               exportChromeTrace(tree)
             )
           }
-          disabled={empty}
+          disabled={!canExport}
+          title={
+            windowed ? "Load the full trace first to export the whole run" : ""
+          }
           style={BUTTON_STYLE}
         >
           ↓ Chrome trace
@@ -363,6 +392,10 @@ export function FlameGraphPanel(): JSX.Element | null {
         <button
           type="button"
           onClick={() => fileInputRef.current?.click()}
+          disabled={liveStreaming}
+          title={
+            liveStreaming ? "Finish the live session before importing" : ""
+          }
           style={BUTTON_STYLE}
         >
           ↑ Import

@@ -207,6 +207,38 @@ describe("exportChromeTrace", () => {
     expect(tree.roots[0]?.children[0]?.nodeId).toBe("c");
   });
 
+  it("does not conflate processes that reuse a tid (multi-process trace)", () => {
+    // pid 1 and pid 2 both use tid 1; they must NOT nest into one stack.
+    const tree = importChromeTraceTree({
+      displayTimeUnit: "ns",
+      traceEvents: [
+        { name: "P", cat: "fn", ph: "X", ts: 0, dur: 100, pid: 1, tid: 1 },
+        { name: "C", cat: "fn", ph: "X", ts: 10, dur: 5, pid: 2, tid: 1 },
+      ],
+    });
+    expect(tree.roots).toHaveLength(2); // one root per process, not P { C }
+    expect(tree.roots.map((r) => r.nodeId).sort()).toEqual(["C", "P"]);
+  });
+
+  it("coerces string timestamps from a foreign exporter", () => {
+    const tree = importChromeTraceTree({
+      displayTimeUnit: "ns",
+      traceEvents: [
+        {
+          name: "x",
+          cat: "fn",
+          ph: "X",
+          ts: "10" as unknown as number,
+          dur: "5" as unknown as number,
+          pid: 1,
+          tid: 1,
+        },
+      ],
+    });
+    expect(tree.roots[0]?.nodeId).toBe("x");
+    expect(tree.roots[0]?.totalNs).toBe(5000); // 5µs → 5000ns, not "105"-style concat
+  });
+
   it("nests mixed complete (X) and begin/end (B/E) events on one thread", () => {
     // An X frame containing a B/E frame must reconstruct as outer { inner } —
     // a single time-ordered tree, not two disjoint phase passes.

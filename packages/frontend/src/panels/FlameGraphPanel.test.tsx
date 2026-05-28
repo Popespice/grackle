@@ -1,4 +1,4 @@
-import type { TraceEvent } from "@grackle/shared-types";
+import type { Graph, TraceEvent } from "@grackle/shared-types";
 import {
   act,
   cleanup,
@@ -49,6 +49,18 @@ const EVENTS: TraceEvent[] = [
   ev("return", "a.py:f", 0, 100),
 ];
 
+// Static graph containing the traced nodes (click-to-focus only selects nodes
+// that exist in the graph).
+const MOCK_GRAPH = {
+  version: "1",
+  language: "python",
+  nodes: [
+    { id: "a.py:f", kind: "function", name: "f", path: "a.py" },
+    { id: "a.py:g", kind: "function", name: "g", path: "a.py" },
+  ],
+  edges: [],
+} as unknown as Graph;
+
 function resetStore(overrides: Record<string, unknown> = {}): void {
   useGraphStore.setState({
     graph: null,
@@ -93,10 +105,10 @@ describe("FlameGraphPanel", () => {
   });
 
   it("selects the clicked frame's node (click-to-focus) and clears highlights", () => {
-    useGraphStore.setState({ highlightedNodeIds: new Set(["x"]) });
     resetStore({
       traceSessionId: "s1",
       traceEvents: EVENTS,
+      graph: MOCK_GRAPH,
       highlightedNodeIds: new Set(["x"]),
     });
     render(<FlameGraphPanel />);
@@ -105,6 +117,27 @@ describe("FlameGraphPanel", () => {
     fireEvent.click(canvas, { clientX: 10, clientY: 4 });
     expect(useGraphStore.getState().selectedNodeId).toBe("a.py:f");
     expect(useGraphStore.getState().highlightedNodeIds).toBeNull();
+  });
+
+  it("does NOT select when the clicked frame is not a static-graph node", () => {
+    // Graph lacks "a.py:f" → clicking it must not dim the whole Sigma view.
+    const partialGraph = {
+      ...MOCK_GRAPH,
+      nodes: [
+        { id: "a.py:other", kind: "function", name: "other", path: "a.py" },
+      ],
+    } as unknown as Graph;
+    resetStore({
+      traceSessionId: "s1",
+      traceEvents: EVENTS,
+      graph: partialGraph,
+    });
+    render(<FlameGraphPanel />);
+    fireEvent.click(screen.getByLabelText("Flame graph canvas"), {
+      clientX: 10,
+      clientY: 4,
+    });
+    expect(useGraphStore.getState().selectedNodeId).toBeNull();
   });
 
   it("flags an approximate reconstruction when frames close implicitly", () => {
@@ -138,7 +171,11 @@ describe("FlameGraphPanel", () => {
     const { container } = render(<FlameGraphPanel />);
     expect(container.firstChild).toBeNull();
     act(() => {
-      useGraphStore.setState({ traceSessionId: "s1", traceEvents: EVENTS });
+      useGraphStore.setState({
+        traceSessionId: "s1",
+        traceEvents: EVENTS,
+        graph: MOCK_GRAPH,
+      });
     });
     const canvas = screen.getByLabelText("Flame graph canvas");
     fireEvent.click(canvas, { clientX: 10, clientY: 4 });
@@ -146,7 +183,11 @@ describe("FlameGraphPanel", () => {
   });
 
   it("exposes export and import controls", () => {
-    resetStore({ traceSessionId: "s1", traceEvents: EVENTS });
+    resetStore({
+      traceSessionId: "s1",
+      traceEvents: EVENTS,
+      traceSessionComplete: true,
+    });
     render(<FlameGraphPanel />);
     expect(
       screen.getByRole("button", { name: /speedscope/ })
@@ -155,5 +196,27 @@ describe("FlameGraphPanel", () => {
       screen.getByRole("button", { name: /Chrome trace/ })
     ).toBeInTheDocument();
     expect(screen.getByLabelText("Import trace file")).toBeInTheDocument();
+  });
+
+  it("disables export while a seekable session is still windowed", () => {
+    resetStore({
+      traceSessionId: "s1",
+      traceEvents: EVENTS,
+      traceSeekable: true,
+      traceTotal: 1000, // window << total → partial
+    });
+    render(<FlameGraphPanel />);
+    expect(screen.getByRole("button", { name: /speedscope/ })).toBeDisabled();
+  });
+
+  it("disables Import while a live session is still streaming", () => {
+    resetStore({
+      traceSessionId: "s1",
+      traceEvents: EVENTS,
+      traceSessionComplete: false, // live, not finished
+      traceSeekable: false,
+    });
+    render(<FlameGraphPanel />);
+    expect(screen.getByRole("button", { name: /Import/ })).toBeDisabled();
   });
 });

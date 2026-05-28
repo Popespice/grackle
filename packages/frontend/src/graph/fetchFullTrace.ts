@@ -53,10 +53,15 @@ export async function fetchFullTrace(
     const batch = msg.payload.events;
     if (batch.length === 0) break;
     for (const e of batch) events.push(e);
-    const next = msg.payload.start_index + batch.length;
-    if (next <= start) break; // no forward progress — bail
-    start = next;
+    // Advance by the index SPAN requested, not by `batch.length`. The server's
+    // read_window covers index slots [start, start+count) even when some lines
+    // in that range fail to parse and are skipped (a short batch); advancing by
+    // the returned event count would re-request — and duplicate — the overlap.
+    start += count;
   }
 
-  return { events, truncated: total > cap };
+  // `events.length < total` is the honest "is this partial?" signal: it is true
+  // both when the cap clipped the trace and when an empty window ended paging
+  // early — never a false "complete" on a short read.
+  return { events, truncated: events.length < total };
 }

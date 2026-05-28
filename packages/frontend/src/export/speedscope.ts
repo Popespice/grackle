@@ -144,17 +144,24 @@ function parseThreadId(name: string, fallback: number): number {
 export function parseSpeedscope(file: SpeedscopeFile): TraceEvent[] {
   const out: TraceEvent[] = [];
   const frames = file.shared?.frames ?? [];
+  // Coerce defensively — a foreign/hand-edited file may carry strings or omit fields.
+  const num = (v: unknown): number => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
   file.profiles?.forEach((profile, index) => {
-    if (profile.type !== "evented") return;
+    if (profile.type !== "evented" || !Array.isArray(profile.events)) return;
     const threadId = parseThreadId(profile.name ?? "", index);
     let depth = 0;
     for (const e of profile.events) {
-      const name = frames[e.frame]?.name ?? "<unresolved>";
+      if (!e) continue;
+      const name = frames[num(e.frame)]?.name ?? "<unresolved>";
+      const at = num(e.at);
       if (e.type === "O") {
         out.push({
           event: "call",
           node_id: name,
-          ts_ns: e.at,
+          ts_ns: at,
           thread_id: threadId,
           frame_depth: depth,
         });
@@ -164,7 +171,7 @@ export function parseSpeedscope(file: SpeedscopeFile): TraceEvent[] {
         out.push({
           event: "return",
           node_id: name,
-          ts_ns: e.at,
+          ts_ns: at,
           thread_id: threadId,
           frame_depth: depth,
         });

@@ -277,6 +277,52 @@ describe("buildCallTree — threads", () => {
     expect(t2?.children).toHaveLength(0);
     assertWellFormed(t.roots);
   });
+
+  it("keeps a parent's end >= its children's even with out-of-order timestamps", () => {
+    // An imported stream with a non-monotonic tail: the child returns LATE
+    // (ts 90) but the parent is left open and closed at stream end. The
+    // running-max stamp must give the parent end >= 90, not the last raw ts.
+    const t = buildCallTree([
+      ev("call", "a.py:f", 0, 0),
+      ev("call", "a.py:g", 1, 10),
+      ev("return", "a.py:g", 1, 90),
+      ev("line", "a.py:f", 0, 20), // out-of-order: a later event with a smaller ts
+    ]);
+    assertWellFormed(t.roots); // would fail if f closed at ts 20 < child end 90
+    expect(t.roots[0]?.endNs).toBeGreaterThanOrEqual(90);
+  });
+});
+
+describe("aggregateCallTree — threads", () => {
+  it("does NOT merge same-node-id roots from different threads", () => {
+    // Two worker threads rooted at the SAME node, 100ns each, concurrently.
+    const t = buildCallTree([
+      ev("call", "a.py:worker", 0, 0, 1),
+      ev("call", "a.py:worker", 0, 0, 2),
+      ev("return", "a.py:worker", 0, 100, 1),
+      ev("return", "a.py:worker", 0, 100, 2),
+    ]);
+    const agg = aggregateCallTree(t.roots);
+    // Must stay TWO side-by-side roots, not one bar with totalNs 200 / count 2.
+    expect(agg).toHaveLength(2);
+    expect(agg[0]?.count).toBe(1);
+    expect(agg[1]?.count).toBe(1);
+    expect(agg.map((f) => f.threadId).sort()).toEqual([1, 2]);
+  });
+
+  it("still merges same-node-id siblings within one thread", () => {
+    const t = buildCallTree([
+      ev("call", "a.py:f", 0, 0, 1),
+      ev("call", "a.py:g", 1, 10, 1),
+      ev("return", "a.py:g", 1, 20, 1),
+      ev("call", "a.py:g", 1, 30, 1),
+      ev("return", "a.py:g", 1, 40, 1),
+      ev("return", "a.py:f", 0, 50, 1),
+    ]);
+    const agg = aggregateCallTree(t.roots);
+    expect(agg).toHaveLength(1);
+    expect(agg[0]?.children[0]?.count).toBe(2);
+  });
 });
 
 describe("buildCallTree — non-structural events", () => {

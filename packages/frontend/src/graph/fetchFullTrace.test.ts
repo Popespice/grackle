@@ -54,6 +54,51 @@ describe("fetchFullTrace", () => {
     expect(req).not.toHaveBeenCalled();
   });
 
+  it("does not duplicate events when the server returns a short batch", async () => {
+    // total=5, chunk=3. The window [0,3) drops one unparseable line and returns
+    // only 2 events; advancement must move to index 3, not re-read the overlap.
+    const all = mkEvents(5);
+    const req = vi.fn((sessionId: string, start: number, count: number) => {
+      const slice =
+        start === 0
+          ? [all[0], all[2]] // [0,3) → f0, f2 (f1 skipped server-side)
+          : all.slice(start, start + count);
+      return Promise.resolve({
+        id: "x",
+        type: "trace_window",
+        payload: {
+          session_id: sessionId,
+          start_index: start,
+          events: slice,
+          total: 5,
+        },
+      } as TraceWindowMessage);
+    });
+    const res = await fetchFullTrace(req, "s", 5, { chunk: 3 });
+    const ids = res.events.map((e) => e.node_id);
+    expect(new Set(ids).size).toBe(ids.length); // no duplicates
+    expect(ids.filter((id) => id === "a.py:f2")).toHaveLength(1);
+  });
+
+  it("reports truncated honestly when fewer than total were fetched", async () => {
+    // Empty window at chunk boundary ends paging early on a large file.
+    const req = vi.fn((sessionId: string, start: number) =>
+      Promise.resolve({
+        id: "x",
+        type: "trace_window",
+        payload: {
+          session_id: sessionId,
+          start_index: start,
+          events: start === 0 ? mkEvents(3) : [],
+          total: 9,
+        },
+      } as TraceWindowMessage)
+    );
+    const res = await fetchFullTrace(req, "s", 9, { chunk: 3 });
+    expect(res.events).toHaveLength(3);
+    expect(res.truncated).toBe(true); // 3 < 9, honestly partial
+  });
+
   it("bails out if the server returns an empty window early", async () => {
     const req = vi.fn((sessionId: string, start: number) =>
       Promise.resolve({
