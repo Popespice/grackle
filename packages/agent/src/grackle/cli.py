@@ -17,6 +17,8 @@ from grackle import server as _server
 from grackle.logging import configure_logging
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from grackle.adapters.base import TraceEvent
 
 # Maximum inter-event sleep when streaming a completed trace to a server.
@@ -104,7 +106,11 @@ def parse(
     "-o",
     default=None,
     type=click.Path(dir_okay=False, writable=True, path_type=Path),
-    help="Write JSONL to FILE instead of stdout.",
+    help=(
+        "Write JSONL to FILE. Without --stream, writes after tracing completes "
+        "(instead of stdout). With --stream, captures a lossless copy alongside "
+        "the live WebSocket stream (tee mode)."
+    ),
 )
 @click.option(
     "--root",
@@ -146,7 +152,7 @@ def parse(
     help=(
         "Stream events to the server in real time as the script runs "
         "(requires --connect). Events appear in the browser during execution. "
-        "Incompatible with --output."
+        "May be combined with --output to simultaneously capture a lossless file."
     ),
 )
 @click.option(
@@ -197,8 +203,6 @@ def trace(
     # ------------------------------------------------------------------
     if stream and connect is None:
         raise click.UsageError("--stream requires --connect URL")
-    if stream and output is not None:
-        raise click.UsageError("--stream is incompatible with --output (use --connect only)")
 
     # Verify SCRIPT lives inside ROOT — otherwise every frame falls back
     # to "<unresolved>" because the resolver only indexes files under root.
@@ -219,26 +223,57 @@ def trace(
     # ------------------------------------------------------------------
     if stream:
         assert connect is not None  # guarded above
-        from uuid import uuid4 as _uuid4
 
         from grackle.python_runtime.stream_sender import TraceStreamSender
 
-        session_id = str(_uuid4())
+        session_id = str(uuid4())
         sender = TraceStreamSender(connect, session_id)
         try:
             sender.start()
         except ConnectionError as exc:
             raise click.ClickException(f"could not connect to {connect}: {exc}") from exc
 
+        # Tee path: if --output is given, buffer every event alongside the WS
+        # stream.  The file is lossless — it captures all events including any
+        # the WS sender drops under backpressure — so file count >= sent count.
+        _tee_buf: list[TraceEvent] | None = None
+        active_sink: Callable[[TraceEvent], None]
+        if output is not None:
+            _buf: list[TraceEvent] = []
+            _tee_buf = _buf
+            _ws_sink = sender.sink
+
+            def _tee_sink(event: TraceEvent) -> None:
+                _ws_sink(event)
+                _buf.append(event)
+
+            active_sink = _tee_sink
+        else:
+            active_sink = sender.sink
+
         sent = 0
+        _cap_exc: click.ClickException | None = None
         try:
-            adapter.trace_streaming(script, root, options, sender.sink)
+            adapter.trace_streaming(script, root, options, active_sink)
         except TraceCapExceeded as exc:
-            raise click.ClickException(str(exc)) from exc
+            # Store cap error — write the file first (captured prefix is valid),
+            # then re-raise below so the user gets both the file and the error.
+            _cap_exc = click.ClickException(str(exc))
         except Exception as exc:
             raise click.ClickException(f"trace error: {exc}") from exc
         finally:
             sent = sender.finish()
+
+        if _tee_buf is not None:
+            assert output is not None
+            try:
+                tee_count = write_jsonl(_tee_buf, output)
+                click.echo(f"wrote {tee_count} events → {output}", err=True)
+            except Exception as write_exc:
+                raise click.ClickException(f"could not write {output}: {write_exc}") from write_exc
+
+        if _cap_exc is not None:
+            raise _cap_exc
 
         if sender.connection_lost:
             click.echo(
