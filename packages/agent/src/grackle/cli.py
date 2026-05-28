@@ -17,7 +17,6 @@ from grackle import server as _server
 from grackle.logging import configure_logging
 
 if TYPE_CHECKING:
-    import queue
     from collections.abc import Callable
 
     from grackle.adapters.base import TraceEvent
@@ -224,56 +223,57 @@ def trace(
     # ------------------------------------------------------------------
     if stream:
         assert connect is not None  # guarded above
-        import queue as _queue
-        from uuid import uuid4 as _uuid4
 
         from grackle.python_runtime.stream_sender import TraceStreamSender
 
-        session_id = str(_uuid4())
+        session_id = str(uuid4())
         sender = TraceStreamSender(connect, session_id)
         try:
             sender.start()
         except ConnectionError as exc:
             raise click.ClickException(f"could not connect to {connect}: {exc}") from exc
 
-        # Tee path: if --output is given, buffer events into a file queue alongside
-        # the WS stream.  Both sinks receive every event via O(1) put_nowait calls
-        # on the hot path; the file is written atomically after sender.finish().
-        _tee_queue: queue.SimpleQueue[TraceEvent] | None = None
+        # Tee path: if --output is given, buffer every event alongside the WS
+        # stream.  The file is lossless — it captures all events including any
+        # the WS sender drops under backpressure — so file count >= sent count.
+        _tee_buf: list[TraceEvent] | None = None
         active_sink: Callable[[TraceEvent], None]
         if output is not None:
-            _fq: queue.SimpleQueue[TraceEvent] = _queue.SimpleQueue()
-            _tee_queue = _fq
+            _buf: list[TraceEvent] = []
+            _tee_buf = _buf
             _ws_sink = sender.sink
 
             def _tee_sink(event: TraceEvent) -> None:
                 _ws_sink(event)
-                _fq.put_nowait(event)
+                _buf.append(event)
 
             active_sink = _tee_sink
         else:
             active_sink = sender.sink
 
         sent = 0
+        _cap_exc: click.ClickException | None = None
         try:
             adapter.trace_streaming(script, root, options, active_sink)
         except TraceCapExceeded as exc:
-            raise click.ClickException(str(exc)) from exc
+            # Store cap error — write the file first (captured prefix is valid),
+            # then re-raise below so the user gets both the file and the error.
+            _cap_exc = click.ClickException(str(exc))
         except Exception as exc:
             raise click.ClickException(f"trace error: {exc}") from exc
         finally:
             sent = sender.finish()
 
-        if _tee_queue is not None:
+        if _tee_buf is not None:
             assert output is not None
-            buffered: list[TraceEvent] = []
-            while True:
-                try:
-                    buffered.append(_tee_queue.get_nowait())
-                except _queue.Empty:
-                    break
-            tee_count = write_jsonl(buffered, output)
-            click.echo(f"wrote {tee_count} events → {output}", err=True)
+            try:
+                tee_count = write_jsonl(_tee_buf, output)
+                click.echo(f"wrote {tee_count} events → {output}", err=True)
+            except Exception as write_exc:
+                raise click.ClickException(f"could not write {output}: {write_exc}") from write_exc
+
+        if _cap_exc is not None:
+            raise _cap_exc
 
         if sender.connection_lost:
             click.echo(

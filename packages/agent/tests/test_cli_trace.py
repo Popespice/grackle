@@ -286,55 +286,57 @@ async def test_trace_stream_tee_writes_file(free_port: int, tmp_path: Path) -> N
                     break
 
     consumer_task = asyncio.create_task(_consume())
-    await asyncio.sleep(0.05)  # let consumer connect before CLI starts
+    try:
+        await asyncio.sleep(0.05)  # let consumer connect before CLI starts
 
-    # Run CLI in a thread (CliRunner.invoke is synchronous).
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(
-        None,
-        lambda: CliRunner().invoke(
-            main,
-            [
-                "trace",
-                str(script),
-                "--root",
-                str(root),
-                "--stream",
-                "--connect",
-                url,
-                "--output",
-                str(out),
-            ],
-        ),
-    )
+        # Run CLI in a thread (CliRunner.invoke is synchronous).
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: CliRunner().invoke(
+                main,
+                [
+                    "trace",
+                    str(script),
+                    "--root",
+                    str(root),
+                    "--stream",
+                    "--connect",
+                    url,
+                    "--output",
+                    str(out),
+                ],
+            ),
+        )
 
-    assert result.exit_code == 0, result.output
-    assert "wrote" in result.output
-    assert "streamed" in result.output
+        assert result.exit_code == 0, result.output
+        assert "wrote" in result.output
+        assert "streamed" in result.output
 
-    # File must exist with valid events.
-    assert out.exists()
-    file_lines = out.read_text(encoding="utf-8").splitlines()
-    assert len(file_lines) > 0
-    for raw in file_lines:
-        e = _json.loads(raw)
-        assert "event" in e
-        assert "node_id" in e
+        # File must exist with valid events.
+        assert out.exists()
+        file_lines = out.read_text(encoding="utf-8").splitlines()
+        assert len(file_lines) > 0
+        for raw in file_lines:
+            e = _json.loads(raw)
+            assert "event" in e
+            assert "node_id" in e
 
-    # Wait for consumer to receive session_end (or time out).
-    await asyncio.wait_for(consumer_done.wait(), timeout=5.0)
+        # Wait for consumer to receive session_end (or time out).
+        await asyncio.wait_for(consumer_done.wait(), timeout=5.0)
 
-    types = [m["type"] for m in received]
-    assert "trace_session_start" in types
-    assert "trace_session_end" in types
+        types = [m["type"] for m in received]
+        assert "trace_session_start" in types
+        assert "trace_session_end" in types
 
-    # File event count must equal the events the server received.
-    streamed_count = sum(1 for m in received if m["type"] == "trace_event")
-    assert len(file_lines) == streamed_count
-
-    server_task.cancel()
-    consumer_task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await server_task
-    with contextlib.suppress(asyncio.CancelledError):
-        await consumer_task
+        # File is lossless: captures all events including any the WS sender drops
+        # under backpressure, so file count >= server-received count.
+        streamed_count = sum(1 for m in received if m["type"] == "trace_event")
+        assert len(file_lines) >= streamed_count
+    finally:
+        server_task.cancel()
+        consumer_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await server_task
+        with contextlib.suppress(asyncio.CancelledError):
+            await consumer_task
