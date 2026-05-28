@@ -39,3 +39,5 @@ NNNN-short-title.md
 | [0015](0015-runtime-overlay-ui.md) | Runtime overlay UI: Timeline, heat-map, and coverage | accepted |
 | [0016](0016-realtime-trace-streaming.md) | Real-time trace streaming via daemon sender thread | accepted |
 | [0017](0017-server-side-trace-seek.md) | Server-side trace seek: byte-offset index + WS request/response | accepted |
+| 0018 | Server-side analysis & aggregation engine | reserved (Phase 8, not yet written) |
+| [0019](0019-call-tree-flame-graph.md) | Call-tree reconstruction & flame graph | accepted |
