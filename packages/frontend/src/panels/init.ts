@@ -1,5 +1,6 @@
 import { GraphCanvas } from "../graph/GraphCanvas";
 import { CyclesPanel } from "./CyclesPanel";
+import { FlameGraphPanel } from "./FlameGraphPanel";
 import { GraphLegendPanel } from "./GraphLegendPanel";
 import { HeaderChrome } from "./HeaderChrome";
 import { NodeInspectorPanel } from "./NodeInspectorPanel";
@@ -56,6 +57,12 @@ panels.register({
   id: "timeline-panel",
   component: TimelinePanel,
   order: 0,
+});
+panels.register({
+  slot: "bottom-dock",
+  id: "flame-graph-panel",
+  component: FlameGraphPanel,
+  order: 10,
 });
 panels.register({
   slot: "bottom-status",
