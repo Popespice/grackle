@@ -334,6 +334,155 @@
           "required": ["type"]
         }
       ]
+    },
+    "TraceQueryRequest": {
+      "description": "Browser requests aggregate stats for a seekable session. Agent replies with TraceQueryResponse. id is echoed verbatim.",
+      "allOf": [
+        { "$ref": "#/$defs/WsEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "trace_query_request" },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "type": "string",
+                  "description": "UUID of the seekable trace session."
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": ["cumulative_heat", "coverage", "top_k"],
+                  "description": "Kind of aggregate to compute."
+                },
+                "at_index": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Compute aggregate over events [0, at_index)."
+                },
+                "k": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "For top_k: number of results to return. Default 20."
+                }
+              },
+              "required": ["session_id", "kind", "at_index"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["type"]
+        }
+      ]
+    },
+    "TraceQueryResponse": {
+      "description": "Agent reply to TraceQueryRequest. id echoes the request id.",
+      "allOf": [
+        { "$ref": "#/$defs/WsEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "trace_query_response" },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "session_id": { "type": "string" },
+                "kind": { "type": "string" },
+                "at_index": { "type": "integer", "minimum": 0 },
+                "data": {
+                  "type": "object",
+                  "description": "Result data. Shape depends on kind: cumulative_heat={node_id: count}, coverage={count: int}, top_k={entries:[{node_id,count}]}",
+                  "additionalProperties": true
+                },
+                "error": {
+                  "type": "string",
+                  "description": "Set when the query could not be fulfilled."
+                }
+              },
+              "required": ["session_id", "kind", "at_index", "data"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["type"]
+        }
+      ]
+    },
+    "SessionListRequest": {
+      "description": "Browser requests the list of stored trace sessions from the session library.",
+      "allOf": [
+        { "$ref": "#/$defs/WsEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "session_list_request" },
+            "payload": { "type": "object", "maxProperties": 0 }
+          },
+          "required": ["type"]
+        }
+      ]
+    },
+    "SessionListResponse": {
+      "description": "Agent reply to SessionListRequest. id echoes the request id.",
+      "allOf": [
+        { "$ref": "#/$defs/WsEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "session_list_response" },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "sessions": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": { "type": "string" },
+                      "label": { "type": "string" },
+                      "started_ns": { "type": "integer" },
+                      "ended_ns": { "type": "integer" },
+                      "source_path": { "type": "string" },
+                      "event_count": { "type": "integer", "minimum": 0 },
+                      "language": { "type": "string" }
+                    },
+                    "required": [
+                      "id",
+                      "label",
+                      "started_ns",
+                      "ended_ns",
+                      "source_path",
+                      "event_count",
+                      "language"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": ["sessions"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["type"]
+        }
+      ]
+    },
+    "SessionLoadRequest": {
+      "description": "Browser requests that the agent load a stored session (identified by id). Agent responds by emitting trace_session_start (with seekable=true) + trace_session_end for the loaded session.",
+      "allOf": [
+        { "$ref": "#/$defs/WsEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "session_load_request" },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "type": "string",
+                  "description": "ID of the stored session to load."
+                }
+              },
+              "required": ["session_id"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["type"]
+        }
+      ]
     }
   }
 }

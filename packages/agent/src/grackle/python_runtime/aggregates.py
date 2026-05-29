@@ -1,0 +1,180 @@
+"""Prefix-sum aggregates over a JSONL trace file.
+
+Design
+------
+``TraceAggregates.build`` scans the trace file once at startup and builds two
+in-memory indexes:
+
+1. **Hit-index** (``_hits: dict[str, list[int]]``): maps each ``node_id`` to a
+   sorted list of the event indices at which that node was touched.  Because we
+   process events in sequential order the lists are naturally sorted, so no
+   explicit sort is required.  ``bisect_right(hits, at_index)`` gives the count
+   of events in [0, at_index) in O(log N) per node per query.
+
+2. **First-seen index** (``_first_seen: dict[str, int]``): maps each ``node_id``
+   to the index of its first event.  From this we build a sorted list of
+   ``(first_seen_index,)`` values (one per distinct node) to answer coverage
+   queries in O(log N): ``bisect_right(sorted_first, at_index)`` counts distinct
+   nodes whose first event precedes ``at_index``.
+
+Sparse mode
+-----------
+When ``sparse_k > 1``, only event indices that are exact multiples of
+``sparse_k`` are recorded in the hit-index (i.e. index 0, ``sparse_k``,
+``2*sparse_k``, …).  ``cumulative_heat`` rounds ``at_index`` down to the
+nearest multiple before the bisect, so results are approximations that are
+≤ the true count and differ by at most ``sparse_k - 1`` events.  First-seen
+tracking is NOT sparsified: it records the exact first event index regardless
+of ``sparse_k`` so coverage queries remain accurate.
+
+Thread safety
+-------------
+The class is **read-only after construction** — all public methods are safe to
+call concurrently from multiple threads or asyncio tasks without locking.
+"""
+
+from __future__ import annotations
+
+import bisect
+import json
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+
+class TraceAggregates:
+    """In-memory aggregate indexes built from a single pass over a JSONL trace.
+
+    Use ``TraceAggregates.build(path)`` to construct; then query with
+    ``cumulative_heat``, ``coverage_count``, and ``top_k``.
+    """
+
+    def __init__(
+        self,
+        hits: dict[str, list[int]],
+        first_seen: dict[str, int],
+        total: int,
+        sparse_k: int,
+    ) -> None:
+        self._hits = hits
+        self._first_seen = first_seen
+        self._total = total
+        self._sparse_k = sparse_k
+        # Pre-build sorted list of first-seen indices for O(log N) coverage.
+        self._sorted_first: list[int] = sorted(first_seen.values())
+
+    # ------------------------------------------------------------------
+    # Construction
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def build(cls, path: Path, *, sparse_k: int = 1) -> TraceAggregates:
+        """One-pass scan of the JSONL trace file at *path*.
+
+        Args:
+            path:     Path to the JSONL trace file.
+            sparse_k: When > 1, only record event indices that are multiples
+                      of *sparse_k* in the hit index.  Values < 1 are treated
+                      as 1 (no sparsification).
+
+        Returns:
+            A ``TraceAggregates`` instance ready for querying.
+        """
+        if sparse_k < 1:
+            sparse_k = 1
+
+        hits: dict[str, list[int]] = {}
+        first_seen: dict[str, int] = {}
+        index = 0
+
+        try:
+            with path.open("rb") as f:
+                for raw_line in f:
+                    stripped = raw_line.strip()
+                    if not stripped:
+                        continue
+                    try:
+                        event = json.loads(stripped.decode("utf-8"))
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        index += 1
+                        continue
+
+                    node_id: str = event.get("node_id", "")
+                    if node_id:
+                        # Track first-seen at full resolution
+                        if node_id not in first_seen:
+                            first_seen[node_id] = index
+
+                        # Record in hit index (sparse or full)
+                        if sparse_k == 1 or index % sparse_k == 0:
+                            if node_id not in hits:
+                                hits[node_id] = []
+                            hits[node_id].append(index)
+
+                    index += 1
+        except OSError:
+            # Empty or missing file — return empty aggregates
+            pass
+
+        return cls(hits, first_seen, index, sparse_k)
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def __len__(self) -> int:
+        """Total number of events scanned (including events with no node_id)."""
+        return self._total
+
+    def cumulative_heat(self, node_id: str, at_index: int) -> int:
+        """Return number of events for *node_id* in events [0, at_index).
+
+        When built with ``sparse_k > 1``, ``at_index`` is rounded down to the
+        nearest multiple of ``sparse_k`` before the lookup, so the result is
+        an approximation (≤ true count, differs by ≤ sparse_k - 1).
+        """
+        hits = self._hits.get(node_id)
+        if hits is None:
+            return 0
+        if self._sparse_k > 1:
+            # Round down to nearest multiple
+            at_index = (at_index // self._sparse_k) * self._sparse_k
+        return bisect.bisect_right(hits, at_index - 1)
+
+    def coverage_count(self, at_index: int) -> int:
+        """Return number of distinct node_ids with at least one event in [0, at_index).
+
+        Always uses full-resolution first-seen data regardless of ``sparse_k``.
+        """
+        if not self._sorted_first:
+            return 0
+        return bisect.bisect_right(self._sorted_first, at_index - 1)
+
+    def top_k(self, k: int, at_index: int) -> list[tuple[str, int]]:
+        """Return top-k (node_id, count) pairs by cumulative count at *at_index*.
+
+        Pairs are sorted descending by count.  Ties are broken by node_id
+        lexicographically to make output deterministic.
+
+        Args:
+            k:        Maximum number of results to return.
+            at_index: Upper-bound index (exclusive) for cumulative count.
+
+        Returns:
+            List of at most *k* ``(node_id, count)`` tuples, sorted descending.
+        """
+        if k <= 0:
+            return []
+        entries: list[tuple[str, int]] = []
+        for node_id in self._hits:
+            count = self.cumulative_heat(node_id, at_index)
+            if count > 0:
+                entries.append((node_id, count))
+        # Sort descending by count, then ascending by node_id for stable ordering
+        entries.sort(key=lambda x: (-x[1], x[0]))
+        return entries[:k]
+
+    def _node_ids(self) -> list[str]:
+        """Return all node_ids that have at least one recorded hit."""
+        return list(self._hits.keys())

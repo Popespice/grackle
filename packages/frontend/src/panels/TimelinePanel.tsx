@@ -68,8 +68,10 @@ export function TimelinePanel(): JSX.Element | null {
   const setWindowSize = useGraphStore((s) => s.setWindowSize);
   const setTraceWindow = useGraphStore((s) => s.setTraceWindow);
   const setTraceSeekable = useGraphStore((s) => s.setTraceSeekable);
+  const setAgentHeat = useGraphStore((s) => s.setAgentHeat);
 
   const requestTraceWindow = useGrackleClient((s) => s.requestTraceWindow);
+  const requestTraceQuery = useGrackleClient((s) => s.requestTraceQuery);
 
   // Keep a ref of traceWindowSize so the initial-fetch effect can read the
   // current value without including it in the dependency array (changing the
@@ -151,6 +153,31 @@ export function TimelinePanel(): JSX.Element | null {
       if (seekTimerRef.current !== null) clearTimeout(seekTimerRef.current);
     };
   }, []);
+
+  // Fetch agent cumulative heat when the playhead moves in seekable mode.
+  useEffect(() => {
+    if (!traceSeekable || traceHeatMode !== "cumulative" || !traceSessionId)
+      return;
+    let cancelled = false;
+    requestTraceQuery(traceSessionId, "cumulative_heat", tracePlayhead)
+      .then((resp) => {
+        if (cancelled) return;
+        setAgentHeat(resp.payload.data as Record<string, number>);
+      })
+      .catch(() => {
+        // ignore — agent may not be in query mode yet
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    traceSeekable,
+    traceHeatMode,
+    traceSessionId,
+    tracePlayhead,
+    requestTraceQuery,
+    setAgentHeat,
+  ]);
 
   // Distinct event kinds present in the full session (for filter chips).
   const eventKinds = useMemo(

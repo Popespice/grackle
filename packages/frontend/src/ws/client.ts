@@ -3,9 +3,11 @@ import type {
   ReadSourceError,
   ReadSourceRequest,
   ReadSourceResponse,
+  SessionListResponse,
   StaticGraphMessage,
   TraceEvent,
   TraceEventMessage,
+  TraceQueryResponse,
   TraceSeekError,
   TraceSeekRequest,
   TraceSessionEndMessage,
@@ -27,6 +29,8 @@ interface GrackleClientState {
   _staticGraphHandlers: Set<(graph: Graph) => void>;
   _pendingReadSource: Map<string, (msg: SourceReply) => void>;
   _pendingTraceWindow: Map<string, (msg: SeekReply) => void>;
+  _pendingTraceQuery: Map<string, (msg: TraceQueryResponse) => void>;
+  _pendingSessionList: Map<string, (msg: SessionListResponse) => void>;
   _traceSessionStartHandlers: Set<(msg: TraceSessionStartMessage) => void>;
   _traceEventHandlers: Set<(ev: TraceEvent) => void>;
   _traceSessionEndHandlers: Set<(msg: TraceSessionEndMessage) => void>;
@@ -46,6 +50,21 @@ interface GrackleClientState {
     startIndex: number,
     count: number
   ) => Promise<TraceWindowMessage>;
+  /**
+   * Query the agent for aggregate stats over a seekable session.
+   * Resolves when the agent replies with trace_query_response.
+   * Rejects on error response or after 5 s timeout.
+   */
+  requestTraceQuery: (
+    sessionId: string,
+    kind: "cumulative_heat" | "coverage" | "top_k",
+    atIndex: number,
+    k?: number
+  ) => Promise<TraceQueryResponse>;
+  /** Request the list of stored sessions from the agent. */
+  requestSessionList: () => Promise<SessionListResponse>;
+  /** Ask the agent to load a stored session (agent replies with trace_session_start). */
+  sendSessionLoad: (sessionId: string) => void;
   onTraceSessionStart: (
     handler: (msg: TraceSessionStartMessage) => void
   ) => () => void;
@@ -62,6 +81,8 @@ export const useGrackleClient = create<GrackleClientState>()((set, get) => ({
   _staticGraphHandlers: new Set(),
   _pendingReadSource: new Map(),
   _pendingTraceWindow: new Map(),
+  _pendingTraceQuery: new Map(),
+  _pendingSessionList: new Map(),
   _traceSessionStartHandlers: new Set(),
   _traceEventHandlers: new Set(),
   _traceSessionEndHandlers: new Set(),
@@ -108,12 +129,12 @@ export const useGrackleClient = create<GrackleClientState>()((set, get) => ({
             resolver(envelope as SourceReply);
           }
         } else if (envelope.type === "trace_session_start") {
-          // Discard pending seek requests from the prior session before the
-          // new session starts.  A stale trace_window reply arriving after the
-          // session restart could otherwise match a new session's pending
-          // entry (same envelope id is astronomically unlikely, but the map
-          // should be empty between sessions on principle).
+          // Discard pending requests from the prior session before the new
+          // session starts.  Stale replies arriving after a session restart
+          // must not match entries from the new session.
           get()._pendingTraceWindow.clear();
+          get()._pendingTraceQuery.clear();
+          get()._pendingSessionList.clear();
           const msg = envelope as unknown as TraceSessionStartMessage;
           get()._traceSessionStartHandlers.forEach((h) => {
             h(msg);
@@ -137,6 +158,18 @@ export const useGrackleClient = create<GrackleClientState>()((set, get) => ({
           if (resolver) {
             get()._pendingTraceWindow.delete(envelope.id);
             resolver(envelope as SeekReply);
+          }
+        } else if (envelope.type === "trace_query_response") {
+          const resolve = get()._pendingTraceQuery.get(envelope.id);
+          if (resolve) {
+            get()._pendingTraceQuery.delete(envelope.id);
+            resolve(envelope as TraceQueryResponse);
+          }
+        } else if (envelope.type === "session_list_response") {
+          const resolve = get()._pendingSessionList.get(envelope.id);
+          if (resolve) {
+            get()._pendingSessionList.delete(envelope.id);
+            resolve(envelope as SessionListResponse);
           }
         }
       } catch {
@@ -256,5 +289,60 @@ export const useGrackleClient = create<GrackleClientState>()((set, get) => ({
       };
       _ws.send(JSON.stringify(envelope));
     });
+  },
+
+  requestTraceQuery: (sessionId, kind, atIndex, k) => {
+    return new Promise<TraceQueryResponse>((resolve, reject) => {
+      const id = crypto.randomUUID();
+      const timer = setTimeout(() => {
+        get()._pendingTraceQuery.delete(id);
+        reject(new Error("trace_query_request timed out"));
+      }, 5000);
+      get()._pendingTraceQuery.set(id, (msg) => {
+        clearTimeout(timer);
+        if (msg.payload.error) {
+          reject(new Error(msg.payload.error as string));
+        } else {
+          resolve(msg);
+        }
+      });
+      const payload: Record<string, unknown> = {
+        session_id: sessionId,
+        kind,
+        at_index: atIndex,
+      };
+      if (k !== undefined) payload.k = k;
+      get()._ws?.send(
+        JSON.stringify({ id, type: "trace_query_request", payload })
+      );
+    });
+  },
+
+  requestSessionList: () => {
+    return new Promise<SessionListResponse>((resolve, reject) => {
+      const id = crypto.randomUUID();
+      const timer = setTimeout(() => {
+        get()._pendingSessionList.delete(id);
+        reject(new Error("session_list_request timed out"));
+      }, 5000);
+      get()._pendingSessionList.set(id, (msg) => {
+        clearTimeout(timer);
+        resolve(msg);
+      });
+      get()._ws?.send(
+        JSON.stringify({ id, type: "session_list_request", payload: {} })
+      );
+    });
+  },
+
+  sendSessionLoad: (sessionId: string) => {
+    const id = crypto.randomUUID();
+    get()._ws?.send(
+      JSON.stringify({
+        id,
+        type: "session_load_request",
+        payload: { session_id: sessionId },
+      })
+    );
   },
 }));

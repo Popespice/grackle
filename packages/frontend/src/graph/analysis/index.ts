@@ -36,14 +36,28 @@ analyses.register<GraphNode[]>({
 
 analyses.register<HubEntry[]>({
   id: "hub-score",
-  compute: (graph: Graph) => hubScore(graph),
+  compute: (graph: Graph) => {
+    // Use agent-computed results from graph.metadata if present (Phase 8.3).
+    const raw = graph.metadata?.hub_score;
+    if (Array.isArray(raw) && raw.length > 0) {
+      return raw as HubEntry[];
+    }
+    return hubScore(graph);
+  },
   cacheKey: (graph: Graph) =>
     `hub-score:${graph.nodes.length}:${graph.edges.length}`,
 });
 
 analyses.register<CycleEntry[]>({
   id: "cycles",
-  compute: (graph: Graph) => cycleDetection(graph),
+  compute: (graph: Graph) => {
+    // Use agent-computed results from graph.metadata if present (Phase 8.3).
+    const raw = graph.metadata?.cycles;
+    if (Array.isArray(raw) && raw.length > 0) {
+      return raw as CycleEntry[];
+    }
+    return cycleDetection(graph);
+  },
   cacheKey: (graph: Graph) =>
     `cycles:${graph.nodes.length}:${graph.edges.length}`,
 });

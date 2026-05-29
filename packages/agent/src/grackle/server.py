@@ -6,7 +6,7 @@ import contextlib
 import os
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import structlog
@@ -18,7 +18,9 @@ from grackle import protocol
 
 if TYPE_CHECKING:
     from grackle.adapters.base import TraceEvent
+    from grackle.python_runtime.aggregates import TraceAggregates
     from grackle.python_runtime.jsonl_index import JsonlIndex
+    from grackle.session_store import SessionStore
 
 log = structlog.get_logger()
 
@@ -126,6 +128,10 @@ async def _push_static_graph(ws: ServerConnection, root: Path) -> None:
         log.warning("static graph parse failed", error=str(exc), root=str(root))
         return
 
+    from grackle.graph_analysis import enrich_metadata
+
+    enrich_metadata(graph)
+
     log.info(
         "static graph pushed",
         nodes=len(graph["nodes"]),
@@ -198,6 +204,16 @@ async def _broadcast(
             await ws.send(raw)
 
 
+def _compute_cumulative_heat(agg: TraceAggregates, at_index: int) -> dict[str, int]:
+    """Return {node_id: count} for all nodes with count > 0 at at_index."""
+    result: dict[str, int] = {}
+    for node_id in agg._node_ids():
+        count = agg.cumulative_heat(node_id, at_index)
+        if count > 0:
+            result[node_id] = count
+    return result
+
+
 async def _receive_loop(
     ws: ServerConnection,
     root_real: Path,
@@ -208,11 +224,14 @@ async def _receive_loop(
     *,
     trace_index: JsonlIndex | None = None,
     file_session_id: str | None = None,
+    trace_aggregates: TraceAggregates | None = None,
+    store: SessionStore | None = None,
 ) -> None:
     """Process inbound messages from one connection.
 
-    Handles ping/pong, read_source, live-ingest trace messages, and
-    (when ``trace_index`` is set) ``trace_seek_request`` for server-side seek.
+    Handles ping/pong, read_source, live-ingest trace messages,
+    ``trace_seek_request`` for server-side seek, ``trace_query_request`` for
+    aggregate queries, ``session_list_request``, and ``session_load_request``.
 
     Live-ingest messages (trace_session_start / trace_event /
     trace_session_end) are appended to the ring-buffer and broadcast to
@@ -289,6 +308,91 @@ async def _receive_loop(
                     envelope["id"], seek_sid, clamped_start, seek_events, total
                 )
             )
+        elif etype == "trace_query_request":
+            qsid = envelope["payload"].get("session_id", "")
+            kind = envelope["payload"].get("kind", "")
+            at_raw = envelope["payload"].get("at_index", 0)
+            if trace_aggregates is None or qsid != file_session_id:
+                await ws.send(
+                    protocol.make_trace_query_response(
+                        envelope["id"], qsid, kind, 0, {}, error="session not found"
+                    )
+                )
+                continue
+            if not isinstance(at_raw, int):
+                await ws.send(
+                    protocol.make_trace_query_response(
+                        envelope["id"], qsid, kind, 0, {}, error="invalid at_index"
+                    )
+                )
+                continue
+            at_index = max(0, min(at_raw, len(trace_aggregates)))
+            try:
+                loop = asyncio.get_running_loop()
+                data: dict[str, Any]
+                if kind == "cumulative_heat":
+                    data = await loop.run_in_executor(
+                        None, _compute_cumulative_heat, trace_aggregates, at_index
+                    )
+                elif kind == "coverage":
+                    count = await loop.run_in_executor(
+                        None, trace_aggregates.coverage_count, at_index
+                    )
+                    data = {"count": count}
+                elif kind == "top_k":
+                    k = int(envelope["payload"].get("k", 20))
+                    entries = await loop.run_in_executor(None, trace_aggregates.top_k, k, at_index)
+                    data = {"entries": [{"node_id": nid, "count": cnt} for nid, cnt in entries]}
+                else:
+                    await ws.send(
+                        protocol.make_trace_query_response(
+                            envelope["id"],
+                            qsid,
+                            kind,
+                            at_index,
+                            {},
+                            error=f"unknown kind: {kind!r}",
+                        )
+                    )
+                    continue
+                await ws.send(
+                    protocol.make_trace_query_response(envelope["id"], qsid, kind, at_index, data)
+                )
+            except Exception as exc:
+                log.warning("trace query error", kind=kind, error=str(exc))
+                await ws.send(
+                    protocol.make_trace_query_response(
+                        envelope["id"], qsid, kind, at_raw, {}, error="query error"
+                    )
+                )
+        elif etype == "session_list_request":
+            if store is None:
+                sessions_data: list[dict[str, Any]] = []
+            else:
+                sessions_data = [
+                    {
+                        "id": s.id,
+                        "label": s.label,
+                        "started_ns": s.started_ns,
+                        "ended_ns": s.ended_ns,
+                        "source_path": s.source_path,
+                        "event_count": s.event_count,
+                        "language": s.language,
+                    }
+                    for s in store.list_sessions()
+                ]
+            await ws.send(protocol.make_session_list_response(envelope["id"], sessions_data))
+        elif etype == "session_load_request":
+            load_sid = envelope["payload"].get("session_id", "")
+            if store is None:
+                continue
+            meta = store.get_session(load_sid)
+            if meta is None:
+                continue
+            load_path = Path(meta.source_path)
+            if not load_path.exists():
+                continue
+            asyncio.create_task(_load_stored_session(ws, load_path, load_sid))
         elif etype in ("trace_session_start", "trace_event", "trace_session_end"):
             # Live-ingest path: a producer process is streaming events into
             # this server.  Buffer each message and broadcast to all consumers.
@@ -373,12 +477,25 @@ async def _replay_trace(
         return
 
 
+async def _load_stored_session(ws: ServerConnection, path: Path, session_id: str) -> None:
+    """Replay a stored session as a seekable session to one connection."""
+    from grackle.python_runtime.jsonl_index import JsonlIndex as _JsonlIndex
+
+    try:
+        idx = _JsonlIndex.build(path)
+    except Exception as exc:
+        log.warning("session load: index failed", path=str(path), error=str(exc))
+        return
+    await _replay_trace(ws, path, False, session_id, seekable=True, total_events=len(idx))
+
+
 async def serve(
     host: str,
     port: int,
     root: Path = Path(),
     trace_source: Path | None = None,
     pace: bool = True,
+    store: SessionStore | None = None,
 ) -> None:
     """Start the WebSocket server and run until cancelled.
 
@@ -411,7 +528,9 @@ async def serve(
     # on reconnect and can continue using it in seek requests.
     file_index: JsonlIndex | None = None
     file_session_id: str | None = None
+    file_aggregates: TraceAggregates | None = None
     if trace_source is not None:
+        from grackle.python_runtime.aggregates import TraceAggregates as _TraceAggregates
         from grackle.python_runtime.jsonl_index import JsonlIndex as _JsonlIndex
 
         try:
@@ -424,6 +543,19 @@ async def serve(
         except Exception as exc:
             log.warning(
                 "trace index build failed — seek disabled",
+                path=str(trace_source),
+                error=str(exc),
+            )
+        try:
+            file_aggregates = _TraceAggregates.build(trace_source)
+            log.info(
+                "trace aggregates built",
+                path=str(trace_source),
+                events=len(file_aggregates),
+            )
+        except Exception as exc:
+            log.warning(
+                "trace aggregates build failed",
                 path=str(trace_source),
                 error=str(exc),
             )
@@ -458,6 +590,8 @@ async def serve(
                     max_events,
                     trace_index=file_index,
                     file_session_id=file_session_id,
+                    trace_aggregates=file_aggregates,
+                    store=store,
                 )
             )
             tasks.append(receive_task)
