@@ -115,6 +115,62 @@ export interface TraceSeekError extends WsEnvelope {
   };
 }
 
+/** Browser request for aggregate stats over a seekable trace session. */
+export interface TraceQueryRequest extends WsEnvelope {
+  type: "trace_query_request";
+  payload: {
+    session_id: string;
+    kind: "cumulative_heat" | "coverage" | "top_k";
+    at_index: number;
+    k?: number;
+  };
+}
+
+/** Agent reply to TraceQueryRequest. id echoes the request. */
+export interface TraceQueryResponse extends WsEnvelope {
+  type: "trace_query_response";
+  payload: {
+    session_id: string;
+    kind: string;
+    at_index: number;
+    data: Record<string, unknown>;
+    error?: string;
+  };
+}
+
+/** Browser request for the list of stored sessions in the session library. */
+export interface SessionListRequest extends WsEnvelope {
+  type: "session_list_request";
+  payload: Record<string, never>;
+}
+
+/** Agent reply to SessionListRequest. id echoes the request. */
+export interface SessionListResponse extends WsEnvelope {
+  type: "session_list_response";
+  payload: {
+    sessions: SessionMeta[];
+  };
+}
+
+/** Metadata for one stored trace session. */
+export interface SessionMeta {
+  id: string;
+  label: string;
+  started_ns: number;
+  ended_ns: number;
+  source_path: string;
+  event_count: number;
+  language: string;
+}
+
+/** Browser request to load a stored session. Agent responds with trace_session_start (seekable=true). */
+export interface SessionLoadRequest extends WsEnvelope {
+  type: "session_load_request";
+  payload: {
+    session_id: string;
+  };
+}
+
 export type AnyKnownMessage =
   | PingMessage
   | PongMessage
@@ -127,7 +183,12 @@ export type AnyKnownMessage =
   | TraceSessionEndMessage
   | TraceSeekRequest
   | TraceWindowMessage
-  | TraceSeekError;
+  | TraceSeekError
+  | TraceQueryRequest
+  | TraceQueryResponse
+  | SessionListRequest
+  | SessionListResponse
+  | SessionLoadRequest;
 
 /** All message type strings recognised by this schema version. */
 export const KNOWN_MESSAGE_TYPES = [
@@ -143,4 +204,9 @@ export const KNOWN_MESSAGE_TYPES = [
   "trace_seek_request",
   "trace_window",
   "trace_seek_error",
+  "trace_query_request",
+  "trace_query_response",
+  "session_list_request",
+  "session_list_response",
+  "session_load_request",
 ] as const;

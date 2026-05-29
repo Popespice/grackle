@@ -36,14 +36,43 @@ analyses.register<GraphNode[]>({
 
 analyses.register<HubEntry[]>({
   id: "hub-score",
-  compute: (graph: Graph) => hubScore(graph),
+  compute: (graph: Graph) => {
+    // Phase 8.3: prefer agent-computed hub-score from graph.metadata. The
+    // agent emits {node_id, score} (compact wire form); HubEntry consumers
+    // expect {node, score}, so rehydrate node_id → the full GraphNode here.
+    const raw = graph.metadata?.hub_score;
+    if (Array.isArray(raw)) {
+      const byId = new Map(graph.nodes.map((n) => [n.id, n] as const));
+      const mapped: HubEntry[] = [];
+      for (const entry of raw as Array<{ node_id?: string; score?: number }>) {
+        const node = entry.node_id ? byId.get(entry.node_id) : undefined;
+        if (node && typeof entry.score === "number") {
+          mapped.push({ node, score: entry.score });
+        }
+      }
+      // Use the agent result when it mapped cleanly (or was legitimately empty,
+      // e.g. an empty graph); otherwise fall back to local computation.
+      if (mapped.length > 0 || raw.length === 0) return mapped;
+    }
+    return hubScore(graph);
+  },
   cacheKey: (graph: Graph) =>
     `hub-score:${graph.nodes.length}:${graph.edges.length}`,
 });
 
 analyses.register<CycleEntry[]>({
   id: "cycles",
-  compute: (graph: Graph) => cycleDetection(graph),
+  compute: (graph: Graph) => {
+    // Phase 8.3: prefer agent-computed cycles from graph.metadata. The agent
+    // emits {id, nodes, size, edge_kinds} — exactly the CycleEntry shape — so
+    // it can be used directly. Presence (not length) gates: an agent that
+    // genuinely found zero cycles must not trigger a redundant local recompute.
+    const raw = graph.metadata?.cycles;
+    if (Array.isArray(raw)) {
+      return raw as CycleEntry[];
+    }
+    return cycleDetection(graph);
+  },
   cacheKey: (graph: Graph) =>
     `cycles:${graph.nodes.length}:${graph.edges.length}`,
 });

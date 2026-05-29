@@ -195,3 +195,49 @@ def make_trace_seek_error(request_id: str, session_id: str, reason: str) -> str:
             },
         }
     )
+
+
+def make_trace_query_response(
+    request_id: str,
+    session_id: str,
+    kind: str,
+    at_index: int,
+    data: dict[str, Any],
+    *,
+    error: str | None = None,
+) -> str:
+    """Return a serialized trace_query_response envelope echoing the request id.
+
+    Args:
+        request_id:  ``id`` from the ``trace_query_request`` being answered.
+        session_id:  UUID of the trace session.
+        kind:        Aggregate kind (``"cumulative_heat"``, ``"coverage"``, or ``"top_k"``).
+        at_index:    Upper-bound index used to compute the aggregate.
+        data:        Result data; shape depends on *kind*.
+        error:       When set, the query could not be fulfilled; this field carries the reason.
+    """
+    payload: dict[str, Any] = {
+        "session_id": session_id,
+        "kind": kind,
+        "at_index": at_index,
+        "data": data,
+    }
+    if error is not None:
+        payload["error"] = error
+    return json.dumps({"id": request_id, "type": "trace_query_response", "payload": payload})
+
+
+def make_session_list_response(request_id: str, sessions: list[dict[str, Any]]) -> str:
+    """Return a serialized session_list_response envelope echoing the request id.
+
+    Args:
+        request_id:  ``id`` from the ``session_list_request`` being answered.
+        sessions:    List of session metadata dicts (each matching ``SessionMeta`` shape).
+    """
+    return json.dumps(
+        {
+            "id": request_id,
+            "type": "session_list_response",
+            "payload": {"sessions": sessions},
+        }
+    )

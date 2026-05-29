@@ -37,6 +37,8 @@ interface GraphStoreState {
   traceTotal: number;
   /** Absolute index of the first event in the current traceEvents window (seekable mode). */
   traceWindowStart: number;
+  /** Agent-computed cumulative heat from the last trace_query_response (seekable mode). */
+  agentHeat: Record<string, number> | null;
   // Graph actions
   setGraph: (graph: Graph) => void;
   selectNode: (nodeId: string | null) => void;
@@ -73,6 +75,8 @@ interface GraphStoreState {
   toggleEventType: (kind: string) => void;
   setHeatMode: (mode: "cumulative" | "sliding") => void;
   setWindowSize: (n: number) => void;
+  setAgentHeat: (heat: Record<string, number>) => void;
+  clearAgentHeat: () => void;
 }
 
 export const useGraphStore = create<GraphStoreState>()((set) => ({
@@ -94,6 +98,7 @@ export const useGraphStore = create<GraphStoreState>()((set) => ({
   traceSeekable: false,
   traceTotal: 0,
   traceWindowStart: 0,
+  agentHeat: null,
   setGraph: (graph) =>
     set({ graph, selectedNodeId: null, highlightedNodeIds: null }),
   selectNode: (nodeId) => set({ selectedNodeId: nodeId }),
@@ -124,6 +129,7 @@ export const useGraphStore = create<GraphStoreState>()((set) => ({
       traceSeekable: seekable,
       traceTotal: 0,
       traceWindowStart: 0,
+      agentHeat: null,
     }),
   addTraceEvent: (ev) =>
     set((state) => ({ traceEvents: state.traceEvents.concat([ev]) })),
@@ -182,4 +188,6 @@ export const useGraphStore = create<GraphStoreState>()((set) => ({
     }),
   setHeatMode: (mode) => set({ traceHeatMode: mode }),
   setWindowSize: (n) => set({ traceWindowSize: n }),
+  setAgentHeat: (heat) => set({ agentHeat: heat }),
+  clearAgentHeat: () => set({ agentHeat: null }),
 }));

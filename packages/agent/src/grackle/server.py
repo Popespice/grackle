@@ -6,8 +6,8 @@ import contextlib
 import os
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
-from uuid import uuid4
+from typing import TYPE_CHECKING, Any
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import structlog
 import websockets.exceptions
@@ -17,8 +17,10 @@ from websockets.asyncio.server import serve as _ws_serve
 from grackle import protocol
 
 if TYPE_CHECKING:
-    from grackle.adapters.base import TraceEvent
+    from grackle.adapters.base import StaticGraph, TraceEvent
+    from grackle.python_runtime.aggregates import TraceAggregates
     from grackle.python_runtime.jsonl_index import JsonlIndex
+    from grackle.session_store import SessionStore
 
 log = structlog.get_logger()
 
@@ -31,6 +33,21 @@ _DEFAULT_BUFFER_SECONDS = 60.0
 # prevents a single malicious/buggy client from issuing a count=2**31 seek that
 # reads the whole file synchronously on the event loop.
 _MAX_SEEK_COUNT = 1000
+
+
+class _SeekableSession:
+    """A trace session the server can seek into and aggregate over.
+
+    Pairs a :class:`JsonlIndex` (random-access windows) with a
+    :class:`TraceAggregates` (cumulative heat / coverage / top-k) for one
+    session id.  Both are built from a single file scan via ``build_seekable``.
+    """
+
+    __slots__ = ("aggregates", "index")
+
+    def __init__(self, index: JsonlIndex, aggregates: TraceAggregates) -> None:
+        self.index = index
+        self.aggregates = aggregates
 
 
 def _trace_buffer_seconds() -> float:
@@ -105,8 +122,32 @@ def _read_source(root_real: Path, posix_path: str) -> tuple[str | None, str]:
         return (None, "not_found")
 
 
-async def _push_static_graph(ws: ServerConnection, root: Path) -> None:
-    """Detect language(s), parse the project, and push static_graph if supported."""
+def _graph_signature(graph: StaticGraph) -> tuple[int, int, int]:
+    """Cheap order-independent signature of a graph's topology.
+
+    Used to cache agent-side analysis (hub-score + cycles) across connects:
+    re-parsing the same unchanged project yields the same signature, so the
+    expensive Tarjan SCC pass runs once instead of once per browser tab.  An
+    edit that changes the topology changes the signature, so live-reparse still
+    refreshes the analysis.
+    """
+    checksum = 0
+    for e in graph["edges"]:
+        checksum ^= hash((e["source"], e["target"], e["kind"]))
+    return (len(graph["nodes"]), len(graph["edges"]), checksum)
+
+
+async def _push_static_graph(
+    ws: ServerConnection,
+    root: Path,
+    meta_cache: dict[tuple[int, int, int], dict[str, Any]],
+) -> None:
+    """Detect language(s), parse the project, and push static_graph if supported.
+
+    Agent-side analysis (hub-score + cycles) is injected into ``graph.metadata``
+    via :func:`enrich_metadata`, memoized by ``meta_cache`` so identical graphs
+    across connects do not recompute Tarjan SCC.
+    """
     from grackle.adapters import registry
     from grackle.adapters.base import ParseOptions
 
@@ -125,6 +166,19 @@ async def _push_static_graph(ws: ServerConnection, root: Path) -> None:
     except Exception as exc:
         log.warning("static graph parse failed", error=str(exc), root=str(root))
         return
+
+    sig = _graph_signature(graph)
+    cached = meta_cache.get(sig)
+    if cached is not None:
+        graph.setdefault("metadata", {}).update(cached)
+    else:
+        from grackle.graph_analysis import enrich_metadata
+
+        enrich_metadata(graph)
+        meta_cache[sig] = {
+            "hub_score": graph["metadata"]["hub_score"],
+            "cycles": graph["metadata"]["cycles"],
+        }
 
     log.info(
         "static graph pushed",
@@ -206,22 +260,24 @@ async def _receive_loop(
     buffer_seconds: float,
     max_events: int | None = None,
     *,
-    trace_index: JsonlIndex | None = None,
-    file_session_id: str | None = None,
+    seekable_sessions: dict[str, _SeekableSession] | None = None,
+    store: SessionStore | None = None,
 ) -> None:
     """Process inbound messages from one connection.
 
-    Handles ping/pong, read_source, live-ingest trace messages, and
-    (when ``trace_index`` is set) ``trace_seek_request`` for server-side seek.
+    Handles ping/pong, read_source, live-ingest trace messages,
+    ``trace_seek_request`` for server-side seek, ``trace_query_request`` for
+    aggregate queries, ``session_list_request``, and ``session_load_request``.
 
     Live-ingest messages (trace_session_start / trace_event /
     trace_session_end) are appended to the ring-buffer and broadcast to
     all other connected consumers.
 
-    ``trace_seek_request`` is answered directly to the requesting client only:
-    ``trace_window`` on success, ``trace_seek_error`` if the session ID does
-    not match or no index is loaded.
+    Seek and query requests are answered only for session ids present in
+    ``seekable_sessions`` — the file-replay session plus any session loaded from
+    the store this server run.  Unknown ids get an error reply.
     """
+    sessions = seekable_sessions if seekable_sessions is not None else {}
     async for raw in ws:
         try:
             msg = raw.decode() if isinstance(raw, bytes) else raw
@@ -248,16 +304,18 @@ async def _receive_loop(
                 reply = protocol.make_source_error(envelope["id"], path_val, enc_or_reason)
             await ws.send(reply)
         elif etype == "trace_seek_request":
-            # Server-side seek (Phase 7.3).  Only file-replay mode supports
-            # this; live-attach sessions are not seekable.
+            # Server-side seek (Phase 7.3).  Works for any session registered in
+            # seekable_sessions (file-replay + store-loaded); live-attach is not.
             seek_sid = envelope["payload"].get("session_id", "")
             if not isinstance(seek_sid, str):
                 continue
-            if trace_index is None or seek_sid != file_session_id:
+            sess = sessions.get(seek_sid)
+            if sess is None:
                 await ws.send(
                     protocol.make_trace_seek_error(envelope["id"], seek_sid, "session not found")
                 )
                 continue
+            trace_index = sess.index
             start_raw = envelope["payload"].get("start_index", 0)
             count_raw = envelope["payload"].get("count", 0)
             if not isinstance(start_raw, int) or not isinstance(count_raw, int):
@@ -289,6 +347,101 @@ async def _receive_loop(
                     envelope["id"], seek_sid, clamped_start, seek_events, total
                 )
             )
+        elif etype == "trace_query_request":
+            qsid = envelope["payload"].get("session_id", "")
+            kind = envelope["payload"].get("kind", "")
+            at_raw = envelope["payload"].get("at_index", 0)
+            sess = sessions.get(qsid) if isinstance(qsid, str) else None
+            if sess is None:
+                await ws.send(
+                    protocol.make_trace_query_response(
+                        envelope["id"], qsid, kind, 0, {}, error="session not found"
+                    )
+                )
+                continue
+            if not isinstance(at_raw, int):
+                await ws.send(
+                    protocol.make_trace_query_response(
+                        envelope["id"], qsid, kind, 0, {}, error="invalid at_index"
+                    )
+                )
+                continue
+            aggregates = sess.aggregates
+            at_index = max(0, min(at_raw, len(aggregates)))
+            try:
+                loop = asyncio.get_running_loop()
+                data: dict[str, Any]
+                if kind == "cumulative_heat":
+                    data = await loop.run_in_executor(
+                        None, aggregates.cumulative_heat_all, at_index
+                    )
+                elif kind == "coverage":
+                    count = await loop.run_in_executor(None, aggregates.coverage_count, at_index)
+                    data = {"count": count}
+                elif kind == "top_k":
+                    k = int(envelope["payload"].get("k", 20))
+                    entries = await loop.run_in_executor(None, aggregates.top_k, k, at_index)
+                    data = {"entries": [{"node_id": nid, "count": cnt} for nid, cnt in entries]}
+                else:
+                    await ws.send(
+                        protocol.make_trace_query_response(
+                            envelope["id"],
+                            qsid,
+                            kind,
+                            at_index,
+                            {},
+                            error=f"unknown kind: {kind!r}",
+                        )
+                    )
+                    continue
+                await ws.send(
+                    protocol.make_trace_query_response(envelope["id"], qsid, kind, at_index, data)
+                )
+            except Exception as exc:
+                log.warning("trace query error", kind=kind, error=str(exc))
+                await ws.send(
+                    protocol.make_trace_query_response(
+                        envelope["id"], qsid, kind, at_index, {}, error="query error"
+                    )
+                )
+        elif etype == "session_list_request":
+            if store is None:
+                sessions_data: list[dict[str, Any]] = []
+            else:
+                loop = asyncio.get_running_loop()
+                metas = await loop.run_in_executor(None, store.list_sessions)
+                sessions_data = [
+                    {
+                        "id": s.id,
+                        "label": s.label,
+                        "started_ns": s.started_ns,
+                        "ended_ns": s.ended_ns,
+                        "source_path": s.source_path,
+                        "event_count": s.event_count,
+                        "language": s.language,
+                    }
+                    for s in metas
+                ]
+            await ws.send(protocol.make_session_list_response(envelope["id"], sessions_data))
+        elif etype == "session_load_request":
+            load_sid = envelope["payload"].get("session_id", "")
+            if store is None:
+                log.warning("session load ignored: server has no --store", session_id=load_sid)
+                continue
+            loop = asyncio.get_running_loop()
+            meta = await loop.run_in_executor(None, store.get_session, load_sid)
+            if meta is None:
+                log.warning("session load: unknown session id", session_id=load_sid)
+                continue
+            load_path = Path(meta.source_path)
+            if not load_path.exists():
+                log.warning(
+                    "session load: source file missing",
+                    session_id=load_sid,
+                    path=str(load_path),
+                )
+                continue
+            asyncio.create_task(_load_stored_session(ws, load_path, load_sid, sessions))
         elif etype in ("trace_session_start", "trace_event", "trace_session_end"):
             # Live-ingest path: a producer process is streaming events into
             # this server.  Buffer each message and broadcast to all consumers.
@@ -373,12 +526,82 @@ async def _replay_trace(
         return
 
 
+async def _load_stored_session(
+    ws: ServerConnection,
+    path: Path,
+    session_id: str,
+    seekable_sessions: dict[str, _SeekableSession],
+) -> None:
+    """Replay a stored session as a seekable session to one connection.
+
+    Builds (and registers) a :class:`_SeekableSession` so the loaded session
+    gains full seek **and** aggregate-query support — identical to a
+    ``--trace-source`` replay.  The build is cached in ``seekable_sessions`` so
+    re-loading the same session reuses the index/aggregates.
+    """
+    from grackle.python_runtime.aggregates import build_seekable
+
+    existing = seekable_sessions.get(session_id)
+    if existing is not None:
+        idx = existing.index
+    else:
+        try:
+            loop = asyncio.get_running_loop()
+            idx, agg = await loop.run_in_executor(None, build_seekable, path)
+        except Exception as exc:
+            log.warning("session load: build failed", path=str(path), error=str(exc))
+            return
+        seekable_sessions[session_id] = _SeekableSession(index=idx, aggregates=agg)
+    await _replay_trace(ws, path, False, session_id, seekable=True, total_events=len(idx))
+
+
+def _register_trace_source(
+    store: SessionStore,
+    trace_source: Path,
+    index: JsonlIndex,
+    root: Path,
+) -> None:
+    """Index a ``--trace-source`` file into the store so it appears in the library.
+
+    Gives ``save_session`` a production caller and lets the trace be re-loaded
+    after a restart (without ``--trace-source``).  The id is a stable uuid5 over
+    the absolute path so re-serving the same file updates one row rather than
+    accumulating duplicates.  ``source_path`` is the absolute local path read
+    back via ``Path`` at load time.
+    """
+    from grackle.adapters import registry
+    from grackle.session_store import SessionMeta
+
+    abspath = str(trace_source.resolve())
+    try:
+        mtime_ns = trace_source.stat().st_mtime_ns
+    except OSError:
+        mtime_ns = 0
+    try:
+        detected = registry.detect(root)
+        language = detected[0] if detected else "python"
+    except Exception:
+        language = "python"
+    store.save_session(
+        SessionMeta(
+            id=str(uuid5(NAMESPACE_URL, abspath)),
+            label=trace_source.name,
+            started_ns=mtime_ns,
+            ended_ns=mtime_ns,
+            source_path=abspath,
+            event_count=len(index),
+            language=language,
+        )
+    )
+
+
 async def serve(
     host: str,
     port: int,
     root: Path = Path(),
     trace_source: Path | None = None,
     pace: bool = True,
+    store: SessionStore | None = None,
 ) -> None:
     """Start the WebSocket server and run until cancelled.
 
@@ -394,6 +617,10 @@ async def serve(
                       reproduce original inter-event timing (gap clamped to
                       ``_MAX_GAP_S``).  When False events are pushed as fast
                       as the socket allows — useful for tests and CI.
+        store:        Optional session library.  When set, the ``--trace-source``
+                      file (if any) is indexed into it and ``session_list`` /
+                      ``session_load`` requests are served from it.  Closed when
+                      ``serve`` exits.
     """
     root_real = root.resolve()
 
@@ -405,29 +632,35 @@ async def serve(
     buffer_seconds = _trace_buffer_seconds()
     max_events = _trace_buffer_max_events()
 
-    # File-replay mode: build the byte-offset index once at startup so every
-    # connection can seek into the file without re-scanning it.  The session_id
-    # is also stable across all connections — the browser receives the same id
-    # on reconnect and can continue using it in seek requests.
-    file_index: JsonlIndex | None = None
+    # Agent-side analysis cache (hub-score + cycles), shared across connects so
+    # the Tarjan SCC pass runs once per distinct graph topology, not per tab.
+    meta_cache: dict[tuple[int, int, int], dict[str, Any]] = {}
+
+    # Registry of seekable/queryable sessions, keyed by session id.  Shared
+    # across connections so a session loaded by one tab is queryable by all.
+    seekable_sessions: dict[str, _SeekableSession] = {}
+
+    # File-replay mode: build the index + aggregates once in a single pass so
+    # every connection can seek and query without re-scanning.  The session_id
+    # is stable across all connections — the browser receives the same id on
+    # reconnect and can continue using it in seek/query requests.
     file_session_id: str | None = None
     if trace_source is not None:
-        from grackle.python_runtime.jsonl_index import JsonlIndex as _JsonlIndex
+        from grackle.python_runtime.aggregates import build_seekable
 
+        file_session_id = str(uuid4())
         try:
-            file_index = _JsonlIndex.build(trace_source)
-            log.info(
-                "trace index built",
-                path=str(trace_source),
-                events=len(file_index),
-            )
+            idx, agg = build_seekable(trace_source)
+            seekable_sessions[file_session_id] = _SeekableSession(index=idx, aggregates=agg)
+            log.info("trace index + aggregates built", path=str(trace_source), events=len(idx))
+            if store is not None:
+                _register_trace_source(store, trace_source, idx, root_real)
         except Exception as exc:
             log.warning(
-                "trace index build failed — seek disabled",
+                "trace index/aggregates build failed — seek + query disabled",
                 path=str(trace_source),
                 error=str(exc),
             )
-        file_session_id = str(uuid4())
 
     async def _handler(ws: ServerConnection) -> None:
         origin = ws.request.headers.get("Origin", "") if ws.request is not None else ""
@@ -441,13 +674,14 @@ async def serve(
         tasks: list[asyncio.Task[None]] = []
         try:
             # Static graph first — guaranteed to arrive before any trace messages.
-            await _push_static_graph(ws, root_real)
+            await _push_static_graph(ws, root_real, meta_cache)
 
             # Flush ring-buffer history to late joiners (live mode only).
             if trace_source is None:
                 await _flush_ring_buffer(ws, ring_buffer)
 
-            # Receive loop handles ping, read_source, live-ingest, and seek.
+            # Receive loop handles ping, read_source, live-ingest, seek, query,
+            # and session library requests.
             receive_task: asyncio.Task[None] = asyncio.create_task(
                 _receive_loop(
                     ws,
@@ -456,27 +690,27 @@ async def serve(
                     ring_buffer,
                     buffer_seconds,
                     max_events,
-                    trace_index=file_index,
-                    file_session_id=file_session_id,
+                    seekable_sessions=seekable_sessions,
+                    store=store,
                 )
             )
             tasks.append(receive_task)
 
             # File-replay task (one per connection, independent of live ingest).
-            # Uses the stable file_session_id and advertises seekable=True so
-            # the browser can send trace_seek_request messages.
-            # total_events is pre-computed from the index so _replay_trace does
-            # not need to scan the file a second time in seekable mode.
-            if trace_source is not None:
-                assert file_session_id is not None  # set above when trace_source is set
+            # Uses the stable file_session_id and advertises seekable=True so the
+            # browser can send trace_seek_request / trace_query_request messages.
+            if trace_source is not None and file_session_id is not None:
+                file_session = seekable_sessions.get(file_session_id)
+                seekable = file_session is not None
+                total = len(file_session.index) if file_session is not None else 0
                 replay_task: asyncio.Task[None] = asyncio.create_task(
                     _replay_trace(
                         ws,
                         trace_source,
                         pace,
                         file_session_id,
-                        seekable=file_index is not None,
-                        total_events=len(file_index) if file_index is not None else 0,
+                        seekable=seekable,
+                        total_events=total,
                     )
                 )
                 tasks.append(replay_task)
@@ -496,6 +730,10 @@ async def serve(
 
     if host not in ("127.0.0.1", "localhost", "::1"):
         log.warning("binding to non-loopback address — agent reachable from network", host=host)
-    async with _ws_serve(_handler, host, port):
-        log.info("agent listening", host=host, port=port, root=str(root_real))
-        await asyncio.Future()  # run until cancelled
+    try:
+        async with _ws_serve(_handler, host, port):
+            log.info("agent listening", host=host, port=port, root=str(root_real))
+            await asyncio.Future()  # run until cancelled
+    finally:
+        if store is not None:
+            store.close()

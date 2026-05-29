@@ -333,12 +333,23 @@ def trace(
     default=False,
     help="Disable inter-event pacing during file replay (push all events immediately).",
 )
+@click.option(
+    "--store",
+    default=None,
+    type=click.Path(dir_okay=False, path_type=Path),
+    help=(
+        "Path to the SQLite session library (e.g. .grackle/sessions.db). "
+        "When set, completed live trace sessions are persisted for later replay "
+        "via the SessionLibraryPanel. Created if it does not exist."
+    ),
+)
 def serve(
     host: str,
     port: int,
     root: Path,
     trace_source: Path | None,
     no_pace: bool,
+    store: Path | None,
 ) -> None:
     """Start the grackle agent WebSocket server."""
     configure_logging()
@@ -350,7 +361,21 @@ def serve(
         root=str(root),
         trace_source=str(trace_source) if trace_source else None,
     )
-    asyncio.run(_server.serve(host, port, root=root, trace_source=trace_source, pace=not no_pace))
+    session_store = None
+    if store is not None:
+        from grackle.session_store import SessionStore as _SessionStore
+
+        session_store = _SessionStore.open(store)
+    asyncio.run(
+        _server.serve(
+            host,
+            port,
+            root=root,
+            trace_source=trace_source,
+            pace=not no_pace,
+            store=session_store,
+        )
+    )
 
 
 async def _stream_events_to_server(
