@@ -129,12 +129,15 @@ export const useGrackleClient = create<GrackleClientState>()((set, get) => ({
             resolver(envelope as SourceReply);
           }
         } else if (envelope.type === "trace_session_start") {
-          // Discard pending requests from the prior session before the new
-          // session starts.  Stale replies arriving after a session restart
-          // must not match entries from the new session.
+          // Discard pending *session-scoped* requests before the new session
+          // starts, so a stale reply from the prior session cannot match an
+          // entry from the new one.  Session-library requests
+          // (_pendingSessionList) are NOT cleared: they are independent of the
+          // trace-session lifecycle, and loading a session itself triggers a
+          // trace_session_start — clearing them here would orphan an in-flight
+          // requestSessionList() until its 5 s timeout.
           get()._pendingTraceWindow.clear();
           get()._pendingTraceQuery.clear();
-          get()._pendingSessionList.clear();
           const msg = envelope as unknown as TraceSessionStartMessage;
           get()._traceSessionStartHandlers.forEach((h) => {
             h(msg);
@@ -293,6 +296,11 @@ export const useGrackleClient = create<GrackleClientState>()((set, get) => ({
 
   requestTraceQuery: (sessionId, kind, atIndex, k) => {
     return new Promise<TraceQueryResponse>((resolve, reject) => {
+      const { _ws, status } = get();
+      if (_ws === null || status !== "connected") {
+        reject(new Error("not connected"));
+        return;
+      }
       const id = crypto.randomUUID();
       const timer = setTimeout(() => {
         get()._pendingTraceQuery.delete(id);
@@ -312,14 +320,17 @@ export const useGrackleClient = create<GrackleClientState>()((set, get) => ({
         at_index: atIndex,
       };
       if (k !== undefined) payload.k = k;
-      get()._ws?.send(
-        JSON.stringify({ id, type: "trace_query_request", payload })
-      );
+      _ws.send(JSON.stringify({ id, type: "trace_query_request", payload }));
     });
   },
 
   requestSessionList: () => {
     return new Promise<SessionListResponse>((resolve, reject) => {
+      const { _ws, status } = get();
+      if (_ws === null || status !== "connected") {
+        reject(new Error("not connected"));
+        return;
+      }
       const id = crypto.randomUUID();
       const timer = setTimeout(() => {
         get()._pendingSessionList.delete(id);
@@ -329,7 +340,7 @@ export const useGrackleClient = create<GrackleClientState>()((set, get) => ({
         clearTimeout(timer);
         resolve(msg);
       });
-      get()._ws?.send(
+      _ws.send(
         JSON.stringify({ id, type: "session_list_request", payload: {} })
       );
     });

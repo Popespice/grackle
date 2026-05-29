@@ -42,6 +42,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from grackle.python_runtime.jsonl_index import JsonlIndex
+
 
 class TraceAggregates:
     """In-memory aggregate indexes built from a single pass over a JSONL trace.
@@ -175,6 +177,75 @@ class TraceAggregates:
         entries.sort(key=lambda x: (-x[1], x[0]))
         return entries[:k]
 
-    def _node_ids(self) -> list[str]:
-        """Return all node_ids that have at least one recorded hit."""
-        return list(self._hits.keys())
+    def cumulative_heat_all(self, at_index: int) -> dict[str, int]:
+        """Return ``{node_id: count}`` for every node with count > 0 at *at_index*.
+
+        Equivalent to calling :meth:`cumulative_heat` for every recorded node
+        and dropping zero counts.  Honours ``sparse_k`` rounding identically.
+        """
+        return {
+            node_id: count
+            for node_id in self._hits
+            if (count := self.cumulative_heat(node_id, at_index)) > 0
+        }
+
+
+def build_seekable(path: Path, *, sparse_k: int = 1) -> tuple[JsonlIndex, TraceAggregates]:
+    """Build a ``JsonlIndex`` and ``TraceAggregates`` from a single file scan.
+
+    Both structures need the same forward pass over the JSONL file — the index
+    records byte offsets of non-blank lines, the aggregates parse those lines
+    for per-node hit counts.  Building them together avoids the double-scan of
+    calling ``JsonlIndex.build`` and ``TraceAggregates.build`` separately.
+
+    The event index assigned by the aggregates increments once per non-blank
+    line (parse failures included), which is exactly the offset list position
+    recorded by the index, so ``index[i]`` and aggregate event-index ``i`` refer
+    to the same line.
+
+    Args:
+        path:     Path to the JSONL trace file.
+        sparse_k: See :meth:`TraceAggregates.build`.
+
+    Returns:
+        ``(JsonlIndex, TraceAggregates)`` over one pass.  On ``OSError`` (missing
+        or unreadable file) both are empty.
+    """
+    from grackle.python_runtime.jsonl_index import JsonlIndex as _JsonlIndex
+
+    if sparse_k < 1:
+        sparse_k = 1
+
+    offsets: list[int] = []
+    hits: dict[str, list[int]] = {}
+    first_seen: dict[str, int] = {}
+    index = 0
+
+    try:
+        with path.open("rb") as f:
+            offset = 0
+            for raw_line in f:
+                line_len = len(raw_line)
+                stripped = raw_line.strip()
+                if not stripped:
+                    offset += line_len
+                    continue
+                # Non-blank line: its offset-list position == its aggregate index.
+                offsets.append(offset)
+                offset += line_len
+                try:
+                    event = json.loads(stripped.decode("utf-8"))
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    index += 1
+                    continue
+                node_id: str = event.get("node_id", "")
+                if node_id:
+                    if node_id not in first_seen:
+                        first_seen[node_id] = index
+                    if sparse_k == 1 or index % sparse_k == 0:
+                        hits.setdefault(node_id, []).append(index)
+                index += 1
+    except OSError:
+        pass
+
+    return _JsonlIndex(path, offsets), TraceAggregates(hits, first_seen, index, sparse_k)

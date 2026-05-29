@@ -155,20 +155,27 @@ export function TimelinePanel(): JSX.Element | null {
   }, []);
 
   // Fetch agent cumulative heat when the playhead moves in seekable mode.
+  // Debounced (150 ms) to match the seek debounce above: rapid scrubbing
+  // updates tracePlayhead per tick, but only the settled position issues a
+  // query — otherwise every intermediate frame floods the socket and the agent
+  // with O(node-count) cumulative-heat computations.
   useEffect(() => {
     if (!traceSeekable || traceHeatMode !== "cumulative" || !traceSessionId)
       return;
     let cancelled = false;
-    requestTraceQuery(traceSessionId, "cumulative_heat", tracePlayhead)
-      .then((resp) => {
-        if (cancelled) return;
-        setAgentHeat(resp.payload.data as Record<string, number>);
-      })
-      .catch(() => {
-        // ignore — agent may not be in query mode yet
-      });
+    const timer = setTimeout(() => {
+      requestTraceQuery(traceSessionId, "cumulative_heat", tracePlayhead)
+        .then((resp) => {
+          if (cancelled) return;
+          setAgentHeat(resp.payload.data as Record<string, number>);
+        })
+        .catch(() => {
+          // ignore — agent may not be in query mode yet
+        });
+    }, 150);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
   }, [
     traceSeekable,

@@ -26,7 +26,9 @@ Two additional Phase-7 debts closed here (per ADR-0017 "Phase 8 candidates"):
 - **First-seen index** (`dict[str, int]`): `node_id → first event index`.  Used for coverage queries.
 - **Coverage sorted list**: `sorted_first_seen: list[int]` — the sorted first-seen indices for all nodes.  `coverage_count(at_index)` = `bisect_right(sorted_first_seen, at_index - 1)`.
 
-Query complexity: `cumulative_heat(node_id, at_index)` = `bisect_right(hit_list[node_id], at_index - 1)` — O(log N) where N = events for that node.  `coverage_count` = O(log M) where M = distinct nodes.  `top_k(k, at_index)` = O(M log M) worst case (small M in practice).
+Query complexity: `cumulative_heat(node_id, at_index)` = `bisect_right(hit_list[node_id], at_index - 1)` — O(log N) where N = events for that node.  `coverage_count` = O(log M) where M = distinct nodes.  `top_k(k, at_index)` = O(M log M) worst case (small M in practice).  `cumulative_heat_all(at_index)` returns `{node_id: count}` for every node with a non-zero count — the public method the server uses for the `cumulative_heat` query (it does **not** reach into private internals).
+
+**Single-pass construction.**  `build_seekable(path)` produces both the `JsonlIndex` (byte offsets) and the `TraceAggregates` from **one** file scan — the offset-list position of each non-blank line equals its aggregate event index, so they stay aligned.  The server uses this at startup and on session-load, avoiding the double scan of building each separately.
 
 **Sparse index option** (`sparse_k > 1`): only record every K-th event index per node. Reduces memory by ~K× at the cost of approximate counts (floor to nearest multiple of sparse_k). Not used by default; exposed for profiling if 10M+ event traces become common.
 
@@ -51,7 +53,7 @@ The server handles `trace_query_request` in `_receive_loop` identically to `trac
 - `useGrackleClient`: `requestTraceQuery(sessionId, kind, atIndex, k?)` — mirrors `requestTraceWindow` (pending-map + 5 s timeout).
 - `useGraphStore`: `agentHeat: Record<string, number> | null` + `setAgentHeat` / `clearAgentHeat`.
 - `useHeatmap`: in seekable + cumulative mode, returns `agentHeat` directly (O(M) Map construction) instead of running `computeHeat` over the window (which is only accurate for the window, not the full trace).
-- `TimelinePanel`: `useEffect` on `[traceSeekable, traceHeatMode, traceSessionId, tracePlayhead]` fires `requestTraceQuery(..., "cumulative_heat", playhead)` and calls `setAgentHeat`.
+- `TimelinePanel`: `useEffect` on `[traceSeekable, traceHeatMode, traceSessionId, tracePlayhead]` fires `requestTraceQuery(..., "cumulative_heat", playhead)` and calls `setAgentHeat`.  The effect carries its **own** 150 ms debounce timer (independent of the seek debounce) so rapid scrubbing issues one query at the settled position instead of one per intermediate frame.
 
 ### Agent-side graph analysis (`graph.metadata`)
 
@@ -64,6 +66,10 @@ graph["metadata"]["cycles"]     # list[{id, nodes, size, edge_kinds}] SCCs > 1, 
 
 Frontend: `graph/analysis/index.ts` checks `graph.metadata?.hub_score` / `graph.metadata?.cycles` before running local compute.  Local compute remains as a fallback for graphs without metadata (e.g. loaded from a file replay where the agent version pre-dates 8.3).
 
+`cycles` is consumed directly — the agent payload (`{id, nodes, size, edge_kinds}`) already matches the frontend `CycleEntry`.  `hub_score` is **rehydrated**: the agent ships the compact `{node_id, score}` form to keep the wire small, but `HubEntry` consumers (e.g. `StatsPanel`) expect `{node: GraphNode, score}`, so `index.ts` resolves each `node_id` back to the full node from `graph.nodes`.  (Passing the raw `{node_id}` shape through unchanged would crash `StatsPanel` on `entry.node.id`.)
+
+`enrich_metadata` is memoized in the server by a cheap order-independent topology signature, so the Tarjan SCC pass runs once per distinct graph rather than once per browser connect; a live re-parse that changes the topology refreshes it.
+
 ---
 
 ## Consequences
@@ -75,5 +81,5 @@ Frontend: `graph/analysis/index.ts` checks `graph.metadata?.hub_score` / `graph.
 
 **Negative / known limits:**
 - `TraceAggregates` is built at server startup and held in memory: O(total_events) for the hit lists.  At 10M events this is ~80–160 MiB (same order as `JsonlIndex`).  Sparse index (`sparse_k`) mitigates this when needed.
-- Cumulative-heat queries are per-playhead-scrub, so rapid scrubbing issues many requests.  The existing 5 s timeout and silent-drop semantics handle races; a debounce in `TimelinePanel` (≥ 150 ms, already present for seek) bounds the request rate.
+- Cumulative-heat queries are per-playhead-scrub, so rapid scrubbing would issue many requests.  A dedicated 150 ms debounce in the `TimelinePanel` heat-query effect bounds the rate; the 5 s timeout and silent-drop semantics handle any remaining races.
 - Coverage at arbitrary index requires a `bisect` over all first-seen entries — O(log M).  This is fast enough for interactive use; a prefix-sum array over `sorted_first_seen` would make it O(1) if needed.

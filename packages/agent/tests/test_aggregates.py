@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from grackle.python_runtime.aggregates import TraceAggregates
+from grackle.python_runtime.aggregates import TraceAggregates, build_seekable
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -215,3 +215,81 @@ def test_sparse_k_parametrized(tmp_path: Path, sparse_k: int) -> None:
     # Coverage should always be exact (based on full-resolution first_seen)
     assert agg.coverage_count(5) == 5  # n0..n4 each first seen before index 5
     assert agg.coverage_count(10) == 10
+
+
+# ---------------------------------------------------------------------------
+# cumulative_heat_all
+# ---------------------------------------------------------------------------
+
+
+def test_cumulative_heat_all(tmp_path: Path) -> None:
+    """cumulative_heat_all returns {node_id: count} for nodes with count > 0."""
+    events = [
+        _make_event("A", 0),
+        _make_event("B", 1),
+        _make_event("A", 2),
+        _make_event("A", 3),
+        _make_event("B", 4),
+    ]
+    f = tmp_path / "all.jsonl"
+    _write_jsonl(f, events)
+    agg = TraceAggregates.build(f)
+
+    # at_index=0 → no events yet → empty (no zero-count entries)
+    assert agg.cumulative_heat_all(0) == {}
+
+    # Full trace → matches per-node cumulative_heat, zero counts excluded
+    assert agg.cumulative_heat_all(5) == {"A": 3, "B": 2}
+
+    # Partial window agrees with cumulative_heat for every node
+    for at in range(6):
+        expected = {
+            nid: agg.cumulative_heat(nid, at)
+            for nid in ("A", "B")
+            if agg.cumulative_heat(nid, at) > 0
+        }
+        assert agg.cumulative_heat_all(at) == expected
+
+
+# ---------------------------------------------------------------------------
+# build_seekable — single-pass index + aggregates
+# ---------------------------------------------------------------------------
+
+
+def test_build_seekable_matches_separate_builds(tmp_path: Path) -> None:
+    """build_seekable yields an index + aggregates equivalent to building each alone."""
+    events = [
+        _make_event("A", 0),
+        _make_event("B", 1),
+        _make_event("A", 2),
+        _make_event("C", 3),
+        _make_event("A", 4),
+    ]
+    f = tmp_path / "seekable.jsonl"
+    _write_jsonl(f, events)
+
+    idx, agg = build_seekable(f)
+    agg_alone = TraceAggregates.build(f)
+
+    # Same total event count from both structures and the standalone aggregates.
+    assert len(idx) == 5
+    assert len(agg) == 5
+    assert len(agg) == len(agg_alone)
+
+    # Aggregate queries agree with the standalone build.
+    assert agg.cumulative_heat_all(5) == agg_alone.cumulative_heat_all(5)
+    assert agg.coverage_count(5) == agg_alone.coverage_count(5)
+
+    # The index reads back the same events at the same absolute positions, so
+    # event index i (used by aggregates) lines up with offset slot i.
+    window = idx.read_window(0, 5)
+    assert [e["node_id"] for e in window] == ["A", "B", "A", "C", "A"]
+
+
+def test_build_seekable_missing_file(tmp_path: Path) -> None:
+    """build_seekable on a missing file returns empty (no raise)."""
+    idx, agg = build_seekable(tmp_path / "nope.jsonl")
+    assert len(idx) == 0
+    assert len(agg) == 0
+    assert agg.cumulative_heat_all(100) == {}
+    assert idx.read_window(0, 10) == []
