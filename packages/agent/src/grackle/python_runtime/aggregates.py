@@ -177,6 +177,11 @@ class TraceAggregates:
         entries.sort(key=lambda x: (-x[1], x[0]))
         return entries[:k]
 
+    @property
+    def node_ids(self) -> frozenset[str]:
+        """All node IDs that have at least one event recorded in this trace."""
+        return frozenset(self._hits.keys())
+
     def cumulative_heat_all(self, at_index: int) -> dict[str, int]:
         """Return ``{node_id: count}`` for every node with count > 0 at *at_index*.
 

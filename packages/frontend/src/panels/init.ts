@@ -1,11 +1,13 @@
 import { GraphCanvas } from "../graph/GraphCanvas";
 import { CyclesPanel } from "./CyclesPanel";
+import { DiffPanel } from "./DiffPanel";
 import { FlameGraphPanel } from "./FlameGraphPanel";
 import { GraphLegendPanel } from "./GraphLegendPanel";
 import { HeaderChrome } from "./HeaderChrome";
 import { NodeInspectorPanel } from "./NodeInspectorPanel";
 import { panels } from "./registry";
 import { SearchFilterPanel } from "./SearchFilterPanel";
+import { SessionLibraryPanel } from "./SessionLibraryPanel";
 import { SourceViewer } from "./SourceViewer";
 import { StatsPanel } from "./StatsPanel";
 import { TimelinePanel } from "./TimelinePanel";
@@ -51,6 +53,18 @@ panels.register({
   id: "cycles-panel",
   component: CyclesPanel,
   order: 30,
+});
+panels.register({
+  slot: "right-sidebar",
+  id: "diff-panel",
+  component: DiffPanel,
+  order: 35,
+});
+panels.register({
+  slot: "left-sidebar",
+  id: "session-library-panel",
+  component: SessionLibraryPanel,
+  order: 5,
 });
 panels.register({
   slot: "bottom-dock",
