@@ -39,6 +39,24 @@ export interface DiffEntry {
   delta: number;
 }
 
+/**
+ * Canonical hex colours per diff status — the single source of truth shared by
+ * the graph overlay (GraphCanvas) and the panel chips (DiffPanel).
+ *
+ * All values are #rrggbb — never oklch/hsl/CSS-var — because Sigma 3.x
+ * parseColor only accepts hex/rgb (ADR-0015).  `same` is the empty string: it
+ * carries no override, so the graph falls through to the node's kind colour.
+ */
+export const DIFF_STATUS_COLORS: Record<DiffStatus, string> = {
+  hotter: "#ef4444", // red    — regression
+  new: "#22c55e", // green  — new coverage
+  colder: "#3b82f6", // blue   — reduced calls
+  gone: "#6b7280", // gray   — no longer called
+  cold: "#f59e0b", // amber  — never called
+  touched: "#10b981", // emerald — covered
+  same: "", // empty = fall through to kind colour
+};
+
 /** Sort key per status — lower index = more actionable = shown first. */
 const STATUS_ORDER: Record<DiffStatus, number> = {
   hotter: 0,
@@ -69,19 +87,17 @@ export function diffTraceVsStatic(
   coverage: RuntimeCoverage
 ): DiffEntry[] {
   const entries: DiffEntry[] = graph.nodes.map((node) => {
-    const count = coverage.touched.has(node.id)
-      ? coverage.hot.has(node.id)
-        ? 2
-        : 1 // hot is a superset of touched
-      : 0;
-    // Use actual event count indirectly via touched/cold sets.
-    // The coverage object doesn't expose per-node counts, so we use 1 for
-    // any touched node and 0 for cold — callers wanting exact counts should
-    // pass a raw counts map to diffTraceVsTrace instead.
+    // RuntimeCoverage exposes only set membership (touched/cold/hot), not
+    // per-node hit counts, so countA carries no quantitative value here — the
+    // status field is the signal.  We deliberately set countA/countB/delta to
+    // 0 rather than a synthetic 1/2: a non-zero count would read as a real hit
+    // count to any consumer that renders it (e.g. a future vs-static table).
+    // Callers wanting exact counts should use diffTraceVsTrace with a raw
+    // counts map.
     const status: DiffStatus = coverage.touched.has(node.id)
       ? "touched"
       : "cold";
-    return { nodeId: node.id, status, countA: count, countB: 0, delta: 0 };
+    return { nodeId: node.id, status, countA: 0, countB: 0, delta: 0 };
   });
   return entries.sort(byStatus);
 }

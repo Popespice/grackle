@@ -10,6 +10,7 @@ import {
   type NodeAttributes,
 } from "./buildGraphology";
 import type { DiffStatus } from "./diff";
+import { DIFF_STATUS_COLORS } from "./diff";
 import { COLD_HEX, heatColor } from "./heatColor";
 import { isNodeVisible } from "./matching";
 import { useGraphStore } from "./useGraphStore";
@@ -20,20 +21,6 @@ const KIND_COLORS: Record<string, string> = {
   class: "#8b5cf6",
   function: "#10b981",
   method: "#f59e0b",
-};
-
-/**
- * Hex colours for diff overlay statuses.
- * All values are #rrggbb — never oklch/hsl/CSS-var (ADR-0015).
- */
-const DIFF_COLORS: Record<DiffStatus, string> = {
-  hotter: "#ef4444", // red   — regression
-  new: "#22c55e", // green — new coverage
-  colder: "#3b82f6", // blue  — reduced calls
-  gone: "#6b7280", // gray  — no longer called
-  cold: "#f59e0b", // amber — never called
-  touched: "#10b981", // emerald — covered
-  same: "", // empty = fall through to kind color
 };
 
 const DEFAULT_NODE_COLOR = "#6366f1";
@@ -104,7 +91,7 @@ function makeNodeReducer(
       color = "#cbd5e1";
     } else if (diffOverlay !== null) {
       const status = diffOverlay.get(node);
-      const diffColor = status ? DIFF_COLORS[status] : "";
+      const diffColor = status ? DIFF_STATUS_COLORS[status] : "";
       // Fall through to kind color when status is "same" or node not in overlay.
       color = diffColor || resolveNodeColor(data.kind, container);
     } else if (heatActive && maxHeat > 0) {

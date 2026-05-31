@@ -460,6 +460,19 @@ def diff(
                     f"{nid:{col}}  {e['status']:8s}  {e['count_a']:6d}  "
                     f"{e['count_b']:6d}  {e['delta']:+6d}"
                 )
+        elif only != "all":
+            click.echo(f"(no nodes with status {only!r})")
+
+        # When --only hides the hotter rows, the table can look clean while the
+        # exit code is still 1. Call that out so the non-zero exit isn't a
+        # mystery in CI logs.
+        hotter_n = counts.get("hotter", 0)
+        if hotter_n and only not in ("all", "hotter"):
+            click.echo("")
+            click.echo(
+                f"note: {hotter_n} hotter node(s) not shown (hidden by --only "
+                f"{only}); exiting 1 due to regression."
+            )
 
     if has_regression(entries):
         raise SystemExit(1)

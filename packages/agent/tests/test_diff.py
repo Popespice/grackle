@@ -275,6 +275,44 @@ class TestDiffCli:
         result = runner.invoke(diff_cmd, [str(a), str(b)])
         assert result.exit_code == 0
 
+    def test_only_filter_notes_hidden_regression(self, tmp_path: Path) -> None:
+        # --only colder hides the hotter rows; the exit code is still 1, so the
+        # text output must explain why (otherwise the non-zero exit is a mystery).
+        from click.testing import CliRunner
+
+        from grackle.cli import diff as diff_cmd
+
+        a = tmp_path / "a.jsonl"
+        b = tmp_path / "b.jsonl"
+        ev_x = {"event": "call", "node_id": "x", "ts_ns": 0, "thread_id": 1, "frame_depth": 0}
+        ev_y = {"event": "call", "node_id": "y", "ts_ns": 0, "thread_id": 1, "frame_depth": 0}
+        # x: 2 hits in A, 1 in B -> colder.  y: 1 in A, 3 in B -> hotter.
+        write_jsonl(a, [ev_x, ev_x, ev_y])
+        write_jsonl(b, [ev_x, ev_y, ev_y, ev_y])
+
+        runner = CliRunner()
+        result = runner.invoke(diff_cmd, [str(a), str(b), "--only", "colder"])
+        assert result.exit_code == 1  # regression still drives the exit code
+        assert "hotter node(s) not shown" in result.output
+        assert "--only colder" in result.output
+
+    def test_only_no_matches_reports_empty(self, tmp_path: Path) -> None:
+        # --only gone when there are no gone nodes -> a clear "(no nodes...)" line.
+        from click.testing import CliRunner
+
+        from grackle.cli import diff as diff_cmd
+
+        a = tmp_path / "a.jsonl"
+        b = tmp_path / "b.jsonl"
+        ev = {"event": "call", "node_id": "x", "ts_ns": 0, "thread_id": 1, "frame_depth": 0}
+        write_jsonl(a, [ev])
+        write_jsonl(b, [ev])  # x is "same"; no gone nodes
+
+        runner = CliRunner()
+        result = runner.invoke(diff_cmd, [str(a), str(b), "--only", "gone"])
+        assert result.exit_code == 0
+        assert "no nodes with status 'gone'" in result.output
+
 
 # ---------------------------------------------------------------------------
 # TraceAggregates.node_ids (new property tested here)

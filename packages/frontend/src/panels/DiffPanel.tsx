@@ -8,18 +8,25 @@
  *
  * 2. **Trace-vs-trace** (with baseline): when the user clicks "Set as baseline",
  *    the current per-node counts are snapshotted.  On the next (or current)
- *    session the panel computes a node-level diff vs. that baseline and colours
- *    the graph via the diff overlay.
+ *    session the panel computes a node-level diff vs. that baseline.
  *
- * Graph overlay colours (all hex -- ADR-0015):
- *   hotter -> red, new -> green, colder -> blue, gone -> gray, cold -> amber,
- *   touched -> emerald, same -> kind colour (no override).
+ * The panel ALWAYS shows the diff summary (chips + node lists). Painting the
+ * graph itself is OPT-IN via the "Show overlay" toggle: the overlay displaces
+ * the runtime heat-map (GraphCanvas paints overlay before heat), so leaving it
+ * off by default keeps the Phase-6 heat-map as the default visualization.
+ * Clicking "Set as baseline" auto-enables the overlay (the user just asked for
+ * a diff). The store write is debounced to avoid thrashing Sigma during live
+ * streaming.
+ *
+ * Graph overlay colours (all hex -- ADR-0015) live in graph/diff.ts
+ * (DIFF_STATUS_COLORS), shared with GraphCanvas so they cannot drift.
  */
 
 import type { JSX } from "react";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { DiffStatus } from "../graph/diff";
 import {
+  DIFF_STATUS_COLORS,
   diffCounts,
   diffToOverlay,
   diffTraceVsStatic,
@@ -43,15 +50,16 @@ const STATUS_LABELS: Record<DiffStatus, string> = {
   touched: "Touched",
 };
 
-const STATUS_COLORS: Record<DiffStatus, string> = {
-  hotter: "#ef4444",
-  new: "#22c55e",
-  colder: "#3b82f6",
-  gone: "#6b7280",
-  cold: "#f59e0b",
-  touched: "#10b981",
-  same: "var(--color-text-muted, #888)",
-};
+/** Muted fallback for statuses whose shared overlay colour is "" (e.g. same). */
+const MUTED = "var(--color-text-muted, #888)";
+
+/** Chip colour for a status — reuse the shared overlay map, muted when empty. */
+function chipColor(status: DiffStatus): string {
+  return DIFF_STATUS_COLORS[status] || MUTED;
+}
+
+/** Debounce window (ms) for pushing the overlay to the graph during streaming. */
+const OVERLAY_DEBOUNCE_MS = 150;
 
 const PANEL_STYLE: React.CSSProperties = {
   padding: "0.75rem 1rem",
@@ -123,6 +131,11 @@ export function DiffPanel(): JSX.Element | null {
   const clearDiffOverlay = useGraphStore((s) => s.clearDiffOverlay);
   const coverage = useRuntimeCoverage();
 
+  // Whether the diff overlay paints the graph. OFF by default so the runtime
+  // heat-map (which the overlay displaces) stays the default visualization;
+  // the user opts in via the toggle, and setting a baseline auto-enables it.
+  const [overlayEnabled, setOverlayEnabled] = useState(false);
+
   // Current node->count snapshot: prefer agent heat (accurate for seekable
   // sessions), fall back to local event counting.
   const currentCounts = useMemo<Record<string, number>>(() => {
@@ -148,17 +161,40 @@ export function DiffPanel(): JSX.Element | null {
     return null;
   }, [graph, traceSessionId, diffBaseline, currentCounts, coverage]);
 
-  // Keep the graph overlay in sync with the computed diff entries.
+  // Push the overlay to the graph only when the user has enabled it. Debounced
+  // (OVERLAY_DEBOUNCE_MS) so live streaming — which grows traceEvents and thus
+  // recomputes `entries` every batch — does not reset Sigma's nodeReducer on
+  // every frame. Mirrors TimelinePanel's cumulative-heat query debounce.
   useEffect(() => {
-    if (entries === null) {
+    if (!overlayEnabled || entries === null) {
       clearDiffOverlay();
       return;
     }
-    setDiffOverlay(diffToOverlay(entries));
+    const timer = setTimeout(() => {
+      setDiffOverlay(diffToOverlay(entries));
+    }, OVERLAY_DEBOUNCE_MS);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [overlayEnabled, entries, setDiffOverlay, clearDiffOverlay]);
+
+  // Ensure the overlay is removed when the panel unmounts (heat returns).
+  useEffect(() => {
     return () => {
       clearDiffOverlay();
     };
-  }, [entries, setDiffOverlay, clearDiffOverlay]);
+  }, [clearDiffOverlay]);
+
+  // Pre-filter the actionable buckets once (used by lists + empty-state checks)
+  // instead of re-running entries.filter() several times during render.
+  const hotterEntries = useMemo(
+    () => (entries ?? []).filter((e) => e.status === "hotter"),
+    [entries]
+  );
+  const coldEntries = useMemo(
+    () => (entries ?? []).filter((e) => e.status === "cold"),
+    [entries]
+  );
 
   // No trace session -- show a placeholder.
   if (!traceSessionId || !graph) {
@@ -195,7 +231,12 @@ export function DiffPanel(): JSX.Element | null {
             type="button"
             style={BTN}
             title="Snapshot current session counts as the baseline for the next diff"
-            onClick={() => setDiffBaseline(currentCounts)}
+            onClick={() => {
+              setDiffBaseline(currentCounts);
+              // Setting a baseline is an explicit request to see the diff —
+              // turn the graph overlay on so the result is visible.
+              setOverlayEnabled(true);
+            }}
           >
             Set as baseline
           </button>
@@ -210,11 +251,20 @@ export function DiffPanel(): JSX.Element | null {
         )}
         <button
           type="button"
-          style={BTN}
-          onClick={clearDiffOverlay}
-          title="Remove graph colour overlay"
+          aria-pressed={overlayEnabled}
+          style={
+            overlayEnabled
+              ? { ...BTN, borderColor: "#10b981", color: "#10b981" }
+              : BTN
+          }
+          onClick={() => setOverlayEnabled((v) => !v)}
+          title={
+            overlayEnabled
+              ? "Stop painting the graph (restores the runtime heat-map)"
+              : "Paint the graph with diff colours (replaces the heat-map)"
+          }
         >
-          Clear overlay
+          {overlayEnabled ? "Hide overlay" : "Show overlay"}
         </button>
       </div>
 
@@ -255,8 +305,8 @@ export function DiffPanel(): JSX.Element | null {
                 key={s}
                 style={{
                   ...CHIP_STYLE,
-                  borderColor: STATUS_COLORS[s],
-                  color: STATUS_COLORS[s],
+                  borderColor: chipColor(s),
+                  color: chipColor(s),
                 }}
                 title={`${n} node${n !== 1 ? "s" : ""} classified as ${s}`}
               >
@@ -271,7 +321,7 @@ export function DiffPanel(): JSX.Element | null {
       {entries !== null && diffBaseline !== null && (
         <>
           <div style={SECTION_TITLE}>Top regressions</div>
-          {entries.filter((e) => e.status === "hotter").length === 0 ? (
+          {hotterEntries.length === 0 ? (
             <p style={{ margin: 0, fontSize: "0.7rem" }}>
               None -- no regressions found.
             </p>
@@ -284,38 +334,35 @@ export function DiffPanel(): JSX.Element | null {
                 fontSize: "0.7rem",
               }}
             >
-              {entries
-                .filter((e) => e.status === "hotter")
-                .slice(0, 5)
-                .map((e) => (
-                  <li
-                    key={e.nodeId}
+              {hotterEntries.slice(0, 5).map((e) => (
+                <li
+                  key={e.nodeId}
+                  style={{
+                    padding: "0.2rem 0",
+                    borderBottom: "1px solid var(--color-border, #333)",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: "0.5rem",
+                  }}
+                >
+                  <span
                     style={{
-                      padding: "0.2rem 0",
-                      borderBottom: "1px solid var(--color-border, #333)",
-                      display: "flex",
-                      justifyContent: "space-between",
-                      gap: "0.5rem",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      flex: 1,
+                      fontFamily: "var(--font-mono)",
+                      color: "#ef4444",
                     }}
+                    title={e.nodeId}
                   >
-                    <span
-                      style={{
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                        flex: 1,
-                        fontFamily: "var(--font-mono)",
-                        color: "#ef4444",
-                      }}
-                      title={e.nodeId}
-                    >
-                      {e.nodeId}
-                    </span>
-                    <span style={{ flexShrink: 0, color: "#ef4444" }}>
-                      {e.countA} &rarr; {e.countB} (+{e.delta})
-                    </span>
-                  </li>
-                ))}
+                    {e.nodeId}
+                  </span>
+                  <span style={{ flexShrink: 0, color: "#ef4444" }}>
+                    {e.countA} &rarr; {e.countB} (+{e.delta})
+                  </span>
+                </li>
+              ))}
             </ul>
           )}
         </>
@@ -325,7 +372,7 @@ export function DiffPanel(): JSX.Element | null {
       {entries !== null && diffBaseline === null && (
         <>
           <div style={SECTION_TITLE}>Cold nodes (never called)</div>
-          {entries.filter((e) => e.status === "cold").length === 0 ? (
+          {coldEntries.length === 0 ? (
             <p style={{ margin: 0, fontSize: "0.7rem" }}>
               All nodes were touched.
             </p>
@@ -338,30 +385,26 @@ export function DiffPanel(): JSX.Element | null {
                 fontSize: "0.7rem",
               }}
             >
-              {entries
-                .filter((e) => e.status === "cold")
-                .slice(0, 5)
-                .map((e) => (
-                  <li
-                    key={e.nodeId}
-                    style={{
-                      padding: "0.2rem 0",
-                      borderBottom: "1px solid var(--color-border, #333)",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                      fontFamily: "var(--font-mono)",
-                      color: "#f59e0b",
-                    }}
-                    title={e.nodeId}
-                  >
-                    {e.nodeId}
-                  </li>
-                ))}
-              {entries.filter((e) => e.status === "cold").length > 5 && (
+              {coldEntries.slice(0, 5).map((e) => (
+                <li
+                  key={e.nodeId}
+                  style={{
+                    padding: "0.2rem 0",
+                    borderBottom: "1px solid var(--color-border, #333)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    fontFamily: "var(--font-mono)",
+                    color: "#f59e0b",
+                  }}
+                  title={e.nodeId}
+                >
+                  {e.nodeId}
+                </li>
+              ))}
+              {coldEntries.length > 5 && (
                 <li style={{ color: "var(--color-text-muted, #888)" }}>
-                  and {entries.filter((e) => e.status === "cold").length - 5}{" "}
-                  more
+                  and {coldEntries.length - 5} more
                 </li>
               )}
             </ul>

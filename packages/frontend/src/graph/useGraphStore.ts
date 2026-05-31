@@ -125,8 +125,13 @@ export const useGraphStore = create<GraphStoreState>()((set) => ({
       graph,
       selectedNodeId: null,
       highlightedNodeIds: null,
-      // Clear diff overlay when the static graph changes — it references stale node IDs.
+      // Clear diff overlay AND baseline when the static graph changes — both
+      // are keyed by node ID, which is graph-scoped. A baseline captured from a
+      // different graph would classify its (now-absent) nodes as phantom "gone"
+      // entries. (The baseline is deliberately PRESERVED across trace sessions
+      // on the same graph — that is the trace-vs-trace compare feature.)
       diffOverlay: null,
+      diffBaseline: null,
     }),
   selectNode: (nodeId) => set({ selectedNodeId: nodeId }),
   setHighlightedNodes: (ids) =>

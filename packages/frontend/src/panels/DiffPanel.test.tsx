@@ -1,14 +1,22 @@
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RuntimeCoverage } from "../graph/runtimeCoverage";
 import { DiffPanel } from "./DiffPanel";
 
 // ---------------------------------------------------------------------------
 // Module mocks
 // ---------------------------------------------------------------------------
 
-// Stub useRuntimeCoverage — real implementation depends on Zustand store
+// Stub useRuntimeCoverage — real implementation depends on Zustand store.
+// Default return is set in beforeEach so each test starts from a known state.
 vi.mock("../graph/useRuntimeCoverage", () => ({
-  useRuntimeCoverage: vi.fn(() => null),
+  useRuntimeCoverage: vi.fn(),
 }));
 
 // ---------------------------------------------------------------------------
@@ -16,6 +24,20 @@ vi.mock("../graph/useRuntimeCoverage", () => ({
 // ---------------------------------------------------------------------------
 
 import { useGraphStore } from "../graph/useGraphStore";
+import { useRuntimeCoverage } from "../graph/useRuntimeCoverage";
+
+const mockedCoverage = vi.mocked(useRuntimeCoverage);
+
+function coverage(touched: string[], cold: string[]): RuntimeCoverage {
+  return {
+    touched: new Set(touched),
+    cold: new Set(cold),
+    hot: new Set<string>(),
+    touchedCount: touched.length,
+    coldCount: cold.length,
+    hotCount: 0,
+  };
+}
 
 function resetStore() {
   useGraphStore.setState({
@@ -37,6 +59,10 @@ const SIMPLE_GRAPH = {
   ],
   edges: [] as never[],
 };
+
+beforeEach(() => {
+  mockedCoverage.mockReturnValue(null);
+});
 
 afterEach(() => {
   cleanup();
@@ -121,9 +147,44 @@ describe("DiffPanel", () => {
     expect(screen.queryByText(/regression detected/i)).toBeNull();
   });
 
-  it("shows 'Clear overlay' button", () => {
+  it("shows 'Show overlay' toggle (overlay off by default)", () => {
     useGraphStore.setState({ traceSessionId: "s1", graph: SIMPLE_GRAPH });
     render(<DiffPanel />);
-    expect(screen.getByRole("button", { name: /clear overlay/i })).toBeTruthy();
+    // Default off → button reads "Show overlay", and the store overlay is null
+    // so the runtime heat-map is NOT suppressed.
+    expect(screen.getByRole("button", { name: /show overlay/i })).toBeTruthy();
+    expect(useGraphStore.getState().diffOverlay).toBeNull();
+  });
+
+  it("does not write a graph overlay until the user enables it", async () => {
+    // Coverage present → trace-vs-static entries exist, but overlay must stay
+    // off until the user opts in (otherwise the heat-map is hijacked).
+    mockedCoverage.mockReturnValue(coverage(["a"], ["b"]));
+    useGraphStore.setState({ traceSessionId: "s1", graph: SIMPLE_GRAPH });
+    render(<DiffPanel />);
+    // Mounting DiffPanel must not hijack the heat-map: overlay stays null.
+    expect(useGraphStore.getState().diffOverlay).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /show overlay/i }));
+    // After enabling, the debounced effect writes the overlay (150 ms).
+    await waitFor(
+      () => expect(useGraphStore.getState().diffOverlay).not.toBeNull(),
+      { timeout: 1000 }
+    );
+  });
+
+  it("'Set as baseline' auto-enables the overlay", async () => {
+    useGraphStore.setState({
+      traceSessionId: "s1",
+      graph: SIMPLE_GRAPH,
+      agentHeat: { a: 3 },
+    });
+    render(<DiffPanel />);
+    fireEvent.click(screen.getByRole("button", { name: /set as baseline/i }));
+    // Toggle flips to "Hide overlay" and the overlay is written (debounced).
+    expect(screen.getByRole("button", { name: /hide overlay/i })).toBeTruthy();
+    await waitFor(
+      () => expect(useGraphStore.getState().diffOverlay).not.toBeNull(),
+      { timeout: 1000 }
+    );
   });
 });
