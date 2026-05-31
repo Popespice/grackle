@@ -43,4 +43,4 @@ NNNN-short-title.md
 | [0019](0019-call-tree-flame-graph.md) | Call-tree reconstruction & flame graph | accepted |
 | [0020](0020-trace-persistence-session-store.md) | Trace persistence & session store: SQLite index, --store flag, SessionLibraryPanel | accepted |
 | [0021](0021-differential-analysis.md) | Differential analysis: trace-vs-static, trace-vs-trace, grackle diff CLI, graph overlay | accepted |
-| [0022](0022-polyglot-runtime-v8-inspector.md) | Polyglot runtime via V8 Inspector: NodeRuntimeAdapter over CDP, hybrid sampling+coverage, type-stripping resolution | proposed (Phase 8.5) |
+| [0022](0022-polyglot-runtime-v8-inspector.md) | Polyglot runtime via V8 Inspector: NodeRuntimeAdapter over CDP, hybrid sampling+coverage, type-stripping resolution | accepted |
