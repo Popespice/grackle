@@ -9,6 +9,8 @@ import {
   type GrackleMultiGraph,
   type NodeAttributes,
 } from "./buildGraphology";
+import type { DiffStatus } from "./diff";
+import { DIFF_STATUS_COLORS } from "./diff";
 import { COLD_HEX, heatColor } from "./heatColor";
 import { isNodeVisible } from "./matching";
 import { useGraphStore } from "./useGraphStore";
@@ -51,7 +53,8 @@ function makeNodeReducer(
   container: HTMLElement,
   heat: Map<string, number>,
   maxHeat: number,
-  heatActive: boolean
+  heatActive: boolean,
+  diffOverlay: Map<string, DiffStatus> | null
 ) {
   return (node: string, data: NodeAttributes): Partial<NodeDisplayData> => {
     const hidden = !isNodeVisible(
@@ -77,7 +80,7 @@ function makeNodeReducer(
       (!highlightActive && selectedNodeId !== null && node !== selectedNodeId);
 
     // Color cascade:
-    //   highlighted → dimmed → heat (if active + data) → resolved kind color
+    //   highlighted → dimmed → diff overlay (if active) → heat (if active + data) → resolved kind color
     // All colors passed to Sigma must be hex/rgb — never oklch/hsl/CSS-var.
     // See ADR-0015: Sigma 3.x parseColor silently maps unknown formats to black.
     let color: string;
@@ -86,6 +89,11 @@ function makeNodeReducer(
       color = cssVar(container, "--color-highlight-cycle") || "#e6863c";
     } else if (dimmed) {
       color = "#cbd5e1";
+    } else if (diffOverlay !== null) {
+      const status = diffOverlay.get(node);
+      const diffColor = status ? DIFF_STATUS_COLORS[status] : "";
+      // Fall through to kind color when status is "same" or node not in overlay.
+      color = diffColor || resolveNodeColor(data.kind, container);
     } else if (heatActive && maxHeat > 0) {
       const count = heat.get(node) ?? 0;
       color = count > 0 ? heatColor(count / maxHeat) : COLD_HEX;
@@ -110,6 +118,7 @@ export function GraphCanvas(): JSX.Element {
   const selectedNodeId = useGraphStore((s) => s.selectedNodeId);
   const highlightedNodeIds = useGraphStore((s) => s.highlightedNodeIds);
   const traceSessionId = useGraphStore((s) => s.traceSessionId);
+  const diffOverlay = useGraphStore((s) => s.diffOverlay);
   const selectNode = useGraphStore((s) => s.selectNode);
   const setHighlightedNodes = useGraphStore((s) => s.setHighlightedNodes);
 
@@ -146,7 +155,8 @@ export function GraphCanvas(): JSX.Element {
           container,
           heat,
           maxHeat,
-          heatActive
+          heatActive,
+          diffOverlay
         ),
         edgeReducer: (_edge, data) => ({
           color: resolveEdgeColor(data.kind, container),
@@ -184,7 +194,7 @@ export function GraphCanvas(): JSX.Element {
     };
   }, [graph]);
 
-  // Update node reducer + refresh when filter/heat state changes,
+  // Update node reducer + refresh when filter/heat/diff state changes,
   // without rebuilding sigma. Reuses the setSetting("nodeReducer") +
   // sigma.refresh() path — same mechanism as cycle-highlight wiring.
   useEffect(() => {
@@ -205,7 +215,8 @@ export function GraphCanvas(): JSX.Element {
         container,
         heat,
         maxHeat,
-        heatActive
+        heatActive,
+        diffOverlay
       )
     );
     sigma.refresh();
@@ -218,6 +229,7 @@ export function GraphCanvas(): JSX.Element {
     heat,
     maxHeat,
     heatActive,
+    diffOverlay,
   ]);
 
   return (

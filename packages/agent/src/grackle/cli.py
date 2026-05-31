@@ -378,6 +378,106 @@ def serve(
     )
 
 
+@main.command()
+@click.argument(
+    "trace_a",
+    metavar="A.jsonl",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.argument(
+    "trace_b",
+    metavar="B.jsonl",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["text", "json"]),
+    default="text",
+    show_default=True,
+    help="Output format: human-readable summary (text) or full diff as JSON.",
+)
+@click.option(
+    "--only",
+    type=click.Choice(["hotter", "new", "gone", "colder", "same", "all"]),
+    default="all",
+    show_default=True,
+    help="Show only entries with this status (or all).",
+)
+def diff(
+    trace_a: Path,
+    trace_b: Path,
+    output_format: str,
+    only: str,
+) -> None:
+    """Compare two JSONL trace files and report regressions.
+
+    Classifies each node as: hotter (regression), colder, new, gone, or same.
+    Exits with status 1 when any node is hotter (suitable for CI).
+
+    Example:
+
+    \b
+        grackle diff baseline.jsonl latest.jsonl
+        grackle diff baseline.jsonl latest.jsonl --format json
+        grackle diff baseline.jsonl latest.jsonl --only hotter
+    """
+    from grackle.diff import diff_trace_vs_trace, has_regression
+    from grackle.python_runtime.aggregates import TraceAggregates
+
+    agg_a = TraceAggregates.build(trace_a)
+    agg_b = TraceAggregates.build(trace_b)
+    entries = diff_trace_vs_trace(agg_a, agg_b)
+
+    filtered = entries if only == "all" else [e for e in entries if e["status"] == only]
+
+    if output_format == "json":
+        click.echo(json.dumps(filtered, indent=2))
+    else:
+        # Human-readable summary
+        from collections import Counter
+
+        counts: Counter[str] = Counter(e["status"] for e in entries)
+        click.echo(f"A: {trace_a}  ({len(agg_a)} events, {len(agg_a.node_ids)} nodes)")
+        click.echo(f"B: {trace_b}  ({len(agg_b)} events, {len(agg_b.node_ids)} nodes)")
+        click.echo("")
+        for status in ("hotter", "new", "gone", "colder", "same"):
+            n = counts.get(status, 0)
+            if n:
+                marker = " ← regression" if status == "hotter" else ""
+                click.echo(f"  {status:8s} {n:4d}{marker}")
+        click.echo("")
+
+        if filtered:
+            col = 48
+            click.echo(f"{'node_id':{col}}  status    count_a  count_b   delta")
+            click.echo("-" * (col + 38))
+            for e in filtered:
+                nid = e["node_id"]
+                if len(nid) > col:
+                    nid = "…" + nid[-(col - 1) :]
+                click.echo(
+                    f"{nid:{col}}  {e['status']:8s}  {e['count_a']:6d}  "
+                    f"{e['count_b']:6d}  {e['delta']:+6d}"
+                )
+        elif only != "all":
+            click.echo(f"(no nodes with status {only!r})")
+
+        # When --only hides the hotter rows, the table can look clean while the
+        # exit code is still 1. Call that out so the non-zero exit isn't a
+        # mystery in CI logs.
+        hotter_n = counts.get("hotter", 0)
+        if hotter_n and only not in ("all", "hotter"):
+            click.echo("")
+            click.echo(
+                f"note: {hotter_n} hotter node(s) not shown (hidden by --only "
+                f"{only}); exiting 1 due to regression."
+            )
+
+    if has_regression(entries):
+        raise SystemExit(1)
+
+
 async def _stream_events_to_server(
     events: list[TraceEvent],
     url: str,

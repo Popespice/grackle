@@ -42,3 +42,4 @@ NNNN-short-title.md
 | [0018](0018-server-side-aggregation-engine.md) | Server-side aggregation engine: prefix-sum heat, coverage, top-K, agent-side hub/cycle | accepted |
 | [0019](0019-call-tree-flame-graph.md) | Call-tree reconstruction & flame graph | accepted |
 | [0020](0020-trace-persistence-session-store.md) | Trace persistence & session store: SQLite index, --store flag, SessionLibraryPanel | accepted |
+| [0021](0021-differential-analysis.md) | Differential analysis: trace-vs-static, trace-vs-trace, grackle diff CLI, graph overlay | accepted |

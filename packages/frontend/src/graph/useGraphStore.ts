@@ -4,6 +4,7 @@ import type {
   TraceSessionEndMessage,
 } from "@grackle/shared-types";
 import { create } from "zustand";
+import type { DiffStatus } from "./diff";
 
 interface GraphStoreState {
   graph: Graph | null;
@@ -39,6 +40,19 @@ interface GraphStoreState {
   traceWindowStart: number;
   /** Agent-computed cumulative heat from the last trace_query_response (seekable mode). */
   agentHeat: Record<string, number> | null;
+  // Differential analysis (Phase 8.4+)
+  /**
+   * Baseline node→count snapshot captured by the user via "Set as baseline"
+   * in DiffPanel.  When set, DiffPanel switches from trace-vs-static to
+   * trace-vs-trace mode using the current session's counts vs. this baseline.
+   */
+  diffBaseline: Record<string, number> | null;
+  /**
+   * Per-node diff status overlay for GraphCanvas.  `null` = no overlay active.
+   * Set by DiffPanel when it computes a diff; cleared on graph change or when
+   * the user dismisses the overlay.
+   */
+  diffOverlay: Map<string, DiffStatus> | null;
   // Graph actions
   setGraph: (graph: Graph) => void;
   selectNode: (nodeId: string | null) => void;
@@ -77,6 +91,11 @@ interface GraphStoreState {
   setWindowSize: (n: number) => void;
   setAgentHeat: (heat: Record<string, number>) => void;
   clearAgentHeat: () => void;
+  // Diff actions
+  setDiffBaseline: (counts: Record<string, number>) => void;
+  clearDiffBaseline: () => void;
+  setDiffOverlay: (overlay: Map<string, DiffStatus>) => void;
+  clearDiffOverlay: () => void;
 }
 
 export const useGraphStore = create<GraphStoreState>()((set) => ({
@@ -99,8 +118,21 @@ export const useGraphStore = create<GraphStoreState>()((set) => ({
   traceTotal: 0,
   traceWindowStart: 0,
   agentHeat: null,
+  diffBaseline: null,
+  diffOverlay: null,
   setGraph: (graph) =>
-    set({ graph, selectedNodeId: null, highlightedNodeIds: null }),
+    set({
+      graph,
+      selectedNodeId: null,
+      highlightedNodeIds: null,
+      // Clear diff overlay AND baseline when the static graph changes — both
+      // are keyed by node ID, which is graph-scoped. A baseline captured from a
+      // different graph would classify its (now-absent) nodes as phantom "gone"
+      // entries. (The baseline is deliberately PRESERVED across trace sessions
+      // on the same graph — that is the trace-vs-trace compare feature.)
+      diffOverlay: null,
+      diffBaseline: null,
+    }),
   selectNode: (nodeId) => set({ selectedNodeId: nodeId }),
   setHighlightedNodes: (ids) =>
     set({ highlightedNodeIds: ids ? new Set(ids) : null }),
@@ -130,6 +162,8 @@ export const useGraphStore = create<GraphStoreState>()((set) => ({
       traceTotal: 0,
       traceWindowStart: 0,
       agentHeat: null,
+      // Clear diff overlay on new session — it will be recomputed by DiffPanel.
+      diffOverlay: null,
     }),
   addTraceEvent: (ev) =>
     set((state) => ({ traceEvents: state.traceEvents.concat([ev]) })),
@@ -190,4 +224,8 @@ export const useGraphStore = create<GraphStoreState>()((set) => ({
   setWindowSize: (n) => set({ traceWindowSize: n }),
   setAgentHeat: (heat) => set({ agentHeat: heat }),
   clearAgentHeat: () => set({ agentHeat: null }),
+  setDiffBaseline: (counts) => set({ diffBaseline: counts }),
+  clearDiffBaseline: () => set({ diffBaseline: null }),
+  setDiffOverlay: (overlay) => set({ diffOverlay: overlay }),
+  clearDiffOverlay: () => set({ diffOverlay: null }),
 }));
