@@ -29,7 +29,8 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from websockets.asyncio.client import connect
 
-from grackle.server import _trace_buffer_max_events, _trim_ring_buffer, serve
+from grackle.python_runtime.live_buffer import _trace_buffer_max_events, _trim_ring_buffer
+from grackle.server import serve
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator

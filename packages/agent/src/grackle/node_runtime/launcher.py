@@ -37,15 +37,14 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from grackle.adapters.base import TraceCapExceeded
+from grackle.adapters.base import TraceCapExceeded, enforce_event_cap, new_trace_event
 from grackle.node_runtime import capability, profile_reconstruct
 from grackle.node_runtime.cdp_client import CDPError
 from grackle.node_runtime.cdp_client import connect as cdp_connect
 from grackle.node_runtime.coverage_poll import (
     OffsetLineMap,
     coverage_event,
-    diff_coverage,
-    normalize_precise_coverage,
+    iter_coverage_deltas,
 )
 from grackle.node_runtime.errors import NodeRuntimeError
 from grackle.node_runtime.node_resolution import UNRESOLVED
@@ -54,7 +53,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Mapping
 
     from grackle.adapters.base import TraceEvent, TraceOptions
-    from grackle.node_runtime.coverage_poll import CoverageDelta, CoverageEntry, CoverageKey
+    from grackle.node_runtime.coverage_poll import CoverageDelta, CoverageKey
     from grackle.node_runtime.node_resolution import NodeResolver
 
 # Seconds to wait for "Debugger listening" before declaring the spawn failed.
@@ -186,7 +185,7 @@ async def run_coverage(
     """
     cap = options.max_events
     emitted = 0
-    prev: dict[CoverageKey, CoverageEntry] = {}
+    prev: dict[CoverageKey, int] = {}
     # url -> offset→line map, read lazily from disk (no Debugger.enable needed:
     # enabling the Debugger domain closes the inspector when the script finishes).
     line_maps: dict[str, OffsetLineMap | None] = {}
@@ -203,27 +202,31 @@ async def run_coverage(
                 result = await cdp.send("Profiler.takePreciseCoverage", timeout=_CDP_CMD_TIMEOUT_S)
             except CDPError:
                 return  # socket closed (process exited) or wedged — stop reading
-            curr = normalize_precise_coverage(result.get("result") or [])
             ts_ns = time.monotonic_ns()
-            for delta in diff_coverage(prev, curr):
+            deltas, prev = iter_coverage_deltas(result.get("result") or [], prev)
+            for delta in deltas:
                 node_id = _resolve_coverage_delta(resolver, line_maps, delta)
                 if node_id is None:
                     continue
-                if cap is not None and emitted >= cap:
-                    raise TraceCapExceeded(
-                        f"trace event cap of {cap} reached; "
-                        "set --max-events higher or omit it to disable"
-                    )
+                enforce_event_cap(
+                    emitted, cap, hint="set --max-events higher or omit it to disable"
+                )
                 emitted += 1
                 sink(coverage_event(node_id, delta["delta"], ts_ns))
-            prev = curr
 
-        deadline = time.monotonic() + _RUN_TIMEOUT_S
+        # Fixed monotonic cadence: schedule each wake off the previous target, not
+        # off "now", so poll() cost is absorbed into the interval rather than stacked
+        # on top of it. A slow poll just clamps the next wait to 0 and catches up.
+        start = time.monotonic()
+        deadline = start + _RUN_TIMEOUT_S
+        next_at = start + _POLL_INTERVAL_S
         while True:
-            outcome = await session.wait_for_done(_POLL_INTERVAL_S)
+            wait_s = max(0.0, next_at - time.monotonic())
+            outcome = await session.wait_for_done(wait_s)
             await poll()
             if outcome in ("done", "exited") or time.monotonic() >= deadline:
                 break
+            next_at += _POLL_INTERVAL_S
         with contextlib.suppress(CDPError):
             await cdp.send("Profiler.stopPreciseCoverage", timeout=_CDP_CMD_TIMEOUT_S)
 
@@ -292,9 +295,13 @@ class _NodeSession:
         # Set inside _spawn_and_attach once the CDP socket is open.
         self._cdp: Any = None
         loop = asyncio.get_running_loop()
+        # All three are long-lived Futures resolved once by the readers/exit watcher.
+        # Reusing the same Futures across repeated wait_for_done polls (rather than
+        # spawning a throwaway Task per poll) is why the coverage loop needs no
+        # per-poll task cleanup; a resolved Future stays resolved, matching an Event.
         self._listening: asyncio.Future[Any] = loop.create_future()
-        self._done = asyncio.Event()
-        self._exited = asyncio.Event()
+        self._done: asyncio.Future[None] = loop.create_future()
+        self._exited: asyncio.Future[None] = loop.create_future()
         self.error_text: str | None = None
         self._stderr_tail: list[str] = []
         self._tasks: list[asyncio.Task[Any]] = []
@@ -355,7 +362,8 @@ class _NodeSession:
         if line.startswith(_ERROR_MARKER):
             self.error_text = line[len(_ERROR_MARKER) :].strip()
         elif line.startswith(_DONE_MARKER):
-            self._done.set()
+            if not self._done.done():  # a duplicate DONE line must not double-set
+                self._done.set_result(None)
         else:
             # Keep a small tail for spawn-failure diagnostics.
             self._stderr_tail.append(line)
@@ -375,15 +383,19 @@ class _NodeSession:
     async def _watch_exit(self) -> None:
         with contextlib.suppress(Exception):
             await self._proc.wait()
-        self._exited.set()
+        if not self._exited.done():
+            self._exited.set_result(None)
 
     # -- lifecycle waits ----------------------------------------------
 
     async def wait_for_listening(self, timeout: float) -> str:
         """Return the inspector ws:// URL, or raise if Node dies / times out first."""
-        racers: list[asyncio.Future[Any]] = [self._listening, self._exited_task()]
-        finished = await _race(racers, timeout)
-        if self._listening in finished and not self._listening.cancelled():
+        done, _pending = await asyncio.wait(
+            (self._listening, self._exited),
+            timeout=timeout,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if self._listening in done and not self._listening.cancelled():
             return str(self._listening.result())
         detail = " ".join(self._stderr_tail[-10:]).strip()
         raise NodeRuntimeError(
@@ -394,20 +406,20 @@ class _NodeSession:
         """Race the DONE sentinel vs. process exit vs. *timeout*.
 
         Returns ``"done"`` (sentinel seen), ``"exited"`` (process died first), or
-        ``"timeout"``.
+        ``"timeout"``. Awaits the long-lived ``_done`` / ``_exited`` Futures
+        directly: ``asyncio.wait`` with a timeout does not cancel its inputs, so
+        the same Futures persist across the coverage loop's repeated polls.
         """
-        done_task = asyncio.ensure_future(self._done.wait())
-        exit_task = asyncio.ensure_future(self._exited.wait())
-        racers: list[asyncio.Future[Any]] = [done_task, exit_task]
-        finished = await _race(racers, timeout)
-        if done_task in finished:
+        done, _pending = await asyncio.wait(
+            (self._done, self._exited),
+            timeout=timeout,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if self._done in done:
             return "done"
-        if exit_task in finished:
+        if self._exited in done:
             return "exited"
         return "timeout"
-
-    def _exited_task(self) -> asyncio.Future[Any]:
-        return asyncio.ensure_future(self._exited.wait())
 
     async def terminate(self) -> None:
         """Terminate the Node process and cancel reader tasks (idempotent)."""
@@ -427,21 +439,6 @@ class _NodeSession:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
         self._tasks.clear()
-
-
-async def _race(futures: list[asyncio.Future[Any]], timeout: float) -> set[asyncio.Future[Any]]:
-    """Await until one of *futures* completes or *timeout* elapses; cancel the rest.
-
-    Never cancels a non-Task future the caller still owns (e.g. ``_listening``);
-    only the transient tasks created for the race are cancelled.
-    """
-    done, pending = await asyncio.wait(
-        futures, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
-    )
-    for fut in pending:
-        if isinstance(fut, asyncio.Task):
-            fut.cancel()
-    return done
 
 
 # ---------------------------------------------------------------------------
@@ -508,14 +505,14 @@ def _exception_event(
     inflate the reconstructed call-tree's total duration.
     """
     node_id = resolver.resolve_frame(script.resolve().as_uri(), None, None) or UNRESOLVED
-    return {
-        "event": "exception",
-        "node_id": node_id,
-        "ts_ns": ts_ns,
-        "thread_id": 0,
-        "frame_depth": 0,
-        "metadata": {"exc_type": _js_error_type(message), "message": message[:1000]},
-    }
+    return new_trace_event(
+        "exception",
+        node_id,
+        ts_ns,
+        0,
+        0,
+        {"exc_type": _js_error_type(message), "message": message[:1000]},
+    )
 
 
 def _js_error_type(message: str) -> str:

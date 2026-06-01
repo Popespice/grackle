@@ -165,12 +165,6 @@ def test_file_outside_root_filtered(tmp_path: Path) -> None:
     assert resolver.resolve_frame(outside, 1, "f") is None
 
 
-def test_is_project_frame(tmp_path: Path) -> None:
-    resolver = NodeResolver(tmp_path, _graph(_file("src/app.ts")))
-    assert resolver.is_project_frame(_url(tmp_path, "src/app.ts")) is True
-    assert resolver.is_project_frame("node:internal/x") is False
-
-
 def test_source_path_round_trip(tmp_path: Path) -> None:
     resolver = NodeResolver(tmp_path, _graph(_file("src/app.ts")))
     path = resolver.source_path(_url(tmp_path, "src/app.ts"))

@@ -8,6 +8,7 @@ from grackle.node_runtime.coverage_poll import (
     OffsetLineMap,
     coverage_event,
     diff_coverage,
+    iter_coverage_deltas,
     normalize_precise_coverage,
 )
 
@@ -123,3 +124,56 @@ def test_coverage_event_shape() -> None:
         "frame_depth": 0,
         "metadata": {"live": True, "count": 42},
     }
+
+
+def test_iter_coverage_deltas_matches_normalize_then_diff() -> None:
+    """The fused one-pass form is byte-equivalent to diff_coverage(prev, normalize(r))
+    for the deltas, and its returned counts equal normalize(r)'s per-key counts."""
+    r1 = [
+        {
+            "scriptId": "7",
+            "url": "u",
+            "functions": [
+                {"functionName": "f", "ranges": [{"startOffset": 100, "count": 2}]},
+                {"functionName": "g", "ranges": [{"startOffset": 300, "count": 0}]},
+            ],
+        },
+    ]
+    r2 = [
+        {
+            "scriptId": "7",
+            "url": "u",
+            "functions": [
+                {"functionName": "f", "ranges": [{"startOffset": 100, "count": 5}]},
+                {"functionName": "g", "ranges": [{"startOffset": 300, "count": 1}]},
+            ],
+        },
+    ]
+    # First poll: prev empty.
+    norm1 = normalize_precise_coverage(r1)
+    new_d1, counts1 = iter_coverage_deltas(r1, {})
+    assert new_d1 == diff_coverage({}, norm1)
+    assert counts1 == {k: v["count"] for k, v in norm1.items()}
+    # Second poll: prev = first counts.
+    norm2 = normalize_precise_coverage(r2)
+    new_d2, counts2 = iter_coverage_deltas(r2, counts1)
+    assert new_d2 == diff_coverage(norm1, norm2)  # diff_coverage reads ["count"]
+    assert counts2 == {k: v["count"] for k, v in norm2.items()}
+
+
+def test_iter_coverage_deltas_tolerates_malformed() -> None:
+    r = [
+        {
+            "scriptId": "7",
+            "url": "u",
+            "functions": [
+                {"functionName": "a", "ranges": [{"startOffset": None, "count": None}]},
+                {"functionName": "c", "ranges": ["not-a-dict"]},
+                {"functionName": "d", "ranges": [{"startOffset": 20, "count": 3}]},
+            ],
+        }
+    ]
+    deltas, counts = iter_coverage_deltas(r, {})  # must not raise
+    by_off = {d["start_offset"]: d["delta"] for d in deltas}
+    assert by_off == {20: 3}  # 'a' coerces to count 0 → delta 0 (not surfaced)
+    assert counts == {("7", 0): 0, ("7", 20): 3}

@@ -32,8 +32,113 @@ const PY_OUT_DIR = join(
 );
 const AGENT_DIR = join(ROOT, "packages", "agent");
 
+const MESSAGES_SCHEMA = join(SCHEMA_DIR, "messages.schema.json");
+const MESSAGES_TS = join(PACKAGE_DIR, "src", "messages.ts");
+
 async function readIfExists(path) {
   return existsSync(path) ? readFile(path, { encoding: "utf-8" }) : null;
+}
+
+/** Collect every message `type` const from messages.schema.json. */
+function schemaMessageTypes(schema) {
+  const out = new Set();
+  for (const def of Object.values(schema.$defs ?? {})) {
+    for (const branch of def.allOf ?? []) {
+      const c = branch.properties?.type?.const;
+      if (typeof c === "string") out.add(c);
+    }
+  }
+  return out;
+}
+
+/** Parse the KNOWN_MESSAGE_TYPES string-literal array from messages.ts source. */
+function knownMessageTypes(src) {
+  const block = src.match(
+    /KNOWN_MESSAGE_TYPES\s*=\s*\[([\s\S]*?)\]\s*as const/
+  );
+  if (!block) {
+    throw new Error("KNOWN_MESSAGE_TYPES array not found in messages.ts");
+  }
+  return new Set([...block[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]));
+}
+
+/**
+ * Collect the `type:` literal of every interface/type named in the
+ * AnyKnownMessage union. Returns the set of those literals.
+ */
+function unionMessageTypes(src) {
+  const block = src.match(/AnyKnownMessage\s*=([\s\S]*?);/);
+  if (!block) {
+    throw new Error("AnyKnownMessage union not found in messages.ts");
+  }
+  const names = [...block[1].matchAll(/\|\s*([A-Za-z0-9_]+)/g)].map(
+    (m) => m[1]
+  );
+  if (names.length === 0) {
+    throw new Error("AnyKnownMessage union has no members");
+  }
+  const out = new Set();
+  for (const name of names) {
+    // interface Foo extends ... { ... type: "x"; ... }
+    // or: type Foo = ... & { type: "x"; ... }
+    const decl = src.match(
+      new RegExp(`(?:interface|type)\\s+${name}\\b[\\s\\S]*?type:\\s*"([^"]+)"`)
+    );
+    if (!decl) {
+      throw new Error(`AnyKnownMessage member ${name}: no type: literal found`);
+    }
+    out.add(decl[1]);
+  }
+  return out;
+}
+
+function diffSets(label, a, b, aName, bName) {
+  const onlyA = [...a].filter((x) => !b.has(x)).sort();
+  const onlyB = [...b].filter((x) => !a.has(x)).sort();
+  if (onlyA.length === 0 && onlyB.length === 0) {
+    console.log(`  OK       ${label}`);
+    return 0;
+  }
+  if (onlyA.length) {
+    console.error(
+      `  DRIFT    ${label}: in ${aName} not ${bName}: ${onlyA.join(", ")}`
+    );
+  }
+  if (onlyB.length) {
+    console.error(
+      `  DRIFT    ${label}: in ${bName} not ${aName}: ${onlyB.join(", ")}`
+    );
+  }
+  return 1;
+}
+
+/** Assert schema type consts === KNOWN_MESSAGE_TYPES === AnyKnownMessage members. */
+export async function checkCanonicalParity() {
+  const schema = JSON.parse(
+    await readFile(MESSAGES_SCHEMA, { encoding: "utf-8" })
+  );
+  const tsSrc = await readFile(MESSAGES_TS, { encoding: "utf-8" });
+
+  const schemaTypes = schemaMessageTypes(schema);
+  const knownTypes = knownMessageTypes(tsSrc);
+  const unionTypes = unionMessageTypes(tsSrc);
+
+  let failures = 0;
+  failures += diffSets(
+    "schema ↔ KNOWN_MESSAGE_TYPES",
+    schemaTypes,
+    knownTypes,
+    "schema",
+    "KNOWN_MESSAGE_TYPES"
+  );
+  failures += diffSets(
+    "schema ↔ AnyKnownMessage",
+    schemaTypes,
+    unionTypes,
+    "schema",
+    "AnyKnownMessage"
+  );
+  return failures;
 }
 
 export async function main() {
@@ -95,6 +200,8 @@ export async function main() {
     await rm(tmpTs, { recursive: true, force: true });
     await rm(tmpPy, { recursive: true, force: true });
   }
+
+  failures += await checkCanonicalParity();
 
   if (failures > 0) {
     console.error(`\nparity: ${failures} file(s) out of sync`);

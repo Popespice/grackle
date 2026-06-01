@@ -7,7 +7,7 @@ import os
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from uuid import NAMESPACE_URL, uuid4, uuid5
+from uuid import uuid4
 
 import structlog
 import websockets.exceptions
@@ -15,67 +15,34 @@ from websockets.asyncio.server import ServerConnection
 from websockets.asyncio.server import serve as _ws_serve
 
 from grackle import protocol
+from grackle.python_runtime.file_replay import (
+    _load_stored_session,
+    _register_trace_source,
+    _replay_trace,
+    _SeekableSession,
+)
+from grackle.python_runtime.live_buffer import (
+    _broadcast,
+    _flush_ring_buffer,
+    _trace_buffer_max_events,
+    _trace_buffer_seconds,
+    _trim_ring_buffer,
+)
 
 if TYPE_CHECKING:
     from grackle.adapters.base import StaticGraph, TraceEvent
-    from grackle.python_runtime.aggregates import TraceAggregates
-    from grackle.python_runtime.jsonl_index import JsonlIndex
     from grackle.session_store import SessionStore
 
 log = structlog.get_logger()
 
+# Maximum bytes returned by a read_source request.  1 MiB is far larger than any
+# hand-written source file but bounds memory + a single WS frame, so a pathological
+# or generated multi-megabyte file cannot be slurped into RAM and pushed to the UI.
 _MAX_SOURCE_BYTES = 1 * 1024 * 1024  # 1 MiB
-# Maximum inter-event sleep during paced replay.  Keeps total replay time
-# bounded even for traces with large idle gaps between calls.
-_MAX_GAP_S = 0.25
-_DEFAULT_BUFFER_SECONDS = 60.0
 # Maximum events returned per trace_seek_request.  Bounds per-request I/O and
 # prevents a single malicious/buggy client from issuing a count=2**31 seek that
 # reads the whole file synchronously on the event loop.
 _MAX_SEEK_COUNT = 1000
-
-
-class _SeekableSession:
-    """A trace session the server can seek into and aggregate over.
-
-    Pairs a :class:`JsonlIndex` (random-access windows) with a
-    :class:`TraceAggregates` (cumulative heat / coverage / top-k) for one
-    session id.  Both are built from a single file scan via ``build_seekable``.
-    """
-
-    __slots__ = ("aggregates", "index")
-
-    def __init__(self, index: JsonlIndex, aggregates: TraceAggregates) -> None:
-        self.index = index
-        self.aggregates = aggregates
-
-
-def _trace_buffer_seconds() -> float:
-    """Return the ring-buffer retention window from env or default."""
-    raw = os.environ.get("GRACKLE_TRACE_BUFFER_SECONDS")
-    if raw is not None:
-        try:
-            return float(raw)
-        except (ValueError, TypeError):
-            pass
-    return _DEFAULT_BUFFER_SECONDS
-
-
-def _trace_buffer_max_events() -> int | None:
-    """Return the ring-buffer event count cap from env, or None (unbounded).
-
-    Set ``GRACKLE_TRACE_BUFFER_MAX_EVENTS`` to a positive integer to evict the
-    oldest events when the buffer exceeds that count.  Values < 1 and
-    non-integer strings are treated as None (unbounded).
-    """
-    raw = os.environ.get("GRACKLE_TRACE_BUFFER_MAX_EVENTS")
-    if raw is not None:
-        try:
-            v = int(raw)
-            return v if v >= 1 else None
-        except (ValueError, TypeError):
-            pass
-    return None
 
 
 def _allowed_origins() -> list[str]:
@@ -187,69 +154,6 @@ async def _push_static_graph(
         root=str(root),
     )
     await ws.send(protocol.make_static_graph(graph))
-
-
-def _trim_ring_buffer(
-    ring_buffer: collections.deque[tuple[int, str]],
-    now_ns: int,
-    buffer_seconds: float,
-    max_events: int | None = None,
-) -> None:
-    """Discard entries from the front of the ring-buffer.
-
-    Two independent eviction passes (both run each call):
-
-    1. **Age trim** — entries whose timestamp is older than ``buffer_seconds``
-       are evicted from the front.
-    2. **Count cap** — if ``max_events`` is not None and the buffer still
-       exceeds that count after the age trim, the oldest entries are evicted
-       until ``len(ring_buffer) <= max_events``.
-
-    Applying the count cap *after* the age trim means a narrow time window
-    with a high event count is bounded, but a small time window that happens
-    to be quiet is not artificially inflated.
-    """
-    cutoff_ns = now_ns - int(buffer_seconds * 1_000_000_000)
-    while ring_buffer and ring_buffer[0][0] < cutoff_ns:
-        ring_buffer.popleft()
-    if max_events is not None:
-        while len(ring_buffer) > max_events:
-            ring_buffer.popleft()
-
-
-async def _flush_ring_buffer(
-    ws: ServerConnection,
-    ring_buffer: collections.deque[tuple[int, str]],
-) -> None:
-    """Push all buffered live-ingest messages to a newly-joined consumer.
-
-    Takes a snapshot of the ring-buffer at call time (``list(ring_buffer)``)
-    so that concurrent producer appends or trim-evictions in ``_receive_loop``
-    cannot mutate the deque mid-iteration and raise
-    ``RuntimeError: deque mutated during iteration``.
-    """
-    for _ts_ns, raw in list(ring_buffer):
-        try:
-            await ws.send(raw)
-        except websockets.exceptions.ConnectionClosed:
-            return
-
-
-async def _broadcast(
-    raw: str,
-    connections: set[ServerConnection],
-    exclude: ServerConnection | None = None,
-) -> None:
-    """Send raw to every registered connection except exclude.
-
-    Per-connection ConnectionClosed is swallowed so one dead client cannot
-    interrupt fan-out to the remaining consumers.
-    """
-    for ws in list(connections):
-        if ws is exclude:
-            continue
-        with contextlib.suppress(websockets.exceptions.ConnectionClosed):
-            await ws.send(raw)
 
 
 async def _receive_loop(
@@ -454,147 +358,6 @@ async def _receive_loop(
             await _broadcast(msg, connections, exclude=ws)
 
 
-async def _replay_trace(
-    ws: ServerConnection,
-    trace_source: Path,
-    pace: bool,
-    session_id: str,
-    *,
-    seekable: bool = False,
-    total_events: int = 0,
-) -> None:
-    """Stream a trace file to one connection as a session_start / events / session_end sequence.
-
-    ``pace=True`` reproduces the original inter-event timing with each gap
-    clamped to ``_MAX_GAP_S`` so long idle stretches don't stall the replay.
-    ``pace=False`` pushes all events as fast as the network allows (for tests).
-
-    When ``seekable=True`` the replay runs in **window-only mode**: only the
-    ``trace_session_start`` and ``trace_session_end`` markers are sent — no
-    individual ``trace_event`` messages are streamed.  The browser fetches
-    event windows on demand via ``trace_seek_request``.  ``total_events``
-    must be ``len(file_index)`` from the caller so the session_end payload
-    reports the correct count without a second full-file scan.
-
-    When ``seekable=False`` (default) all events are streamed as before.
-
-    Load or parse failure → logs a warning, emits an empty session
-    (event_count=0), then returns.  The server continues running.
-    """
-    started_ns = time.monotonic_ns()
-    try:
-        await ws.send(protocol.make_trace_session_start(session_id, started_ns, seekable=seekable))
-    except websockets.exceptions.ConnectionClosed:
-        return
-
-    if seekable:
-        # Window-only mode: no event stream.  The browser uses trace_seek_request
-        # to fetch event windows.  total_events is pre-computed from the
-        # JsonlIndex so the file is not scanned a second time here.
-        with contextlib.suppress(websockets.exceptions.ConnectionClosed):
-            await ws.send(
-                protocol.make_trace_session_end(session_id, time.monotonic_ns(), total_events)
-            )
-        return
-
-    # Non-seekable streaming path: load the full trace and stream every event.
-    from grackle.python_runtime.writer import read_jsonl
-
-    events: list[TraceEvent]
-    try:
-        events = read_jsonl(trace_source)
-    except Exception as exc:
-        log.warning("trace replay: failed to load", path=str(trace_source), error=str(exc))
-        events = []
-
-    prev_ts_ns: int | None = None
-    for event in events:
-        if pace and prev_ts_ns is not None:
-            gap_s = (event["ts_ns"] - prev_ts_ns) / 1_000_000_000
-            sleep_s = min(gap_s, _MAX_GAP_S)
-            if sleep_s > 0:
-                await asyncio.sleep(sleep_s)
-        prev_ts_ns = event["ts_ns"]
-        try:
-            await ws.send(protocol.make_trace_event(event))
-        except websockets.exceptions.ConnectionClosed:
-            return
-
-    try:
-        await ws.send(protocol.make_trace_session_end(session_id, time.monotonic_ns(), len(events)))
-    except websockets.exceptions.ConnectionClosed:
-        return
-
-
-async def _load_stored_session(
-    ws: ServerConnection,
-    path: Path,
-    session_id: str,
-    seekable_sessions: dict[str, _SeekableSession],
-) -> None:
-    """Replay a stored session as a seekable session to one connection.
-
-    Builds (and registers) a :class:`_SeekableSession` so the loaded session
-    gains full seek **and** aggregate-query support — identical to a
-    ``--trace-source`` replay.  The build is cached in ``seekable_sessions`` so
-    re-loading the same session reuses the index/aggregates.
-    """
-    from grackle.python_runtime.aggregates import build_seekable
-
-    existing = seekable_sessions.get(session_id)
-    if existing is not None:
-        idx = existing.index
-    else:
-        try:
-            loop = asyncio.get_running_loop()
-            idx, agg = await loop.run_in_executor(None, build_seekable, path)
-        except Exception as exc:
-            log.warning("session load: build failed", path=str(path), error=str(exc))
-            return
-        seekable_sessions[session_id] = _SeekableSession(index=idx, aggregates=agg)
-    await _replay_trace(ws, path, False, session_id, seekable=True, total_events=len(idx))
-
-
-def _register_trace_source(
-    store: SessionStore,
-    trace_source: Path,
-    index: JsonlIndex,
-    root: Path,
-) -> None:
-    """Index a ``--trace-source`` file into the store so it appears in the library.
-
-    Gives ``save_session`` a production caller and lets the trace be re-loaded
-    after a restart (without ``--trace-source``).  The id is a stable uuid5 over
-    the absolute path so re-serving the same file updates one row rather than
-    accumulating duplicates.  ``source_path`` is the absolute local path read
-    back via ``Path`` at load time.
-    """
-    from grackle.adapters import registry
-    from grackle.session_store import SessionMeta
-
-    abspath = str(trace_source.resolve())
-    try:
-        mtime_ns = trace_source.stat().st_mtime_ns
-    except OSError:
-        mtime_ns = 0
-    try:
-        detected = registry.detect(root)
-        language = detected[0] if detected else "python"
-    except Exception:
-        language = "python"
-    store.save_session(
-        SessionMeta(
-            id=str(uuid5(NAMESPACE_URL, abspath)),
-            label=trace_source.name,
-            started_ns=mtime_ns,
-            ended_ns=mtime_ns,
-            source_path=abspath,
-            event_count=len(index),
-            language=language,
-        )
-    )
-
-
 async def serve(
     host: str,
     port: int,
@@ -615,8 +378,8 @@ async def serve(
                       gets its own replay from the start of the file.
         pace:         When True (default) replay is deadline-scheduled to
                       reproduce original inter-event timing (gap clamped to
-                      ``_MAX_GAP_S``).  When False events are pushed as fast
-                      as the socket allows — useful for tests and CI.
+                      ``file_replay._MAX_GAP_S``).  When False events are pushed
+                      as fast as the socket allows — useful for tests and CI.
         store:        Optional session library.  When set, the ``--trace-source``
                       file (if any) is indexed into it and ``session_list`` /
                       ``session_load`` requests are served from it.  Closed when

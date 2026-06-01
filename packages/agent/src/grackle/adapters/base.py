@@ -96,6 +96,51 @@ class TraceCapExceeded(RuntimeError):
     """Raised by the tracer when TraceOptions.max_events is exceeded."""
 
 
+def new_trace_event(
+    event: str,
+    node_id: str,
+    ts_ns: int,
+    thread_id: int,
+    frame_depth: int,
+    metadata: dict[str, Any] | None = None,
+) -> TraceEvent:
+    """Construct a :class:`TraceEvent`, defaulting ``metadata`` to a fresh ``{}``.
+
+    The single construction point for trace events: every required key is a
+    positional parameter, so ``mypy --strict`` flags a missing one at the call
+    site and the event shape stays identical across the Python tracer and the
+    Node sampling / coverage / exception sites (which previously hand-built the
+    dict and had drifted).
+
+    Named ``new_trace_event`` (not ``make_*``) to avoid colliding with
+    :func:`grackle.protocol.make_trace_event`, which *serializes* an event into
+    a wire envelope — a different concern.
+    """
+    return {
+        "event": event,
+        "node_id": node_id,
+        "ts_ns": ts_ns,
+        "thread_id": thread_id,
+        "frame_depth": frame_depth,
+        "metadata": metadata if metadata is not None else {},
+    }
+
+
+def enforce_event_cap(count: int, cap: int | None, *, hint: str = "") -> None:
+    """Raise :class:`TraceCapExceeded` when *count* has reached *cap*.
+
+    Pre-check form: callers invoke this BEFORE recording event N, passing
+    ``count`` = events already recorded; it raises when ``count >= cap`` (so the
+    cap bounds the number recorded at exactly ``cap``). *hint* appends a
+    domain-specific remediation suffix to the message. Note this does NOT cover
+    the sampling path's post-hoc ``len(events) > cap`` check (different
+    predicate — see ``launcher._enforce_cap``).
+    """
+    if cap is not None and count >= cap:
+        msg = f"trace event cap of {cap} reached"
+        raise TraceCapExceeded(f"{msg}; {hint}" if hint else f"{msg}.")
+
+
 @runtime_checkable
 class StaticParserAdapter(Protocol):
     language: str
@@ -108,6 +153,14 @@ class StaticParserAdapter(Protocol):
 @runtime_checkable
 class RuntimeAdapter(Protocol):
     language: str
+    # File extensions (lowercased, dot-prefixed) this adapter claims for the
+    # CLI's extension→language inference index (built by
+    # ``AdapterRegistry.runtime_extensions``). "Inferable", not "runnable": an
+    # adapter may claim an extension it then refuses at the gate (e.g. Node
+    # claims ``.tsx`` so a clean "JSX unsupported" error fires instead of a
+    # generic "cannot infer"). Open surface (ADR-0004) — unknown extensions are
+    # simply absent here, never an error.
+    extensions: tuple[str, ...]
 
     def capabilities(self) -> Capabilities: ...
     def trace(self, script: Path, root: Path, options: TraceOptions) -> Iterator[TraceEvent]: ...
@@ -118,3 +171,18 @@ class RuntimeAdapter(Protocol):
         options: TraceOptions,
         sink: Callable[[TraceEvent], None],
     ) -> None: ...
+    def runtime_unavailable_reason(self, script: Path) -> str | None:
+        """Return a remediation string if this adapter cannot trace *script*, else None.
+
+        One hook for both gate kinds, so per-adapter knowledge lives on the
+        adapter (ADR-0003/0004) instead of being hardcoded in the CLI:
+
+        * toolchain gate — the runtime is missing or too old (e.g. no Node, or
+          Node < 22.6);
+        * input gate — the script's file type is unsupported (e.g. ``.tsx``,
+          which type-stripping cannot run).
+
+        ``None`` means "I can trace this script." The CLI raises a clean
+        ``ClickException(reason)`` when a non-None reason is returned.
+        """
+        ...

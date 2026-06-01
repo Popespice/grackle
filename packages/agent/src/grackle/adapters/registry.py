@@ -51,6 +51,47 @@ class AdapterRegistry:
         with self._lock:
             return self._runtime.get(language.strip().lower())
 
+    def build_static_graph(
+        self, language: str, root: Path, *, missing_message: str | None = None
+    ) -> StaticGraph:
+        """Parse *root* with the static adapter for *language*, raising on absence.
+
+        Centralises the ``get_static(language) → "not registered" guard →
+        parse(root, ParseOptions())`` sequence shared by the runtime adapters
+        when building a node-ID resolver. Returns the parsed :class:`StaticGraph`
+        (not a resolver) so the registry stays free of any ``*_runtime`` import —
+        each caller wraps the graph in its own resolver subclass.
+
+        Raises:
+            LookupError: if no static adapter is registered for *language*.
+                Callers needing a domain-specific error (e.g. ``NodeRuntimeError``)
+                catch and re-raise; *missing_message* overrides the default text.
+        """
+        adapter = self.get_static(language)
+        if adapter is None:
+            raise LookupError(
+                missing_message
+                or f"{language} static adapter not registered; cannot resolve node IDs"
+            )
+        return adapter.parse(root, ParseOptions())
+
+    def runtime_extensions(self) -> dict[str, str]:
+        """Map each registered runtime adapter's declared extension → its language key.
+
+        Built by iterating the registry (like :meth:`detect` / :meth:`parse_all`)
+        so the CLI's extension inference carries no hardcoded per-adapter table.
+        Keys are lowercased; the *registered* language key is used (not
+        ``adapter.language``), matching the rest of the registry. Last writer wins
+        on a collision; in practice extensions are disjoint across adapters.
+        """
+        with self._lock:
+            items = list(self._runtime.items())
+        index: dict[str, str] = {}
+        for lang, adapter in items:
+            for ext in getattr(adapter, "extensions", ()):
+                index[ext.lower()] = lang
+        return index
+
     def detect(self, project_root: Path) -> list[str]:
         with self._lock:
             items = list(self._static.items())

@@ -81,23 +81,6 @@ async def test_default_timeout_bounds_send_without_explicit_timeout() -> None:
     assert client._pending == {}
 
 
-async def test_event_dispatched_to_listeners() -> None:
-    client = CDPClient(_FakeWS())
-    received: list[dict[str, object]] = []
-    client.on("Debugger.scriptParsed", received.append)
-    client._dispatch(json.dumps({"method": "Debugger.scriptParsed", "params": {"scriptId": "7"}}))
-    assert received == [{"scriptId": "7"}]
-
-
-async def test_listener_exception_is_isolated() -> None:
-    client = CDPClient(_FakeWS())
-    seen: list[int] = []
-    client.on("X.y", lambda _p: (_ for _ in ()).throw(RuntimeError("boom")))
-    client.on("X.y", lambda _p: seen.append(1))
-    client._dispatch(json.dumps({"method": "X.y", "params": {}}))
-    assert seen == [1]  # second listener still ran
-
-
 async def test_malformed_json_ignored() -> None:
     client = CDPClient(_FakeWS())
     client._dispatch("this is not json")  # must not raise
