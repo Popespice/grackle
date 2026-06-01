@@ -6,12 +6,14 @@ and the disk-backed offset→line map (CRLF / BOM handling).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from grackle.node_runtime import launcher
+from grackle.node_runtime.launcher import _NodeSession
 from grackle.node_runtime.node_resolution import NodeResolver
 
 if TYPE_CHECKING:
+    import asyncio
     from pathlib import Path
 
     from grackle.adapters.base import StaticGraph
@@ -59,3 +61,48 @@ def test_line_map_preserves_crlf_and_strips_bom(tmp_path: Path) -> None:
 def test_line_map_none_for_non_project_url(tmp_path: Path) -> None:
     resolver = NodeResolver(tmp_path, _file_graph("a.ts"))
     assert launcher._line_map_for_url(resolver, {}, "node:internal/x") is None
+
+
+def test_exception_event_uses_given_timestamp(tmp_path: Path) -> None:
+    # Finding #1: the exception event must carry the caller-supplied ts_ns, never a
+    # hard-coded 0 (which would mis-sort it to the front of a coverage stream and
+    # inflate the reconstructed call-tree's total duration).
+    resolver = NodeResolver(tmp_path, _file_graph("app.ts"))
+    script = tmp_path / "app.ts"
+    event = launcher._exception_event(resolver, script, tmp_path, "TypeError: boom", 4242)
+    assert event["event"] == "exception"
+    assert event["ts_ns"] == 4242
+    metadata = event["metadata"]
+    assert isinstance(metadata, dict)
+    assert metadata["exc_type"] == "TypeError"
+
+
+class _ChunkStderr:
+    """Async stream that hands back pre-split byte chunks, then EOF."""
+
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = chunks
+
+    async def read(self, _n: int) -> bytes:
+        return self._chunks.pop(0) if self._chunks else b""
+
+
+class _FakeProc:
+    def __init__(self, stderr: object) -> None:
+        self.stderr = stderr
+        self.stdout = None
+        self.returncode = 0
+
+
+async def test_read_stderr_handles_multibyte_split_across_chunks() -> None:
+    # Finding #7: a multi-byte UTF-8 sequence straddling a read-chunk boundary must
+    # decode intact. Here 'é' is 0xC3 0xA9; we split between the two bytes so a
+    # per-chunk decode would emit replacement characters instead of 'é'.
+    text = "héllo wörld"
+    raw = (text + "\n").encode("utf-8")
+    split = raw.index(b"\xa9")  # lead byte 0xC3 in chunk 1, trail byte 0xA9 in chunk 2
+    proc = _FakeProc(_ChunkStderr([raw[:split], raw[split:]]))
+    session = _NodeSession(cast("asyncio.subprocess.Process", proc))
+    await session._read_stderr()
+    # The line is reconstructed intact in the diagnostic tail (no replacement char).
+    assert text in session._stderr_tail

@@ -64,6 +64,31 @@ def test_normalize_skips_functions_without_ranges() -> None:
     assert normalize_precise_coverage(result) == {}
 
 
+def test_normalize_tolerates_non_int_and_malformed_fields() -> None:
+    # Finding #4: a null/non-int startOffset or count (or a non-dict range head)
+    # must NOT raise — a TypeError here is not a CDPError and would abort the whole
+    # --stream session. Bad numerics coerce to 0; malformed heads are skipped.
+    result: list[dict[str, object]] = [
+        {
+            "scriptId": "7",
+            "url": "u",
+            "functions": [
+                {"functionName": "a", "ranges": [{"startOffset": None, "count": None}]},
+                {"functionName": "b", "ranges": [{"startOffset": 10, "count": "x"}]},
+                {"functionName": "c", "ranges": ["not-a-dict"]},
+                {"functionName": "d", "ranges": [{"startOffset": 20, "count": 3}]},
+            ],
+        }
+    ]
+    norm = normalize_precise_coverage(result)  # must not raise
+    assert norm[("7", 0)]["count"] == 0  # 'a': null offset/count → 0
+    assert norm[("7", 10)]["count"] == 0  # 'b': non-int count → 0
+    assert ("7", 20) in norm  # 'd': valid, kept
+    assert norm[("7", 20)]["count"] == 3
+    # 'c' (non-dict range head) is the only function that produced no entry.
+    assert len(norm) == 3
+
+
 def test_diff_only_positive_deltas() -> None:
     prev: dict[CoverageKey, CoverageEntry] = {
         ("7", 100): {"url": "u", "function_name": "f", "start_offset": 100, "count": 2}

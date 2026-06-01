@@ -29,6 +29,7 @@ Two entry points map to the two delivery channels:
 from __future__ import annotations
 
 import asyncio
+import codecs
 import contextlib
 import re
 import time
@@ -138,18 +139,30 @@ async def run_sampling(
 
     events = profile_reconstruct.reconstruct(profile, _make_resolve(resolver))
     if session.error_text:
-        events.append(_exception_event(resolver, script, root, session.error_text, events))
-    if not events and outcome != "done":
-        # The isolate is gone (process.exit()/crash) or never finished within the
-        # limit — the sampling profile lives in the isolate and can only be read
-        # via Profiler.stop while attached, so there is nothing to recover. Make
-        # this explicit rather than silently returning an empty trace.
-        raise NodeRuntimeError(
-            "the target exited before a sampling profile could be collected "
-            "(it likely called process.exit(), crashed, or ran past the "
-            f"{_RUN_TIMEOUT_S:.0f}s limit). Let the script return normally, or use "
-            "--stream for live coverage."
-        )
+        # Sort the exception after the last reconstructed event (V8 profile clock).
+        exc_ts = events[-1]["ts_ns"] if events else 0
+        events.append(_exception_event(resolver, script, root, session.error_text, exc_ts))
+    if not events:
+        # No project frames were sampled. The cause matters for the message:
+        if outcome == "exited":
+            # The isolate is gone — the sampling profile lives in the isolate and
+            # can only be read via Profiler.stop while attached, so there is
+            # nothing to recover.
+            raise NodeRuntimeError(
+                "the target exited before a sampling profile could be collected "
+                "(it likely called process.exit() or crashed before returning). "
+                "Let the script return normally, or use --stream for live coverage."
+            )
+        if outcome == "timeout":
+            raise NodeRuntimeError(
+                f"tracing timed out after {_RUN_TIMEOUT_S:.0f}s without sampling any "
+                "in-project frames. Only functions inside --root are profiled, so a "
+                "long-running script that spends its time elsewhere yields nothing; "
+                "ensure the script finishes, or check that --root contains it."
+            )
+        # outcome == "done": the script ran to completion but spent all sampled
+        # time outside the project root. An empty in-root trace is the correct
+        # result here, not an error.
     _enforce_cap(events, options)
     return events
 
@@ -161,7 +174,16 @@ async def run_coverage(
     options: TraceOptions,
     sink: Callable[[TraceEvent], None],
 ) -> None:
-    """Trace *script* with precise-coverage polling; route coarse live events to *sink*."""
+    """Trace *script* with precise-coverage polling; route coarse live events to *sink*.
+
+    Note: V8 does not service ``takePreciseCoverage`` while the isolate is busy
+    in *synchronous* JavaScript — the inspector is only serviced when the event
+    loop turns. A fully synchronous target therefore only yields coverage on the
+    post-DONE poll, so every live event shares one ``ts_ns`` and the live Timeline
+    shows a single point rather than progression. Scripts that yield (async I/O,
+    timers, ``await``) poll incrementally as expected. This is inherent to V8 and
+    documented in ADR-0022.
+    """
     cap = options.max_events
     emitted = 0
     prev: dict[CoverageKey, CoverageEntry] = {}
@@ -208,7 +230,10 @@ async def run_coverage(
     # Count the trailing exception event against the cap too (parity with the
     # sampling path, where the exception event is included in _enforce_cap).
     if session.error_text and (cap is None or emitted < cap):
-        sink(_exception_event(resolver, script, root, session.error_text, []))
+        # Stamp with a fresh monotonic reading so it sorts AFTER the poll events
+        # (which all use time.monotonic_ns()). A literal 0 would mis-sort the
+        # exception to the front of the stream — finding #1.
+        sink(_exception_event(resolver, script, root, session.error_text, time.monotonic_ns()))
 
 
 # ---------------------------------------------------------------------------
@@ -300,15 +325,21 @@ class _NodeSession:
         stream = self._proc.stderr
         if stream is None:  # pragma: no cover — we always pipe stderr
             return
+        # Decode incrementally: a multi-byte UTF-8 sequence can straddle a
+        # _READ_CHUNK boundary, and decoding each raw chunk independently would
+        # corrupt it (mangling a non-ASCII exception message or the stderr tail).
+        # The incremental decoder buffers a partial trailing sequence across reads.
+        decoder = codecs.getincrementaldecoder("utf-8")("replace")
         buffer = ""
         while True:
             chunk = await stream.read(_READ_CHUNK)
             if not chunk:
                 break
-            buffer += chunk.decode("utf-8", "replace")
+            buffer += decoder.decode(chunk)
             *lines, buffer = buffer.split("\n")
             for line in lines:
                 self._handle_stderr_line(line.rstrip("\r"))
+        buffer += decoder.decode(b"", final=True)
         if buffer:
             self._handle_stderr_line(buffer.rstrip("\r"))
 
@@ -465,15 +496,18 @@ def _exception_event(
     script: Path,
     root: Path,
     message: str,
-    events: list[TraceEvent],
+    ts_ns: int,
 ) -> TraceEvent:
     """Build a trailing ``exception`` event from a target-script error.
 
-    Attributed to the script's file node; timestamped at/after the last event so
-    it sorts last in the stream.
+    Attributed to the script's file node, timestamped at *ts_ns*. The caller is
+    responsible for passing a value that sorts the event *last* in its stream: the
+    sampling path passes the final reconstructed event's V8-clock timestamp; the
+    coverage path passes a fresh ``time.monotonic_ns()`` (its events share that
+    clock). Passing ``0`` here would mis-sort the exception to the front and
+    inflate the reconstructed call-tree's total duration.
     """
     node_id = resolver.resolve_frame(script.resolve().as_uri(), None, None) or UNRESOLVED
-    ts_ns = events[-1]["ts_ns"] if events else 0
     return {
         "event": "exception",
         "node_id": node_id,

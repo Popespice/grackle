@@ -24,17 +24,33 @@ import { pathToFileURL } from "node:url";
 const NUL = String.fromCharCode(0);
 const target = process.argv[2];
 
-try {
-  // Import by file URL so absolute Windows paths (drive letters, backslashes)
-  // and POSIX paths both resolve. A `.ts` target is type-stripped by Node.
-  await import(pathToFileURL(target).href);
-} catch (err) {
+// Write a single-line GRACKLE_ERROR sentinel for `err`.
+function reportError(err) {
   const raw = err?.stack ? err.stack : String(err);
   // Flatten newlines (the agent reads one line per sentinel), strip any NUL
   // bytes (the sentinel prefix is NUL-delimited), and bound the length so a huge
   // stack cannot produce a pathologically long stderr line.
   const flat = raw.replace(/[\r\n]+/g, " ").replaceAll(NUL, " ");
   process.stderr.write(`${NUL}GRACKLE_ERROR ${flat.slice(0, 4000)}\n`);
+}
+
+// Errors thrown AFTER the top-level `await import()` resolves — from a timer, a
+// microtask, or an unhandled promise rejection — escape the try/catch below and
+// would otherwise be silently dropped (DONE has already fired, so the agent sees
+// a clean trace). Capture them here so they still surface as an exception event.
+// Best-effort: the agent normally terminates the process shortly after DONE, so a
+// late async error only reports if it fires before teardown. Installing these
+// handlers also suppresses Node's default crash-on-uncaught, which is fine — the
+// finally's safety-net timer still bounds the process.
+process.on("uncaughtException", reportError);
+process.on("unhandledRejection", reportError);
+
+try {
+  // Import by file URL so absolute Windows paths (drive letters, backslashes)
+  // and POSIX paths both resolve. A `.ts` target is type-stripped by Node.
+  await import(pathToFileURL(target).href);
+} catch (err) {
+  reportError(err);
 } finally {
   process.stderr.write(`${NUL}GRACKLE_DONE\n`);
   // Keep the process alive briefly so the agent can stop the profiler and

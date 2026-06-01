@@ -112,6 +112,33 @@ def test_module_frame_at_line_1_resolves_to_file_node(tmp_path: Path) -> None:
     assert resolver.resolve_frame(_url(tmp_path, "src/app.ts"), 1, "main") == "src/app.ts:main"
 
 
+def test_module_frame_at_higher_line_resolves_to_file_node(tmp_path: Path) -> None:
+    # Finding #3: a top-level/module frame (empty functionName) is not always at
+    # line 1 — V8 tracks the first executing statement, which (after imports) can
+    # coincide with a function declaration. It must resolve to the FILE node, never
+    # to the function sharing that line.
+    graph = _graph(_file("src/app.ts"), _fn("src/app.ts", "handle", 5))
+    resolver = NodeResolver(tmp_path, graph)
+    assert resolver.resolve_frame(_url(tmp_path, "src/app.ts"), 5, "") == "src/app.ts"
+
+
+def test_same_line_declarations_decline_to_file_node(tmp_path: Path) -> None:
+    # Finding #10: two declarations sharing a start line are ambiguous by line; the
+    # by-line index must mark them ambiguous rather than last-write-wins, so a frame
+    # at that line resolves by name when possible and otherwise falls to the file.
+    graph = _graph(
+        _file("src/app.ts"),
+        _fn("src/app.ts", "alpha", 7),
+        _fn("src/app.ts", "beta", 7),
+    )
+    resolver = NodeResolver(tmp_path, graph)
+    # Ambiguous line + a name matching NEITHER declaration → file node, NOT a
+    # silently-guessed alpha/beta (the old last-write-wins behaviour).
+    assert resolver.resolve_frame(_url(tmp_path, "src/app.ts"), 7, "gamma") == "src/app.ts"
+    # A matching name still resolves precisely via the name index.
+    assert resolver.resolve_frame(_url(tmp_path, "src/app.ts"), 7, "beta") == "src/app.ts:beta"
+
+
 def test_in_project_file_without_file_node_is_unresolved(tmp_path: Path) -> None:
     # File frame for a .ts the static graph did not index → visible, not dropped.
     graph = _graph(_file("src/other.ts"))

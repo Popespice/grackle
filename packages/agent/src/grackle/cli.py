@@ -26,13 +26,20 @@ if TYPE_CHECKING:
 _MAX_GAP_S = 0.25
 
 # Runtime language inferred from SCRIPT's extension when --language is omitted.
+# .tsx maps to typescript so the JSX guard in _resolve_runtime_adapter can emit a
+# specific "not supported yet" message rather than a generic "cannot infer".
 _EXT_LANGUAGE: dict[str, str] = {
     ".py": "python",
+    ".pyw": "python",
     ".ts": "typescript",
     ".tsx": "typescript",
     ".mts": "typescript",
     ".cts": "typescript",
 }
+
+# JSX extensions Node's --experimental-strip-types cannot run (it strips type
+# annotations, but does not transform JSX). Out of scope until Phase 9.
+_UNSUPPORTED_TS_EXTENSIONS = (".tsx", ".jsx")
 
 
 def _resolve_runtime_adapter(script: Path, language: str | None) -> RuntimeAdapter:
@@ -45,18 +52,31 @@ def _resolve_runtime_adapter(script: Path, language: str | None) -> RuntimeAdapt
     """
     from grackle.adapters import registry
 
+    suffix = script.suffix.lower()
     if language is not None:
         lang = language.strip().lower()
         if not lang:
             raise click.UsageError("--language must not be empty")
     else:
-        lang = _EXT_LANGUAGE.get(script.suffix.lower(), "")
+        # Extension-less scripts (shebang launchers etc.) were Python-traceable
+        # before 8.5's language dispatch — `grackle trace` was Python-only — so
+        # preserve that and default them to Python. Genuinely-unknown extensions
+        # (e.g. .rb) still error with a pointer to --language.
+        lang = _EXT_LANGUAGE.get(suffix) or ("python" if suffix == "" else "")
         if not lang:
-            known = ", ".join(sorted(_EXT_LANGUAGE))
+            known = ", ".join(sorted(ext for ext in _EXT_LANGUAGE if ext))
             raise click.UsageError(
                 f"cannot infer runtime language from {script.name!r} "
                 f"(known extensions: {known}); pass --language explicitly."
             )
+
+    if lang == "typescript" and suffix in _UNSUPPORTED_TS_EXTENSIONS:
+        raise click.ClickException(
+            f"{script.name}: TypeScript JSX ({suffix}) is not supported yet -- "
+            "Node's type-stripping strips type annotations but cannot transform "
+            "JSX (planned for Phase 9). Trace a plain .ts/.mts/.cts module, or "
+            "pre-compile the JSX to .js first."
+        )
 
     adapter = registry.get_runtime(lang)
     if adapter is None:
@@ -175,7 +195,8 @@ def parse(
     default=None,
     help=(
         "Runtime language for SCRIPT. Inferred from the extension when omitted "
-        "(.py → python; .ts/.tsx/.mts/.cts → typescript)."
+        "(.py/.pyw and extension-less → python; .ts/.mts/.cts → typescript; "
+        ".tsx/.jsx are not supported yet)."
     ),
 )
 @click.option(
@@ -190,7 +211,10 @@ def parse(
     type=click.IntRange(min=1),
     help=(
         "Hard cap on collected events (must be >= 1). CLI exits with an "
-        "error if the cap is reached. Default: unlimited."
+        "error if the cap is reached. Default: unlimited. Counts emitted events: "
+        "a Node --stream (live coverage) capture emits one event per active "
+        "function per poll (aggregating many calls), so an identical workload "
+        "reaches the cap at a different point than a per-call Python/sampling trace."
     ),
 )
 @click.option(
@@ -240,10 +264,11 @@ def trace(
     ts_ns, thread_id, frame_depth, metadata. Node IDs match those from
     ``grackle parse ROOT``.
 
-    The runtime adapter is chosen by language: Python (``.py``) is traced
-    under ``sys.monitoring`` (PEP 669); TypeScript (``.ts``/``.tsx``/``.mts``/
-    ``.cts``) is traced by driving Node over the V8 Inspector (requires a Node
-    toolchain >= 22.6 — a clear error is shown when it is missing). Use
+    The runtime adapter is chosen by language: Python (``.py``/``.pyw`` and
+    extension-less scripts) is traced under ``sys.monitoring`` (PEP 669);
+    TypeScript (``.ts``/``.mts``/``.cts``) is traced by driving Node over the V8
+    Inspector (requires a Node toolchain >= 22.6 — a clear error is shown when it
+    is missing). JSX (``.tsx``/``.jsx``) is not supported yet (Phase 9). Use
     ``--language`` to override the extension-based inference. Only functions
     inside ROOT are traced; runtime/stdlib/dependency frames are skipped.
 

@@ -33,17 +33,24 @@ class CDPError(RuntimeError):
 
 
 @asynccontextmanager
-async def connect(url: str, *, open_timeout: float = 10.0) -> AsyncIterator[CDPClient]:
+async def connect(
+    url: str,
+    *,
+    open_timeout: float = 10.0,
+    default_timeout: float | None = 30.0,
+) -> AsyncIterator[CDPClient]:
     """Open a CDP client to *url* (an inspector ``ws://127.0.0.1:.../<uuid>`` URL).
 
     Yields a started :class:`CDPClient`; closes the socket and the receive task on
     exit. ``max_size=None`` lifts the inbound cap so a large ``Profiler.stop``
-    profile is not truncated.
+    profile is not truncated. *default_timeout* bounds every command that does not
+    pass its own ``timeout`` (including the attach-phase commands) so a half-open
+    socket can never hang an ``await`` forever.
     """
     from websockets.asyncio.client import connect as ws_connect
 
     async with ws_connect(url, max_size=None, open_timeout=open_timeout) as ws:
-        client = CDPClient(ws)
+        client = CDPClient(ws, default_timeout=default_timeout)
         client._start()
         try:
             yield client
@@ -58,8 +65,9 @@ class CDPClient:
     request/response commands and :meth:`on` to subscribe to events.
     """
 
-    def __init__(self, ws: Any) -> None:
+    def __init__(self, ws: Any, *, default_timeout: float | None = None) -> None:
         self._ws = ws
+        self._default_timeout = default_timeout
         self._next_id = 0
         self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
         self._listeners: dict[str, list[Callable[[dict[str, Any]], None]]] = {}
@@ -81,15 +89,17 @@ class CDPClient:
         Args:
             method: CDP method name (``"Domain.method"``).
             params: Command parameters.
-            timeout: Optional per-command deadline. Use it for commands issued
+            timeout: Optional per-command deadline overriding the client's
+                ``default_timeout``. Bounding matters most for commands issued
                 *after* user code is running (e.g. ``Profiler.stop``,
                 ``takePreciseCoverage``): a synchronously-wedged V8 isolate never
                 services the inspector, so without a bound the await would hang
-                forever even though the socket stays open.
+                forever even though the socket stays open. When neither this nor
+                ``default_timeout`` is set, the command waits indefinitely.
 
         Raises:
             CDPError: if the command returns an error, the socket closes before a
-                response arrives, or *timeout* elapses.
+                response arrives, or the effective timeout elapses.
         """
         self._next_id += 1
         message_id = self._next_id
@@ -102,13 +112,14 @@ class CDPClient:
         except Exception as exc:  # send failed — don't leak the pending future
             self._pending.pop(message_id, None)
             raise CDPError(f"failed to send {method}: {exc}") from exc
-        if timeout is None:
+        effective_timeout = timeout if timeout is not None else self._default_timeout
+        if effective_timeout is None:
             return await future
         try:
-            return await asyncio.wait_for(future, timeout)
+            return await asyncio.wait_for(future, effective_timeout)
         except TimeoutError as exc:
             self._pending.pop(message_id, None)
-            raise CDPError(f"{method} timed out after {timeout:.0f}s") from exc
+            raise CDPError(f"{method} timed out after {effective_timeout:.0f}s") from exc
 
     def on(self, method: str, callback: Callable[[dict[str, Any]], None]) -> None:
         """Register *callback* for CDP event *method* (called with its ``params``).

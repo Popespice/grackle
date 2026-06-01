@@ -71,6 +71,16 @@ async def test_send_timeout_raises_and_cleans_pending() -> None:
     assert client._pending == {}
 
 
+async def test_default_timeout_bounds_send_without_explicit_timeout() -> None:
+    # Finding #11: the attach-phase commands (Runtime.enable / Profiler.* /
+    # runIfWaitingForDebugger) pass no explicit timeout. A client default_timeout
+    # must still bound them so a half-open socket cannot hang `await future` forever.
+    client = CDPClient(_FakeWS(), default_timeout=0.01)
+    with pytest.raises(CDPError):
+        await client.send("Runtime.enable")  # no response ever arrives
+    assert client._pending == {}
+
+
 async def test_event_dispatched_to_listeners() -> None:
     client = CDPClient(_FakeWS())
     received: list[dict[str, object]] = []

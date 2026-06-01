@@ -90,6 +90,20 @@ class OffsetLineMap:
         return max(1, bisect.bisect_right(self._line_starts, offset))
 
 
+def _as_int(value: Any, default: int = 0) -> int:
+    """Coerce an untrusted V8 numeric field to ``int``, else *default*.
+
+    A precise-coverage payload is external input: a missing/null/non-numeric
+    ``startOffset`` or ``count`` must not raise. A bare ``int(None)`` is a
+    ``TypeError`` — not a ``CDPError`` — so without this it would escape the
+    launcher's ``except CDPError`` and abort the entire ``--stream`` session.
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def normalize_precise_coverage(
     result: Iterable[Mapping[str, Any]],
 ) -> dict[CoverageKey, CoverageEntry]:
@@ -110,8 +124,10 @@ def normalize_precise_coverage(
             if not ranges:
                 continue
             head = ranges[0]
-            start_offset = int(head.get("startOffset", 0))
-            count = int(head.get("count", 0))
+            if not isinstance(head, dict):
+                continue  # malformed range entry — skip rather than crash
+            start_offset = _as_int(head.get("startOffset"))
+            count = _as_int(head.get("count"))
             out[(script_id, start_offset)] = {
                 "url": url,
                 "function_name": str(fn.get("functionName", "")),

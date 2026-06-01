@@ -23,7 +23,8 @@ missing/old toolchain.
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+import threading
+from typing import TYPE_CHECKING, Any
 
 from grackle.adapters.base import Capabilities
 from grackle.node_runtime import capability
@@ -31,10 +32,41 @@ from grackle.node_runtime.errors import NodeRuntimeError
 from grackle.node_runtime.node_resolution import NodeResolver
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Callable, Coroutine, Iterator
     from pathlib import Path
 
     from grackle.adapters.base import TraceEvent, TraceOptions
+
+
+def _run_async[T](coro: Coroutine[Any, Any, T]) -> T:
+    """Run *coro* to completion from a synchronous caller.
+
+    ``asyncio.run`` raises ``RuntimeError`` if a loop is already running on this
+    thread. The CLI calls the adapter from a plain sync context (no loop), but to
+    keep the adapter callable from an async context too — matching the loop-free
+    Python adapter contract — fall back to running the coroutine on a private
+    thread when a loop is already running, propagating its result/exception.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)  # no running loop — the normal CLI path
+
+    box: list[T] = []
+    err: list[BaseException] = []
+
+    def _runner() -> None:
+        try:
+            box.append(asyncio.run(coro))
+        except BaseException as exc:
+            err.append(exc)
+
+    thread = threading.Thread(target=_runner, name="grackle-node-trace")
+    thread.start()
+    thread.join()
+    if err:
+        raise err[0]
+    return box[0]
 
 
 class NodeRuntimeAdapter:
@@ -61,7 +93,7 @@ class NodeRuntimeAdapter:
         from grackle.node_runtime import launcher
 
         resolver = self._build_resolver(root)
-        events = asyncio.run(launcher.run_sampling(script, root, resolver, options))
+        events = _run_async(launcher.run_sampling(script, root, resolver, options))
         yield from events
 
     def trace_streaming(
@@ -84,7 +116,7 @@ class NodeRuntimeAdapter:
         from grackle.node_runtime import launcher
 
         resolver = self._build_resolver(root)
-        asyncio.run(launcher.run_coverage(script, root, resolver, options, sink))
+        _run_async(launcher.run_coverage(script, root, resolver, options, sink))
 
     # ------------------------------------------------------------------
     # Internal helpers

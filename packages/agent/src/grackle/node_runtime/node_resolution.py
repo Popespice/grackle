@@ -62,8 +62,10 @@ class NodeResolver:
 
     def __init__(self, root: Path, graph: StaticGraph) -> None:
         self._root = root.resolve()
-        # (posix_path, line) -> node_id  for function/method nodes.
-        self._sym_index: dict[tuple[str, int], str] = {}
+        # (posix_path, line) -> node_id  for function/method nodes, or None when
+        # more than one declaration shares a start line (ambiguous → by-line
+        # resolution declines to guess, like _name_index).
+        self._sym_index: dict[tuple[str, int], str | None] = {}
         # posix_path -> node_id  for file nodes (fallback).
         self._file_index: dict[str, str] = {}
         # (posix_path, name) -> node_id, or None when more than one node shares
@@ -82,7 +84,14 @@ class NodeResolver:
             elif kind in ("function", "method"):
                 line = node.get("line")
                 if line is not None:
-                    self._sym_index[(path, line)] = node_id
+                    line_key = (path, line)
+                    if line_key not in self._sym_index:
+                        self._sym_index[line_key] = node_id
+                    elif self._sym_index[line_key] != node_id:
+                        # A second distinct node shares this (path, line): mark
+                        # ambiguous (None) so by-line resolution won't drop one
+                        # via last-write-wins.
+                        self._sym_index[line_key] = None
                 name = node.get("name")
                 if name:
                     key = (path, name)
@@ -118,12 +127,15 @@ class NodeResolver:
         if posix == _NOT_PROJECT:
             return None
 
-        # A module/top-level frame (V8 reports functionName "") reported at line 1
-        # collides with a function declared on line 1. V8 can't tell them apart,
-        # so for the empty-name + line-1 case go straight to the file node,
-        # mirroring the Python resolver's "<module>" guard. (Anonymous functions
-        # on other lines still resolve by line below.)
-        module_frame = not function_name and (line is None or line <= 1)
+        # V8 reports the top-level/module frame with an empty functionName, but its
+        # reported line is NOT always 1 — it tracks the first executing statement,
+        # which can coincide with a function declared on that line. A by-line lookup
+        # would then mis-attribute the module frame to that function. So treat ANY
+        # empty-name frame as a module frame and route it to the file node, mirroring
+        # the Python resolver's literal "<module>" guard. Truly anonymous callbacks
+        # (also empty-name) likewise fall to the file node rather than guessing a
+        # line-colliding function — an accepted trade documented in ADR-0022.
+        module_frame = not function_name
 
         if not module_frame and line is not None:
             sym_id = self._sym_index.get((posix, line))

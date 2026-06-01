@@ -44,6 +44,36 @@ def test_python_extension_still_traces(tmp_path: Path) -> None:
     assert "node_id" in result.output  # emitted JSONL events on stdout
 
 
+def test_pyw_extension_traces_as_python(tmp_path: Path) -> None:
+    """Regression (#5): .pyw was Python-traceable before 8.5's dispatch."""
+    script = _write(tmp_path, "script.pyw", "def f() -> int:\n    return 1\n\nf()\n")
+    result = CliRunner().invoke(main, ["trace", str(script), "--root", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert "node_id" in result.output
+
+
+def test_extensionless_script_traces_as_python(tmp_path: Path) -> None:
+    """Regression (#5): an extension-less script defaults to Python (trace was Python-only)."""
+    script = _write(tmp_path, "runme", "def f() -> int:\n    return 1\n\nf()\n")
+    result = CliRunner().invoke(main, ["trace", str(script), "--root", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert "node_id" in result.output
+
+
+def test_tsx_extension_clean_error(tmp_path: Path) -> None:
+    """#6: .tsx routes to typescript but JSX is unsupported → clean, specific error.
+
+    Fires before the Node capability gate, so it is deterministic regardless of
+    whether a Node toolchain is installed.
+    """
+    script = _write(tmp_path, "app.tsx", "export const x = 1;\n")
+    result = CliRunner().invoke(main, ["trace", str(script), "--root", str(tmp_path)])
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+    assert "JSX" in result.output
+    assert "Phase 9" in result.output
+
+
 def test_explicit_language_python(tmp_path: Path) -> None:
     script = _write(tmp_path, "weird.txt", "def f():\n    return 1\n\nf()\n")
     result = CliRunner().invoke(
