@@ -1,6 +1,6 @@
 # ADR-0022 — Polyglot Runtime Overlay via the V8 Inspector
 
-**Status:** Proposed (design locked 2026-05-31; implementation deferred to Phase 8.5)
+**Status:** Accepted (implemented in Phase 8.5, 2026-05-31)
 **Date:** 2026-05-31
 **Phase:** 8.5
 
@@ -93,8 +93,13 @@ for file nodes, from the TS static graph. **Pseudo-frames** V8 emits — `(root)
 surfaced as `<unresolved>` noise.
 
 For the **live coverage** channel, ranges are byte **offsets**, not lines, so the resolver
-also builds a per-script **offset→line table** (from `Debugger.scriptParsed` + source) to
-reach the same `(path, line) → node_id` index.
+also builds a per-script **offset→line table** to reach the same `(path, line) → node_id`
+index. The source for that table is read **from disk** (the `.ts` file, raw bytes,
+BOM-stripped, newlines preserved) rather than via `Debugger.getScriptSource`: enabling the
+`Debugger` domain causes V8 to close the inspector when the script finishes (it deopts the
+"keep alive until detached" behaviour), and type-stripping preserves line boundaries so the
+on-disk lines match V8's positions exactly. Note that the offset→line table only *refines*
+resolution — the `functionName` name-fallback resolves most coverage frames on its own.
 
 ### 3. Process lifecycle
 
@@ -154,9 +159,17 @@ dispatch + gate) · `pyproject.toml` (package-data include for `bootstrap.mjs`).
 
 - **The whole Phase 6–8 pipeline becomes polyglot for free** — server, seek, aggregation,
   Timeline, heat, flame, diff, session store all work on Node `TraceEvent`s unchanged.
-- **`--stream` for Node is exact-but-coarse** (live call counts, `frame_depth: 0`); the
-  faithful nested flame comes from the replay/`-o` path. Documented; the single-session
-  merge is a fast-follow.
+- **`--stream` for Node is activity-coarse, not magnitude-faithful.** The coverage poll
+  emits one `call` event per active function per poll (`frame_depth: 0`), with the exact
+  per-poll call delta carried in `metadata.count`. Because the existing heat/aggregation/diff
+  consumers count *events* and do not read `metadata.count`, the rendered live heat reflects
+  *which functions were active per poll*, not their call frequency — and `grackle diff` on a
+  `--stream`-captured file compares poll-activity, not call counts. Magnitude-faithful heat
+  and the intended `diff` input come from the sampling path (`trace()` → `--connect` / `-o`),
+  which emits real per-call frames with nesting. Two fast-follows are noted: a consumer that
+  weights by `metadata.count` (would deliver exact live heat), and the single-session
+  live→faithful merge. Until then the live channel is a real-time "what's running now"
+  signal, not a call-count heat map.
 - **Type-stripping is the supported execution model** (Node ≥ 22.6). Non-erasable TS
   (enums, namespaces, parameter properties) fails type-stripping → a clear error pointing
   at the limitation. CI runs Node 22 (for the frontend), so the gated end-to-end test runs

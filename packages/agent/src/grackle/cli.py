@@ -19,11 +19,81 @@ from grackle.logging import configure_logging
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from grackle.adapters.base import TraceEvent
+    from grackle.adapters.base import RuntimeAdapter, TraceEvent
 
 # Maximum inter-event sleep when streaming a completed trace to a server.
 # Mirrors server._MAX_GAP_S so --connect pacing matches --trace-source pacing.
 _MAX_GAP_S = 0.25
+
+# Runtime language inferred from SCRIPT's extension when --language is omitted.
+# .tsx maps to typescript so the JSX guard in _resolve_runtime_adapter can emit a
+# specific "not supported yet" message rather than a generic "cannot infer".
+_EXT_LANGUAGE: dict[str, str] = {
+    ".py": "python",
+    ".pyw": "python",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".mts": "typescript",
+    ".cts": "typescript",
+}
+
+# JSX extensions Node's --experimental-strip-types cannot run (it strips type
+# annotations, but does not transform JSX). Out of scope until Phase 9.
+_UNSUPPORTED_TS_EXTENSIONS = (".tsx", ".jsx")
+
+
+def _resolve_runtime_adapter(script: Path, language: str | None) -> RuntimeAdapter:
+    """Return the runtime adapter for SCRIPT's language, gated on its capability.
+
+    Language comes from ``--language`` when given, else is inferred from the file
+    extension. Raises a clean ``click`` error when the language is unknown, has no
+    registered runtime adapter, or its toolchain is unavailable (e.g. Node missing
+    or too old) — never a traceback.
+    """
+    from grackle.adapters import registry
+
+    suffix = script.suffix.lower()
+    if language is not None:
+        lang = language.strip().lower()
+        if not lang:
+            raise click.UsageError("--language must not be empty")
+    else:
+        # Extension-less scripts (shebang launchers etc.) were Python-traceable
+        # before 8.5's language dispatch — `grackle trace` was Python-only — so
+        # preserve that and default them to Python. Genuinely-unknown extensions
+        # (e.g. .rb) still error with a pointer to --language.
+        lang = _EXT_LANGUAGE.get(suffix) or ("python" if suffix == "" else "")
+        if not lang:
+            known = ", ".join(sorted(ext for ext in _EXT_LANGUAGE if ext))
+            raise click.UsageError(
+                f"cannot infer runtime language from {script.name!r} "
+                f"(known extensions: {known}); pass --language explicitly."
+            )
+
+    if lang == "typescript" and suffix in _UNSUPPORTED_TS_EXTENSIONS:
+        raise click.ClickException(
+            f"{script.name}: TypeScript JSX ({suffix}) is not supported yet -- "
+            "Node's type-stripping strips type annotations but cannot transform "
+            "JSX (planned for Phase 9). Trace a plain .ts/.mts/.cts module, or "
+            "pre-compile the JSX to .js first."
+        )
+
+    adapter = registry.get_runtime(lang)
+    if adapter is None:
+        raise click.UsageError(f"no runtime adapter registered for language {lang!r}")
+
+    if not adapter.capabilities().runtime_tracing:
+        raise click.ClickException(_runtime_gate_message(lang))
+    return adapter
+
+
+def _runtime_gate_message(lang: str) -> str:
+    """Remediation text for a runtime adapter whose toolchain is unavailable."""
+    if lang == "typescript":
+        from grackle.node_runtime import capability
+
+        return capability.remediation_message()
+    return f"runtime tracing for {lang!r} is not available in this environment."
 
 
 @click.group()
@@ -120,6 +190,16 @@ def parse(
     help="Project root for static-graph ID resolution (default: current directory).",
 )
 @click.option(
+    "--language",
+    "-l",
+    default=None,
+    help=(
+        "Runtime language for SCRIPT. Inferred from the extension when omitted "
+        "(.py/.pyw and extension-less → python; .ts/.mts/.cts → typescript; "
+        ".tsx/.jsx are not supported yet)."
+    ),
+)
+@click.option(
     "--lines",
     is_flag=True,
     default=False,
@@ -131,7 +211,10 @@ def parse(
     type=click.IntRange(min=1),
     help=(
         "Hard cap on collected events (must be >= 1). CLI exits with an "
-        "error if the cap is reached. Default: unlimited."
+        "error if the cap is reached. Default: unlimited. Counts emitted events: "
+        "a Node --stream (live coverage) capture emits one event per active "
+        "function per poll (aggregating many calls), so an identical workload "
+        "reaches the cap at a different point than a per-call Python/sampling trace."
     ),
 )
 @click.option(
@@ -168,6 +251,7 @@ def trace(
     script: Path,
     output: Path | None,
     root: Path,
+    language: str | None,
     lines: bool,
     max_events: int | None,
     connect: str | None,
@@ -180,22 +264,28 @@ def trace(
     ts_ns, thread_id, frame_depth, metadata. Node IDs match those from
     ``grackle parse ROOT``.
 
-    SCRIPT is executed under sys.monitoring (PEP 669). Only Python
-    functions inside ROOT are traced; stdlib and site-packages are skipped.
+    The runtime adapter is chosen by language: Python (``.py``/``.pyw`` and
+    extension-less scripts) is traced under ``sys.monitoring`` (PEP 669);
+    TypeScript (``.ts``/``.mts``/``.cts``) is traced by driving Node over the V8
+    Inspector (requires a Node toolchain >= 22.6 — a clear error is shown when it
+    is missing). JSX (``.tsx``/``.jsx``) is not supported yet (Phase 9). Use
+    ``--language`` to override the extension-based inference. Only functions
+    inside ROOT are traced; runtime/stdlib/dependency frames are skipped.
 
     SCRIPT must live inside ROOT — otherwise its frames will not resolve
     to any node in the static graph and every event will fall back to
     ``<unresolved>``. The CLI exits with a clear error in that case.
 
-    Note: SCRIPT is executed in this process via ``runpy.run_path`` with
-    ``sys.argv`` and the current working directory unchanged. If the
-    script reads ``sys.argv`` or relies on a specific cwd, pre-set them
+    Note: the Python adapter executes SCRIPT in this process via
+    ``runpy.run_path`` with ``sys.argv`` and the current working directory
+    unchanged; the Node adapter executes SCRIPT in a separate ``node``
+    subprocess. If the script relies on a specific ``sys.argv``/cwd, set them
     before invoking ``grackle trace``.
     """
     import json as _json
 
     from grackle.adapters.base import TraceCapExceeded, TraceOptions
-    from grackle.python_runtime.adapter import PythonRuntimeAdapter
+    from grackle.node_runtime.errors import NodeRuntimeError
     from grackle.python_runtime.writer import write_jsonl
 
     # ------------------------------------------------------------------
@@ -215,8 +305,10 @@ def trace(
             "Pass --root pointing at the project that contains SCRIPT."
         ) from exc
 
+    # Dispatch to the runtime adapter for SCRIPT's language; gate on its
+    # capability (e.g. the Node toolchain) before doing any work.
+    adapter = _resolve_runtime_adapter(script, language)
     options = TraceOptions(include_line_events=lines, max_events=max_events)
-    adapter = PythonRuntimeAdapter()
 
     # ------------------------------------------------------------------
     # Real-time streaming path  (--connect URL --stream)
@@ -259,6 +351,8 @@ def trace(
             # Store cap error — write the file first (captured prefix is valid),
             # then re-raise below so the user gets both the file and the error.
             _cap_exc = click.ClickException(str(exc))
+        except NodeRuntimeError as exc:
+            raise click.ClickException(str(exc)) from exc
         except Exception as exc:
             raise click.ClickException(f"trace error: {exc}") from exc
         finally:
@@ -291,6 +385,12 @@ def trace(
         events = list(adapter.trace(script, root, options))
     except TraceCapExceeded as exc:
         raise click.ClickException(str(exc)) from exc
+    except NodeRuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
+    except Exception as exc:
+        # Belt-and-suspenders: no adapter failure should reach the user as a
+        # traceback (mirrors the --stream path above).
+        raise click.ClickException(f"trace error: {exc}") from exc
 
     if output is not None:
         count = write_jsonl(events, output)
@@ -414,6 +514,11 @@ def diff(
 
     Classifies each node as: hotter (regression), colder, new, gone, or same.
     Exits with status 1 when any node is hotter (suitable for CI).
+
+    Counts are derived from event volume, so feed traces where one event == one
+    call: Python traces, or Node *sampling* captures (``grackle trace app.ts -o
+    f.jsonl``). A Node ``--stream`` (live coverage) capture emits one event per
+    function per poll, so diffing it compares poll-activity, not call counts.
 
     Example:
 
