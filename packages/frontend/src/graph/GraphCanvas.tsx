@@ -3,6 +3,7 @@ import type { JSX } from "react";
 import { useEffect, useRef } from "react";
 import Sigma from "sigma";
 import type { NodeDisplayData } from "sigma/types";
+import { useTheme } from "../theme/useTheme";
 import {
   buildGraphology,
   type EdgeAttributes,
@@ -24,6 +25,15 @@ const KIND_COLORS: Record<string, string> = {
 const DEFAULT_NODE_COLOR = "#6366f1";
 const DEFAULT_EDGE_COLOR = "#94a3b8";
 const BASE_SIZE = 6;
+
+// Sigma can't parse the oklch `--color-text` token (ADR-0015) and its default
+// label color is black — invisible on the dark canvas. Drive it from the theme.
+const LABEL_COLOR_DARK = "#ffffff";
+const LABEL_COLOR_LIGHT = "#0f172a";
+
+function labelColorForTheme(theme: string): string {
+  return theme === "dark" ? LABEL_COLOR_DARK : LABEL_COLOR_LIGHT;
+}
 
 function cssVar(el: HTMLElement, name: string): string {
   return getComputedStyle(el).getPropertyValue(name).trim();
@@ -117,6 +127,8 @@ export function GraphCanvas(): JSX.Element {
   const selectNode = useGraphStore((s) => s.selectNode);
   const setHighlightedNodes = useGraphStore((s) => s.setHighlightedNodes);
 
+  const theme = useTheme((s) => s.theme);
+
   const { heat, maxHeat } = useHeatmap();
   const heatActive = traceSessionId !== null;
 
@@ -145,6 +157,7 @@ export function GraphCanvas(): JSX.Element {
         // same frame the canvas mounts). Sigma's ResizeObserver corrects the
         // dimensions once layout settles; without this it throws on init.
         allowInvalidContainer: true,
+        labelColor: { color: labelColorForTheme(theme) },
         nodeReducer: makeNodeReducer(
           graphology,
           hiddenKinds,
@@ -217,6 +230,8 @@ export function GraphCanvas(): JSX.Element {
         heatActive
       )
     );
+    // Labels follow the theme: white on the dark canvas, slate on light.
+    sigma.setSetting("labelColor", { color: labelColorForTheme(theme) });
     sigma.refresh();
   }, [
     hiddenKinds,
@@ -227,6 +242,7 @@ export function GraphCanvas(): JSX.Element {
     heat,
     maxHeat,
     heatActive,
+    theme,
   ]);
 
   return (
