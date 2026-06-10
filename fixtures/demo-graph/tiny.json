@@ -1,0 +1,138 @@
+{
+  "version": 1,
+  "language": "python",
+  "name": "tiny",
+  "label": "Tiny",
+  "description": "single-file utility (~10 nodes)",
+  "nodes": [
+    {
+      "id": "core/client.py",
+      "kind": "file",
+      "name": "client.py",
+      "path": "core/client.py",
+      "x": 0.2788535969157675,
+      "y": -0.9499784895546661
+    },
+    {
+      "id": "core/client.py:Service",
+      "kind": "class",
+      "name": "Service",
+      "path": "core/client.py",
+      "line": 8,
+      "x": -0.4499413632617615,
+      "y": -0.5535785237023545
+    },
+    {
+      "id": "core/client.py:Service.__init__",
+      "kind": "method",
+      "name": "__init__",
+      "path": "core/client.py",
+      "line": 12,
+      "metadata": {
+        "parent": "core/client.py:Service"
+      },
+      "x": 0.4729424283280248,
+      "y": 0.3533989748458226
+    },
+    {
+      "id": "core/client.py:Service.start",
+      "kind": "method",
+      "name": "start",
+      "path": "core/client.py",
+      "line": 18,
+      "metadata": {
+        "parent": "core/client.py:Service"
+      },
+      "x": 0.7843591354096908,
+      "y": -0.8261223347411677
+    },
+    {
+      "id": "core/client.py:Service.stop",
+      "kind": "method",
+      "name": "stop",
+      "path": "core/client.py",
+      "line": 24,
+      "metadata": {
+        "parent": "core/client.py:Service"
+      },
+      "x": -0.15615636062945915,
+      "y": -0.9404055611238593
+    },
+    {
+      "id": "core/client.py:main",
+      "kind": "function",
+      "name": "main",
+      "path": "core/client.py",
+      "line": 4,
+      "x": -0.5627240503927933,
+      "y": 0.010710576206724776
+    },
+    {
+      "id": "core/client.py:helper_1",
+      "kind": "function",
+      "name": "helper",
+      "path": "core/client.py",
+      "line": 12,
+      "x": -0.9469280606322728,
+      "y": -0.602324698626703
+    }
+  ],
+  "edges": [
+    {
+      "source": "core/client.py:Service.__init__",
+      "target": "core/client.py:main",
+      "kind": "call",
+      "metadata": {
+        "resolved": true
+      }
+    },
+    {
+      "source": "core/client.py:Service.start",
+      "target": "core/client.py:Service.stop",
+      "kind": "call",
+      "metadata": {
+        "resolved": true
+      }
+    },
+    {
+      "source": "core/client.py:Service.stop",
+      "target": "core/client.py:Service.__init__",
+      "kind": "call",
+      "metadata": {
+        "resolved": true
+      }
+    },
+    {
+      "source": "core/client.py:Service.stop",
+      "target": "core/client.py:Service.start",
+      "kind": "call",
+      "metadata": {
+        "resolved": true
+      }
+    },
+    {
+      "source": "core/client.py:Service.stop",
+      "target": "core/client.py:helper_1",
+      "kind": "call",
+      "metadata": {
+        "resolved": true
+      }
+    },
+    {
+      "source": "core/client.py:main",
+      "target": "core/client.py:Service.__init__",
+      "kind": "call",
+      "metadata": {
+        "resolved": true
+      }
+    },
+    {
+      "source": "core/client.py:main",
+      "target": "core/client.py:Service.start",
+      "kind": "call",
+      "metadata": {
+        "resolved": true
+      }
+    }
+  ]
+}

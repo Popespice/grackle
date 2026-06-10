@@ -93,7 +93,11 @@ function makeNodeReducer(
       color = resolveNodeColor(data.kind, container);
     }
 
-    return { color, size, hidden };
+    // Sigma 3.x replaces (does not merge) node attributes with the reducer's
+    // return — see sigma.esm.js applyNodeDefaults, which throws "could not find
+    // a valid position" if x/y are absent. Spread the original data so x/y,
+    // label, etc. survive; override only the computed display fields.
+    return { ...data, color, size, hidden };
   };
 }
 
@@ -136,6 +140,11 @@ export function GraphCanvas(): JSX.Element {
       graphology,
       container,
       {
+        // The container is an absolutely-positioned fill that may not have
+        // been measured yet on the first commit (fast WS → graph arrives the
+        // same frame the canvas mounts). Sigma's ResizeObserver corrects the
+        // dimensions once layout settles; without this it throws on init.
+        allowInvalidContainer: true,
         nodeReducer: makeNodeReducer(
           graphology,
           hiddenKinds,

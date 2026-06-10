@@ -38,6 +38,17 @@ def _allowed_origins() -> list[str]:
     return ["http://localhost:5173", "http://127.0.0.1:5173"]
 
 
+def _empty_graph(error: str) -> dict[str, Any]:
+    """Fallback graph payload when a fixture fails to load or parse."""
+    return {
+        "version": 1,
+        "language": "python",
+        "nodes": [],
+        "edges": [],
+        "metadata": {"parseWarnings": [], "parseErrors": [error]},
+    }
+
+
 def _trace_path_for(root: Path) -> Path | None:
     """Return the golden trace for *root* if present, else None."""
     candidate = root / "trace.golden.jsonl"
@@ -82,46 +93,62 @@ class _DemoServer:
 
     def _parse(self, name: str) -> dict[str, Any]:
         if name not in self._cache:
-            from grackle.adapters import registry
-            from grackle.adapters.base import ParseOptions
-
             root = self._fixture_roots[name]
-            log.info("demo: parsing fixture", name=name, root=str(root))
-            try:
-                parsed = registry.parse_all(root, ParseOptions())
-                result: dict[str, Any] = typing.cast("dict[str, Any]", parsed)
-            except Exception as exc:
-                log.error("demo: parse failed", name=name, error=str(exc))
-                result = {
-                    "version": 1,
-                    "language": "python",
-                    "nodes": [],
-                    "edges": [],
-                    "metadata": {"parseWarnings": [], "parseErrors": [str(exc)]},
-                }
+            result: dict[str, Any]
+            if root.suffix == ".json":
+                # Pre-built synthetic graph fixture (the size-tier presets) —
+                # load the graph JSON directly; nothing to parse. Static-only
+                # (no golden trace), so it exercises the visualization at scale.
+                log.info("demo: loading graph fixture", name=name, path=str(root))
+                try:
+                    result = json.loads(root.read_text(encoding="utf-8"))
+                except Exception as exc:
+                    log.error("demo: graph load failed", name=name, error=str(exc))
+                    result = _empty_graph(str(exc))
+            else:
+                from grackle.adapters import registry
+                from grackle.adapters.base import ParseOptions
+
+                log.info("demo: parsing fixture", name=name, root=str(root))
+                try:
+                    parsed = registry.parse_all(root, ParseOptions())
+                    result = typing.cast("dict[str, Any]", parsed)
+                except Exception as exc:
+                    log.error("demo: parse failed", name=name, error=str(exc))
+                    result = _empty_graph(str(exc))
             self._cache[name] = result
         return self._cache[name]
 
     def _fixture_summary(self) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
         for name in self._fixture_roots:
-            cached = self._cache.get(name)
+            # Parse/load eagerly so the switcher dropdown can show real node and
+            # edge counts up front (the whole point of the size-tier presets).
+            # Results are cached, so this is a one-time cost per fixture.
+            graph = self._parse(name)
             trace_path = _trace_path_for(self._fixture_roots[name])
             out.append(
                 {
                     "name": name,
                     "label": name.capitalize(),
-                    "nodeCount": len(cached["nodes"]) if cached else None,
-                    "edgeCount": len(cached["edges"]) if cached else None,
+                    "nodeCount": len(graph.get("nodes", [])),
+                    "edgeCount": len(graph.get("edges", [])),
                     "hasTrace": trace_path is not None,
                 }
             )
-        out.sort(key=lambda f: (f["nodeCount"] is None, f["name"]))
+        out.sort(key=lambda f: f["nodeCount"])
         return out
 
     async def _send(self, ws: ServerConnection, envelope: dict[str, Any]) -> None:
         try:
             await ws.send(json.dumps(envelope))
+        except websockets.exceptions.ConnectionClosed:
+            self._clients.discard(ws)
+
+    async def _send_raw(self, ws: ServerConnection, message: str) -> None:
+        """Send a pre-serialized envelope string (from protocol.make_*)."""
+        try:
+            await ws.send(message)
         except websockets.exceptions.ConnectionClosed:
             self._clients.discard(ws)
 
@@ -222,6 +249,43 @@ class _DemoServer:
             log.info("load_fixture", name=name)
             await self._send_active_graph(ws)
             self._start_replay(ws)
+        elif etype == "read_source":
+            await self._handle_read_source(ws, envelope)
+
+    async def _handle_read_source(self, ws: ServerConnection, envelope: dict[str, Any]) -> None:
+        """Serve a node's source for the active fixture.
+
+        Real project fixtures read the file off disk (reusing the production
+        path-safety check).  Synthetic size-tier presets have no backing files,
+        so they answer with a clean source_error instead of letting the
+        frontend's read_source request time out.
+        """
+        from grackle import protocol
+        from grackle.server import _read_source
+
+        request_id = envelope.get("id", "")
+        path = envelope.get("payload", {}).get("path", "")
+        if not isinstance(request_id, str) or not isinstance(path, str):
+            return
+
+        root = self._fixture_roots[self._active]
+        if root.suffix == ".json":
+            await self._send_raw(
+                ws,
+                protocol.make_source_error(
+                    request_id, path, "synthetic demo fixture — no source files"
+                ),
+            )
+            return
+
+        source, enc_or_reason = _read_source(root.resolve(), path)
+        if source is not None:
+            await self._send_raw(
+                ws,
+                protocol.make_source_response(request_id, path, source, enc_or_reason),
+            )
+        else:
+            await self._send_raw(ws, protocol.make_source_error(request_id, path, enc_or_reason))
 
     async def _send_active_graph(self, ws: ServerConnection) -> None:
         graph = self._parse(self._active)

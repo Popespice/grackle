@@ -304,16 +304,25 @@ def demo(
 
     The Python fixture (``tiny-python-app``) ships a golden trace and drives
     the real Phase 6.3 Timeline panel + node heat-map.  Rust, Go, and polyglot
-    fixtures render as static-only (no trace).
+    fixtures render as static-only (no trace).  The ``tiny``…``huge`` presets are
+    synthetic graph fixtures (``fixtures/demo-graph/*.json``) spanning 7 → 4,950
+    nodes so the visualization can be exercised at different scales.
+
+    A ``NAME=PATH`` value may point at a project directory (parsed via
+    ``parse_all``) or a pre-built ``*.json`` graph (loaded directly).
 
     Default fixtures:
 
     \b
-        python = fixtures/tiny-python-app  (has golden trace → overlay)
+        python = fixtures/tiny-python-app    (has golden trace → overlay)
         rust   = fixtures/tiny-rust-app
         poly   = fixtures/tiny-polyglot
-        tiny   = fixtures/tiny-app
         go     = fixtures/tiny-go-app
+        tiny   = fixtures/demo-graph/tiny.json     (7 nodes)
+        small  = fixtures/demo-graph/small.json    (33 nodes)
+        medium = fixtures/demo-graph/medium.json   (220 nodes)
+        large  = fixtures/demo-graph/large.json    (1,120 nodes)
+        huge   = fixtures/demo-graph/huge.json     (4,950 nodes)
     """
     from grackle import demo as demo_module  # lazy: throwaway module
 
@@ -324,8 +333,12 @@ def demo(
         "python=fixtures/tiny-python-app",
         "rust=fixtures/tiny-rust-app",
         "poly=fixtures/tiny-polyglot",
-        "tiny=fixtures/tiny-app",
         "go=fixtures/tiny-go-app",
+        "tiny=fixtures/demo-graph/tiny.json",
+        "small=fixtures/demo-graph/small.json",
+        "medium=fixtures/demo-graph/medium.json",
+        "large=fixtures/demo-graph/large.json",
+        "huge=fixtures/demo-graph/huge.json",
     )
     fixture_roots: dict[str, Path] = {}
     for raw in roots_raw:
@@ -336,8 +349,8 @@ def demo(
         p = Path(path_str.strip())
         if not p.exists():
             raise click.UsageError(f"fixture root not found: {p}")
-        if not p.is_dir():
-            raise click.UsageError(f"fixture root must be a directory: {p}")
+        if not p.is_dir() and p.suffix != ".json":
+            raise click.UsageError(f"fixture must be a directory or a .json graph: {p}")
         fixture_roots[name] = p
 
     log.info(
