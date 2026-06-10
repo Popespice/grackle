@@ -38,7 +38,13 @@ if TYPE_CHECKING:
 
     from grackle.python_runtime.node_resolution import NodeResolver
 
-from grackle.adapters.base import TraceCapExceeded, TraceEvent, TraceOptions
+from grackle.adapters.base import (
+    TraceCapExceeded,
+    TraceEvent,
+    TraceOptions,
+    enforce_event_cap,
+    new_trace_event,
+)
 
 # Tool ID used with sys.monitoring. IDs 0-2 are reserved (debugger, coverage,
 # profiler). 3 is the first freely usable ID.
@@ -181,16 +187,7 @@ class Tracer:
         depth = self._depth.get(tid, 0)
         self._depth[tid] = depth + 1
         node_id = self._resolver.resolve(code.co_filename, code.co_firstlineno, code.co_name)
-        self._emit(
-            {
-                "event": "call",
-                "node_id": node_id,
-                "ts_ns": time.monotonic_ns(),
-                "thread_id": tid,
-                "frame_depth": depth,
-                "metadata": {},
-            }
-        )
+        self._emit(new_trace_event("call", node_id, time.monotonic_ns(), tid, depth))
         return None
 
     def _on_return(self, code: CodeType, offset: int, retval: object) -> None:
@@ -202,16 +199,7 @@ class Tracer:
         depth = max(0, self._depth.get(tid, 1) - 1)
         self._depth[tid] = depth
         node_id = self._resolver.resolve(code.co_filename, code.co_firstlineno, code.co_name)
-        self._emit(
-            {
-                "event": "return",
-                "node_id": node_id,
-                "ts_ns": time.monotonic_ns(),
-                "thread_id": tid,
-                "frame_depth": depth,
-                "metadata": {},
-            }
-        )
+        self._emit(new_trace_event("return", node_id, time.monotonic_ns(), tid, depth))
 
     def _on_unwind(self, code: CodeType, offset: int, exception: BaseException) -> None:
         """Frame is exiting because an exception is propagating through it.
@@ -245,14 +233,9 @@ class Tracer:
         node_id = self._resolver.resolve(code.co_filename, code.co_firstlineno, code.co_name)
         exc_type = type(exception).__name__
         self._emit(
-            {
-                "event": "exception",
-                "node_id": node_id,
-                "ts_ns": time.monotonic_ns(),
-                "thread_id": tid,
-                "frame_depth": depth,
-                "metadata": {"exc_type": exc_type},
-            }
+            new_trace_event(
+                "exception", node_id, time.monotonic_ns(), tid, depth, {"exc_type": exc_type}
+            )
         )
 
     def _on_line(self, code: CodeType, line_number: int) -> None:
@@ -264,22 +247,15 @@ class Tracer:
         depth = self._depth.get(tid, 0)
         node_id = self._resolver.resolve(code.co_filename, code.co_firstlineno, code.co_name)
         self._emit(
-            {
-                "event": "line",
-                "node_id": node_id,
-                "ts_ns": time.monotonic_ns(),
-                "thread_id": tid,
-                "frame_depth": depth,
-                "metadata": {"line": line_number},
-            }
+            new_trace_event("line", node_id, time.monotonic_ns(), tid, depth, {"line": line_number})
         )
 
     def _emit(self, event: TraceEvent) -> None:
-        cap = self._options.max_events
-        if cap is not None and self._count >= cap:
-            raise TraceCapExceeded(
-                f"trace event cap of {cap} reached; set TraceOptions.max_events=None to disable"
-            )
+        enforce_event_cap(
+            self._count,
+            self._options.max_events,
+            hint="set TraceOptions.max_events=None to disable",
+        )
         self._count += 1
         if self._sink is not None:
             try:

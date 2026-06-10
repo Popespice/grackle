@@ -2,17 +2,80 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from grackle.node_runtime.coverage_poll import (
+    CoverageDelta,
+    CoverageKey,
     OffsetLineMap,
     coverage_event,
-    diff_coverage,
-    normalize_precise_coverage,
+    iter_coverage_deltas,
 )
 
 if TYPE_CHECKING:
-    from grackle.node_runtime.coverage_poll import CoverageEntry, CoverageKey
+    from collections.abc import Iterable, Mapping
+
+
+# ---------------------------------------------------------------------------
+# Reference decomposition (oracle for iter_coverage_deltas equivalence tests)
+# normalize_precise_coverage + diff_coverage were removed from the production
+# module (they are dead in production); they live here as the test oracle only.
+# ---------------------------------------------------------------------------
+
+
+class CoverageEntry(TypedDict):
+    url: str
+    function_name: str
+    start_offset: int
+    count: int
+
+
+def normalize_precise_coverage(
+    result: Iterable[Mapping[str, Any]],
+) -> dict[CoverageKey, CoverageEntry]:
+    from grackle.node_runtime.coverage_poll import _as_int
+
+    out: dict[CoverageKey, CoverageEntry] = {}
+    for script in result:
+        script_id = str(script.get("scriptId", ""))
+        url = str(script.get("url", ""))
+        for fn in script.get("functions") or []:
+            ranges = fn.get("ranges") or []
+            if not ranges:
+                continue
+            head = ranges[0]
+            if not isinstance(head, dict):
+                continue
+            start_offset = _as_int(head.get("startOffset"))
+            count = _as_int(head.get("count"))
+            out[(script_id, start_offset)] = {
+                "url": url,
+                "function_name": str(fn.get("functionName", "")),
+                "start_offset": start_offset,
+                "count": count,
+            }
+    return out
+
+
+def diff_coverage(
+    prev: Mapping[CoverageKey, CoverageEntry],
+    curr: Mapping[CoverageKey, CoverageEntry],
+) -> list[CoverageDelta]:
+    deltas: list[CoverageDelta] = []
+    for (script_id, start_offset), entry in curr.items():
+        before = prev.get((script_id, start_offset))
+        delta = entry["count"] - (before["count"] if before is not None else 0)
+        if delta > 0:
+            deltas.append(
+                {
+                    "script_id": script_id,
+                    "url": entry["url"],
+                    "function_name": entry["function_name"],
+                    "start_offset": start_offset,
+                    "delta": delta,
+                }
+            )
+    return deltas
 
 
 def test_offset_line_map_basic() -> None:
@@ -123,3 +186,56 @@ def test_coverage_event_shape() -> None:
         "frame_depth": 0,
         "metadata": {"live": True, "count": 42},
     }
+
+
+def test_iter_coverage_deltas_matches_normalize_then_diff() -> None:
+    """The fused one-pass form is byte-equivalent to diff_coverage(prev, normalize(r))
+    for the deltas, and its returned counts equal normalize(r)'s per-key counts."""
+    r1 = [
+        {
+            "scriptId": "7",
+            "url": "u",
+            "functions": [
+                {"functionName": "f", "ranges": [{"startOffset": 100, "count": 2}]},
+                {"functionName": "g", "ranges": [{"startOffset": 300, "count": 0}]},
+            ],
+        },
+    ]
+    r2 = [
+        {
+            "scriptId": "7",
+            "url": "u",
+            "functions": [
+                {"functionName": "f", "ranges": [{"startOffset": 100, "count": 5}]},
+                {"functionName": "g", "ranges": [{"startOffset": 300, "count": 1}]},
+            ],
+        },
+    ]
+    # First poll: prev empty.
+    norm1 = normalize_precise_coverage(r1)
+    new_d1, counts1 = iter_coverage_deltas(r1, {})
+    assert new_d1 == diff_coverage({}, norm1)
+    assert counts1 == {k: v["count"] for k, v in norm1.items()}
+    # Second poll: prev = first counts.
+    norm2 = normalize_precise_coverage(r2)
+    new_d2, counts2 = iter_coverage_deltas(r2, counts1)
+    assert new_d2 == diff_coverage(norm1, norm2)  # diff_coverage reads ["count"]
+    assert counts2 == {k: v["count"] for k, v in norm2.items()}
+
+
+def test_iter_coverage_deltas_tolerates_malformed() -> None:
+    r = [
+        {
+            "scriptId": "7",
+            "url": "u",
+            "functions": [
+                {"functionName": "a", "ranges": [{"startOffset": None, "count": None}]},
+                {"functionName": "c", "ranges": ["not-a-dict"]},
+                {"functionName": "d", "ranges": [{"startOffset": 20, "count": 3}]},
+            ],
+        }
+    ]
+    deltas, counts = iter_coverage_deltas(r, {})  # must not raise
+    by_off = {d["start_offset"]: d["delta"] for d in deltas}
+    assert by_off == {20: 3}  # 'a' coerces to count 0 → delta 0 (not surfaced)
+    assert counts == {("7", 0): 0, ("7", 20): 3}

@@ -40,6 +40,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from grackle.adapters.base import new_trace_event
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
@@ -88,22 +90,41 @@ def reconstruct(
     path_cache: dict[int, list[tuple[int, str]]] = {}
 
     def filtered_path(node_id: int) -> list[tuple[int, str]]:
+        # Walk up to the nearest ancestor whose filtered path is already cached,
+        # collecting the uncached suffix, then extend that base forward — so each
+        # tree-node id is resolve()'d at most once over the whole profile
+        # (O(nodes) amortised vs the old O(nodes*depth) root→leaf rewalk). A
+        # malformed parent cycle is bounded by the `seen` guard (as _path_to_root
+        # did). A frame with no callFrame / unresolved id is dropped (chain == base),
+        # matching the old `continue`.
         cached = path_cache.get(node_id)
         if cached is not None:
             return cached
-        chain: list[tuple[int, str]] = []
-        for tid in _path_to_root(node_id, parent_of):
+        pending: list[int] = []
+        seen: set[int] = set()
+        cur: int | None = node_id
+        base: list[tuple[int, str]] = []
+        while cur is not None and cur not in seen:
+            hit = path_cache.get(cur)
+            if hit is not None:
+                base = hit
+                break
+            seen.add(cur)
+            pending.append(cur)
+            cur = parent_of.get(cur)
+        # pending is leaf→…→shallowest-uncached; extend base (root-first) downward.
+        for tid in reversed(pending):
             node = nodes_by_id.get(tid)
-            if node is None:
-                continue
-            call_frame = node.get("callFrame")
-            if call_frame is None:
-                continue  # malformed node without a callFrame — drop the frame
-            grackle_id = resolve(call_frame)
-            if grackle_id is not None:
-                chain.append((tid, grackle_id))
-        path_cache[node_id] = chain
-        return chain
+            own: tuple[int, str] | None = None
+            if node is not None:
+                call_frame = node.get("callFrame")
+                if call_frame is not None:
+                    grackle_id = resolve(call_frame)
+                    if grackle_id is not None:
+                        own = (tid, grackle_id)
+            base = base if own is None else [*base, own]
+            path_cache[tid] = base
+        return path_cache[node_id]
 
     events: list[TraceEvent] = []
     prev: list[tuple[int, str]] = []
@@ -144,21 +165,10 @@ def _emit_transition(
         common += 1
     # Close popped frames, deepest first.
     for depth in range(len(prev) - 1, common - 1, -1):
-        events.append(_event("return", prev[depth][1], ts_ns, depth))
+        events.append(new_trace_event("return", prev[depth][1], ts_ns, _THREAD_ID, depth))
     # Open pushed frames, shallowest first.
     for depth in range(common, len(cur)):
-        events.append(_event("call", cur[depth][1], ts_ns, depth))
-
-
-def _event(kind: str, node_id: str, ts_ns: int, depth: int) -> TraceEvent:
-    return {
-        "event": kind,
-        "node_id": node_id,
-        "ts_ns": ts_ns,
-        "thread_id": _THREAD_ID,
-        "frame_depth": depth,
-        "metadata": {},
-    }
+        events.append(new_trace_event("call", cur[depth][1], ts_ns, _THREAD_ID, depth))
 
 
 def _build_parents(nodes_by_id: Mapping[int, Mapping[str, Any]]) -> dict[int, int | None]:
@@ -169,19 +179,3 @@ def _build_parents(nodes_by_id: Mapping[int, Mapping[str, Any]]) -> dict[int, in
             if cid in parent_of:
                 parent_of[cid] = nid
     return parent_of
-
-
-def _path_to_root(node_id: int, parent_of: Mapping[int, int | None]) -> list[int]:
-    """Return tree-node ids from root → *node_id* (inclusive).
-
-    Guards against cycles in a malformed profile via a visited set.
-    """
-    rev: list[int] = []
-    seen: set[int] = set()
-    cur: int | None = node_id
-    while cur is not None and cur not in seen:
-        seen.add(cur)
-        rev.append(cur)
-        cur = parent_of.get(cur)
-    rev.reverse()
-    return rev

@@ -30,11 +30,15 @@ class _StaticStub:
 
 
 class _RuntimeStub:
-    def __init__(self, language: str) -> None:
+    def __init__(self, language: str, *, extensions: tuple[str, ...] = ()) -> None:
         self.language = language
+        self.extensions = extensions
 
     def capabilities(self) -> Capabilities:
         return Capabilities()
+
+    def runtime_unavailable_reason(self, script: Path) -> str | None:
+        return None
 
     def trace(self, script: Path, root: Path, options: TraceOptions) -> Iterator[TraceEvent]:
         yield from ()
@@ -243,3 +247,51 @@ def test_parse_all_cross_language_edges() -> None:
     assert "cross_language_spawn" in edge_kinds, (
         "expected ≥1 cross_language_spawn edge (Python subprocess.run → TS build script)"
     )
+
+
+# ---------------------------------------------------------------------------
+# runtime_extensions (Phase 8.6 — CLI extension→language inference index)
+# ---------------------------------------------------------------------------
+
+
+def test_runtime_extensions_indexes_by_registered_language() -> None:
+    reg = AdapterRegistry()
+    reg.register_runtime(_RuntimeStub("typescript", extensions=(".ts", ".mts")))
+    reg.register_runtime(_RuntimeStub("python"))  # no extensions → contributes nothing
+    assert reg.runtime_extensions() == {".ts": "typescript", ".mts": "typescript"}
+
+
+def test_runtime_extensions_uses_registered_key_and_lowercases() -> None:
+    reg = AdapterRegistry()
+    # Registered key is canonicalised (stripped/lowercased); extensions lowercased.
+    reg.register_runtime(_RuntimeStub("TypeScript", extensions=(".TS", ".Mts")))
+    assert reg.runtime_extensions() == {".ts": "typescript", ".mts": "typescript"}
+
+
+def test_runtime_extensions_empty_when_no_runtime_adapters() -> None:
+    assert AdapterRegistry().runtime_extensions() == {}
+
+
+# ---------------------------------------------------------------------------
+# build_static_graph (Phase 8.6 — shared resolver-graph build for runtime adapters)
+# ---------------------------------------------------------------------------
+
+
+def test_build_static_graph_returns_parsed_graph(tmp_path: Path) -> None:
+    reg = AdapterRegistry()
+    reg.register_static(_CountingStub("python", 2, detects=True))
+    graph = reg.build_static_graph("python", tmp_path)
+    assert graph["language"] == "python"
+    assert len(graph["nodes"]) == 2
+
+
+def test_build_static_graph_missing_raises_lookuperror(tmp_path: Path) -> None:
+    reg = AdapterRegistry()
+    with pytest.raises(LookupError, match="python static adapter not registered"):
+        reg.build_static_graph("python", tmp_path)
+
+
+def test_build_static_graph_missing_uses_custom_message(tmp_path: Path) -> None:
+    reg = AdapterRegistry()
+    with pytest.raises(LookupError, match="my custom remediation"):
+        reg.build_static_graph("python", tmp_path, missing_message="my custom remediation")

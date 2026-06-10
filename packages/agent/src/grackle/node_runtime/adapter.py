@@ -73,6 +73,34 @@ class NodeRuntimeAdapter:
     """Runtime adapter that traces Node/V8 execution of TypeScript via CDP."""
 
     language: str = "typescript"
+    # Extensions routable to this adapter. Only includes extensions that are
+    # actually runnable; .tsx/.jsx are rejected at the gate (JSX is not supported
+    # until Phase 9) so they are omitted here — advertising them as "known" leads
+    # users to expect they work.
+    extensions: tuple[str, ...] = (".ts", ".mts", ".cts")
+
+    # JSX extensions: type-stripping strips type annotations but cannot transform
+    # JSX. Out of scope until Phase 9 — surfaced as a clean, specific message when
+    # the user passes --language typescript explicitly.
+    _UNSUPPORTED_EXTENSIONS = (".tsx", ".jsx")
+
+    def runtime_unavailable_reason(self, script: Path) -> str | None:
+        """Reject JSX inputs and a missing/old Node toolchain; else None.
+
+        Owns both gate kinds (was ``cli._UNSUPPORTED_TS_EXTENSIONS`` +
+        ``cli._runtime_gate_message``) so the per-adapter knowledge lives here.
+        """
+        suffix = script.suffix.lower()
+        if suffix in self._UNSUPPORTED_EXTENSIONS:
+            return (
+                f"{script.name}: TypeScript JSX ({suffix}) is not supported yet -- "
+                "Node's type-stripping strips type annotations but cannot transform "
+                "JSX (planned for Phase 9). Trace a plain .ts/.mts/.cts module, or "
+                "pre-compile the JSX to .js first."
+            )
+        if not capability.node_runtime_available():
+            return capability.remediation_message()
+        return None
 
     def capabilities(self) -> Capabilities:
         # A RuntimeAdapter only advertises runtime capabilities; the static
@@ -125,12 +153,13 @@ class NodeRuntimeAdapter:
     def _build_resolver(self, root: Path) -> NodeResolver:
         """Build a :class:`NodeResolver` from the TypeScript static graph for *root*."""
         from grackle.adapters import registry
-        from grackle.adapters.base import ParseOptions
 
-        static_adapter = registry.get_static("typescript")
-        if static_adapter is None:
-            raise NodeRuntimeError(
-                "TypeScript static adapter not registered; cannot resolve node IDs"
+        try:
+            graph = registry.build_static_graph(
+                "typescript",
+                root,
+                missing_message="TypeScript static adapter not registered; cannot resolve node IDs",
             )
-        graph = static_adapter.parse(root, ParseOptions())
+        except LookupError as exc:
+            raise NodeRuntimeError(str(exc)) from exc
         return NodeResolver(root, graph)

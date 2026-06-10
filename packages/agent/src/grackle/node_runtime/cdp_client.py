@@ -7,9 +7,10 @@ ADR-0022: the Node/V8 runtime adapter drives Node over the V8 Inspector (CDP) on
 - Response:  ``{"id": N, "result": {...}}``  or  ``{"id": N, "error": {...}}``
 - Event:     ``{"method": "Domain.event", "params": {...}}``  (no ``id``)
 
-This client sends commands and awaits their matching responses by ``id``, and
-dispatches events to registered listeners. It adds **no new dependency** —
-``websockets`` is already a runtime dependency for the trace transport (ADR-0014).
+This client sends commands and awaits their matching responses by ``id``; CDP
+events (messages with no ``id``) are ignored — the launcher only ever sends
+commands. It adds **no new dependency** — ``websockets`` is already a runtime
+dependency for the trace transport (ADR-0014).
 
 A background receive task is the single reader of the socket; :meth:`send` registers
 a future keyed by command id and awaits it. The 1 MiB default inbound message cap is
@@ -25,7 +26,7 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable
+    from collections.abc import AsyncIterator
 
 
 class CDPError(RuntimeError):
@@ -62,7 +63,7 @@ class CDPClient:
     """A CDP message channel over an open WebSocket.
 
     Constructed by :func:`connect`; not used directly. Use :meth:`send` for
-    request/response commands and :meth:`on` to subscribe to events.
+    request/response commands.
     """
 
     def __init__(self, ws: Any, *, default_timeout: float | None = None) -> None:
@@ -70,7 +71,6 @@ class CDPClient:
         self._default_timeout = default_timeout
         self._next_id = 0
         self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
-        self._listeners: dict[str, list[Callable[[dict[str, Any]], None]]] = {}
         self._recv_task: asyncio.Task[None] | None = None
 
     # ------------------------------------------------------------------
@@ -121,14 +121,6 @@ class CDPClient:
             self._pending.pop(message_id, None)
             raise CDPError(f"{method} timed out after {effective_timeout:.0f}s") from exc
 
-    def on(self, method: str, callback: Callable[[dict[str, Any]], None]) -> None:
-        """Register *callback* for CDP event *method* (called with its ``params``).
-
-        Multiple callbacks per method are allowed; a callback that raises is
-        isolated so it cannot break the receive loop or other listeners.
-        """
-        self._listeners.setdefault(method, []).append(callback)
-
     # ------------------------------------------------------------------
     # Lifecycle (driven by connect())
     # ------------------------------------------------------------------
@@ -170,14 +162,8 @@ class CDPClient:
             else:
                 future.set_result(message.get("result", {}))
             return
-        method = message.get("method")
-        if not method:
-            return
-        params = message.get("params", {})
-        for callback in self._listeners.get(method, []):
-            # A listener must not be able to break the reader for other commands.
-            with contextlib.suppress(Exception):
-                callback(params)
+        # No ``id`` ⇒ a CDP *event*. This client is request/response only (the
+        # launcher never subscribes to events), so events are ignored.
 
     def _fail_pending(self, error: CDPError) -> None:
         for future in self._pending.values():

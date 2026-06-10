@@ -22,37 +22,23 @@ if TYPE_CHECKING:
     from grackle.adapters.base import RuntimeAdapter, TraceEvent
 
 # Maximum inter-event sleep when streaming a completed trace to a server.
-# Mirrors server._MAX_GAP_S so --connect pacing matches --trace-source pacing.
+# Mirrors file_replay._MAX_GAP_S so --connect pacing matches --trace-source pacing.
 _MAX_GAP_S = 0.25
-
-# Runtime language inferred from SCRIPT's extension when --language is omitted.
-# .tsx maps to typescript so the JSX guard in _resolve_runtime_adapter can emit a
-# specific "not supported yet" message rather than a generic "cannot infer".
-_EXT_LANGUAGE: dict[str, str] = {
-    ".py": "python",
-    ".pyw": "python",
-    ".ts": "typescript",
-    ".tsx": "typescript",
-    ".mts": "typescript",
-    ".cts": "typescript",
-}
-
-# JSX extensions Node's --experimental-strip-types cannot run (it strips type
-# annotations, but does not transform JSX). Out of scope until Phase 9.
-_UNSUPPORTED_TS_EXTENSIONS = (".tsx", ".jsx")
 
 
 def _resolve_runtime_adapter(script: Path, language: str | None) -> RuntimeAdapter:
-    """Return the runtime adapter for SCRIPT's language, gated on its capability.
+    """Return the runtime adapter for SCRIPT's language, gated on the adapter itself.
 
     Language comes from ``--language`` when given, else is inferred from the file
-    extension. Raises a clean ``click`` error when the language is unknown, has no
-    registered runtime adapter, or its toolchain is unavailable (e.g. Node missing
-    or too old) — never a traceback.
+    extension via the registry's runtime-extension index (no hardcoded per-adapter
+    table). Raises a clean ``click`` error when the language is unknown, has no
+    registered runtime adapter, or the adapter reports it cannot trace this script
+    — a missing/old toolchain, or an unsupported input like JSX — never a traceback.
     """
     from grackle.adapters import registry
 
     suffix = script.suffix.lower()
+    ext_index = registry.runtime_extensions()
     if language is not None:
         lang = language.strip().lower()
         if not lang:
@@ -62,38 +48,28 @@ def _resolve_runtime_adapter(script: Path, language: str | None) -> RuntimeAdapt
         # before 8.5's language dispatch — `grackle trace` was Python-only — so
         # preserve that and default them to Python. Genuinely-unknown extensions
         # (e.g. .rb) still error with a pointer to --language.
-        lang = _EXT_LANGUAGE.get(suffix) or ("python" if suffix == "" else "")
+        lang = ext_index.get(suffix) or ("python" if suffix == "" else "")
         if not lang:
-            known = ", ".join(sorted(ext for ext in _EXT_LANGUAGE if ext))
+            known = ", ".join(sorted(ext_index))
             raise click.UsageError(
                 f"cannot infer runtime language from {script.name!r} "
                 f"(known extensions: {known}); pass --language explicitly."
             )
 
-    if lang == "typescript" and suffix in _UNSUPPORTED_TS_EXTENSIONS:
-        raise click.ClickException(
-            f"{script.name}: TypeScript JSX ({suffix}) is not supported yet -- "
-            "Node's type-stripping strips type annotations but cannot transform "
-            "JSX (planned for Phase 9). Trace a plain .ts/.mts/.cts module, or "
-            "pre-compile the JSX to .js first."
-        )
-
     adapter = registry.get_runtime(lang)
     if adapter is None:
         raise click.UsageError(f"no runtime adapter registered for language {lang!r}")
 
-    if not adapter.capabilities().runtime_tracing:
-        raise click.ClickException(_runtime_gate_message(lang))
+    # The adapter owns its gate (toolchain availability + unsupported inputs).
+    # Also check capabilities().runtime_tracing as an independent signal: a future
+    # adapter could correctly set that to False while returning None from
+    # runtime_unavailable_reason, and we must not proceed in that case.
+    reason = adapter.runtime_unavailable_reason(script)
+    if reason is None and not adapter.capabilities().runtime_tracing:
+        reason = f"runtime tracing is not available for language {lang!r}"
+    if reason is not None:
+        raise click.ClickException(reason)
     return adapter
-
-
-def _runtime_gate_message(lang: str) -> str:
-    """Remediation text for a runtime adapter whose toolchain is unavailable."""
-    if lang == "typescript":
-        from grackle.node_runtime import capability
-
-        return capability.remediation_message()
-    return f"runtime tracing for {lang!r} is not available in this environment."
 
 
 @click.group()

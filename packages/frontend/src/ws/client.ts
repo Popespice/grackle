@@ -74,6 +74,87 @@ interface GrackleClientState {
   ) => () => void;
 }
 
+/** A resolver stored in a pending-request map. */
+type PendingResolver<R> = (msg: R) => void;
+
+/**
+ * Shared request/response scaffold for the WebSocket request methods.
+ *
+ * Generates a UUID, arms a 5 s timeout, registers a resolver in the map
+ * returned by `getPending` keyed by that id, and sends `envelope` (with its id
+ * stamped to the generated UUID). When the matching reply arrives the message
+ * listener looks the id up in that map and invokes the stored resolver, which
+ * clears the timeout and runs `onReply(msg, resolve, reject)`.
+ *
+ * `getPending` is a selector (not a captured map reference) so the timeout /
+ * reply paths re-read the live map via `get()._pendingX` exactly like the
+ * original hand-written methods did.
+ *
+ * @param get          zustand store getter (for the live socket)
+ * @param getPending   selector returning the per-method pending-resolver map
+ * @param envelope     the request to send (its id is overwritten with the UUID)
+ * @param timeoutLabel reject message used when no reply arrives in time
+ * @param onReply      maps the reply `R` to resolve/reject; defaults to
+ *                     `resolve(msg)`
+ *
+ * `R` is the reply type stored in the resolver map; `T` is what the returned
+ * promise resolves to (often a narrowing of `R`).
+ */
+function pendingRequest<R>(
+  get: () => GrackleClientState,
+  getPending: () => Map<string, PendingResolver<R>>,
+  envelope: WsEnvelope,
+  timeoutLabel: string
+): Promise<R>;
+function pendingRequest<R, T>(
+  get: () => GrackleClientState,
+  getPending: () => Map<string, PendingResolver<R>>,
+  envelope: WsEnvelope,
+  timeoutLabel: string,
+  onReply: (
+    msg: R,
+    resolve: (value: T) => void,
+    reject: (reason: Error) => void
+  ) => void
+): Promise<T>;
+function pendingRequest<R, T = R>(
+  get: () => GrackleClientState,
+  getPending: () => Map<string, PendingResolver<R>>,
+  envelope: WsEnvelope,
+  timeoutLabel: string,
+  onReply?: (
+    msg: R,
+    resolve: (value: T) => void,
+    reject: (reason: Error) => void
+  ) => void
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const { _ws, status } = get();
+    if (_ws === null || status !== "connected") {
+      reject(new Error("not connected"));
+      return;
+    }
+    const id = crypto.randomUUID();
+    const sendEnvelope = { ...envelope, id };
+
+    const timeoutId = setTimeout(() => {
+      getPending().delete(id);
+      reject(new Error(timeoutLabel));
+    }, 5000);
+
+    getPending().set(id, (msg: R) => {
+      clearTimeout(timeoutId);
+      if (onReply) {
+        onReply(msg, resolve, reject);
+      } else {
+        resolve(msg as unknown as T);
+      }
+    });
+
+    _ws.send(JSON.stringify(sendEnvelope));
+  });
+}
+
 export const useGrackleClient = create<GrackleClientState>()((set, get) => ({
   status: "disconnected",
   lastPong: null,
@@ -229,30 +310,17 @@ export const useGrackleClient = create<GrackleClientState>()((set, get) => ({
   },
 
   sendReadSource: (path: string) => {
-    return new Promise<SourceReply>((resolve, reject) => {
-      const { _ws, status } = get();
-      if (_ws === null || status !== "connected") {
-        reject(new Error("not connected"));
-        return;
-      }
-      const id = crypto.randomUUID();
-      const timeoutId = setTimeout(() => {
-        get()._pendingReadSource.delete(id);
-        reject(new Error("read_source timeout"));
-      }, 5000);
-
-      get()._pendingReadSource.set(id, (msg: SourceReply) => {
-        clearTimeout(timeoutId);
-        resolve(msg);
-      });
-
-      const envelope: ReadSourceRequest = {
-        id,
-        type: "read_source",
-        payload: { path },
-      };
-      _ws.send(JSON.stringify(envelope));
-    });
+    const envelope: ReadSourceRequest = {
+      id: "",
+      type: "read_source",
+      payload: { path },
+    };
+    return pendingRequest<SourceReply>(
+      get,
+      () => get()._pendingReadSource,
+      envelope,
+      "read_source timeout"
+    );
   },
 
   requestTraceWindow: (
@@ -260,20 +328,17 @@ export const useGrackleClient = create<GrackleClientState>()((set, get) => ({
     startIndex: number,
     count: number
   ) => {
-    return new Promise<TraceWindowMessage>((resolve, reject) => {
-      const { _ws, status } = get();
-      if (_ws === null || status !== "connected") {
-        reject(new Error("not connected"));
-        return;
-      }
-      const id = crypto.randomUUID();
-      const timeoutId = setTimeout(() => {
-        get()._pendingTraceWindow.delete(id);
-        reject(new Error("trace_seek_request timeout"));
-      }, 5000);
-
-      get()._pendingTraceWindow.set(id, (msg: SeekReply) => {
-        clearTimeout(timeoutId);
+    const envelope: TraceSeekRequest = {
+      id: "",
+      type: "trace_seek_request",
+      payload: { session_id: sessionId, start_index: startIndex, count },
+    };
+    return pendingRequest<SeekReply, TraceWindowMessage>(
+      get,
+      () => get()._pendingTraceWindow,
+      envelope,
+      "trace_seek_request timeout",
+      (msg, resolve, reject) => {
         if (msg.type === "trace_window") {
           resolve(msg as TraceWindowMessage);
         } else {
@@ -283,67 +348,49 @@ export const useGrackleClient = create<GrackleClientState>()((set, get) => ({
             )
           );
         }
-      });
-
-      const envelope: TraceSeekRequest = {
-        id,
-        type: "trace_seek_request",
-        payload: { session_id: sessionId, start_index: startIndex, count },
-      };
-      _ws.send(JSON.stringify(envelope));
-    });
+      }
+    );
   },
 
   requestTraceQuery: (sessionId, kind, atIndex, k) => {
-    return new Promise<TraceQueryResponse>((resolve, reject) => {
-      const { _ws, status } = get();
-      if (_ws === null || status !== "connected") {
-        reject(new Error("not connected"));
-        return;
-      }
-      const id = crypto.randomUUID();
-      const timer = setTimeout(() => {
-        get()._pendingTraceQuery.delete(id);
-        reject(new Error("trace_query_request timed out"));
-      }, 5000);
-      get()._pendingTraceQuery.set(id, (msg) => {
-        clearTimeout(timer);
+    const payload: Record<string, unknown> = {
+      session_id: sessionId,
+      kind,
+      at_index: atIndex,
+    };
+    if (k !== undefined) payload.k = k;
+    const envelope: WsEnvelope = {
+      id: "",
+      type: "trace_query_request",
+      payload,
+    };
+    return pendingRequest<TraceQueryResponse, TraceQueryResponse>(
+      get,
+      () => get()._pendingTraceQuery,
+      envelope,
+      "trace_query_request timed out",
+      (msg, resolve, reject) => {
         if (msg.payload.error) {
           reject(new Error(msg.payload.error as string));
         } else {
           resolve(msg);
         }
-      });
-      const payload: Record<string, unknown> = {
-        session_id: sessionId,
-        kind,
-        at_index: atIndex,
-      };
-      if (k !== undefined) payload.k = k;
-      _ws.send(JSON.stringify({ id, type: "trace_query_request", payload }));
-    });
+      }
+    );
   },
 
   requestSessionList: () => {
-    return new Promise<SessionListResponse>((resolve, reject) => {
-      const { _ws, status } = get();
-      if (_ws === null || status !== "connected") {
-        reject(new Error("not connected"));
-        return;
-      }
-      const id = crypto.randomUUID();
-      const timer = setTimeout(() => {
-        get()._pendingSessionList.delete(id);
-        reject(new Error("session_list_request timed out"));
-      }, 5000);
-      get()._pendingSessionList.set(id, (msg) => {
-        clearTimeout(timer);
-        resolve(msg);
-      });
-      _ws.send(
-        JSON.stringify({ id, type: "session_list_request", payload: {} })
-      );
-    });
+    const envelope: WsEnvelope = {
+      id: "",
+      type: "session_list_request",
+      payload: {},
+    };
+    return pendingRequest<SessionListResponse>(
+      get,
+      () => get()._pendingSessionList,
+      envelope,
+      "session_list_request timed out"
+    );
   },
 
   sendSessionLoad: (sessionId: string) => {

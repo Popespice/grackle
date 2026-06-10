@@ -12,11 +12,10 @@ line. These pure helpers turn poll-over-poll snapshots into coarse ``call``
 - :class:`OffsetLineMap` maps a script offset → 1-based line, so offset-based
   coverage reaches the same ``(path, line) → node_id`` index the sampling channel
   uses.
-- :func:`normalize_precise_coverage` flattens one ``takePreciseCoverage`` result
-  into a per-function ``{(scriptId, startOffset): count}`` map (the function-level
-  range is ``ranges[0]``).
-- :func:`diff_coverage` subtracts the previous snapshot to get per-function call
-  deltas.
+- :func:`iter_coverage_deltas` is the production path the launcher polls with: one
+  O(functions) pass over a ``takePreciseCoverage`` result + the prior baseline,
+  returning the positive per-function deltas and the next lean ``{key: count}``
+  baseline.
 - :func:`coverage_event` builds **one coarse** ``call`` event per active function
   per poll — ``frame_depth: 0``, ``metadata: {live: true, count: delta}``. One
   event per active function per tick (not one per call) keeps the live stream
@@ -38,17 +37,12 @@ from __future__ import annotations
 import bisect
 from typing import TYPE_CHECKING, Any, TypedDict
 
+from grackle.adapters.base import new_trace_event
+
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
 
     from grackle.adapters.base import TraceEvent
-
-
-class CoverageEntry(TypedDict):
-    url: str
-    function_name: str
-    start_offset: int
-    count: int
 
 
 class CoverageDelta(TypedDict):
@@ -61,6 +55,11 @@ class CoverageDelta(TypedDict):
 
 # (script_id, start_offset) — unique per function even when names collide.
 CoverageKey = tuple[str, int]
+
+# Lean per-function cumulative-count snapshot used as the poll-over-poll baseline.
+# Holds only the count (all diffing reads), avoiding a full CoverageEntry rebuild
+# every poll. Keyed identically to normalize_precise_coverage's output.
+CoverageCounts = dict[CoverageKey, int]
 
 
 class OffsetLineMap:
@@ -104,18 +103,24 @@ def _as_int(value: Any, default: int = 0) -> int:
         return default
 
 
-def normalize_precise_coverage(
+def iter_coverage_deltas(
     result: Iterable[Mapping[str, Any]],
-) -> dict[CoverageKey, CoverageEntry]:
-    """Flatten one ``takePreciseCoverage`` result into per-function call counts.
+    prev: Mapping[CoverageKey, int],
+) -> tuple[list[CoverageDelta], CoverageCounts]:
+    """One pass: positive per-function deltas + the next baseline ``{key: count}``.
 
-    Args:
-        result: The ``result`` array from ``Profiler.takePreciseCoverage``: one
-            entry per script, each with ``functions[].ranges[]``. The function-level
-            range (``ranges[0]``) carries the function's start offset and call
-            ``count``.
+    Scans the raw ``takePreciseCoverage`` payload once, allocates a
+    ``CoverageDelta`` only for functions with a *positive* delta, and returns a
+    lean ``{key: count}`` baseline. The launcher feeds the returned counts back
+    in as ``prev``.
+
+    Tie-breaking: a later function sharing a ``(scriptId, startOffset)`` overwrites
+    an earlier one (last-write-wins), so the *last* occurrence's url/name/count are
+    reported and carried forward.
     """
-    out: dict[CoverageKey, CoverageEntry] = {}
+    counts: CoverageCounts = {}
+    # url/name kept per key so the LAST occurrence wins (last-write-wins).
+    meta: dict[CoverageKey, tuple[str, str]] = {}
     for script in result:
         script_id = str(script.get("scriptId", ""))
         url = str(script.get("url", ""))
@@ -128,48 +133,28 @@ def normalize_precise_coverage(
                 continue  # malformed range entry — skip rather than crash
             start_offset = _as_int(head.get("startOffset"))
             count = _as_int(head.get("count"))
-            out[(script_id, start_offset)] = {
-                "url": url,
-                "function_name": str(fn.get("functionName", "")),
-                "start_offset": start_offset,
-                "count": count,
-            }
-    return out
+            key = (script_id, start_offset)
+            counts[key] = count
+            meta[key] = (url, str(fn.get("functionName", "")))
 
-
-def diff_coverage(
-    prev: Mapping[CoverageKey, CoverageEntry],
-    curr: Mapping[CoverageKey, CoverageEntry],
-) -> list[CoverageDelta]:
-    """Per-function call deltas (``curr − prev``) for functions called since *prev*.
-
-    Only positive deltas are returned (functions cannot be un-called); functions
-    present in *prev* but absent from *curr* are ignored.
-    """
     deltas: list[CoverageDelta] = []
-    for (script_id, start_offset), entry in curr.items():
-        before = prev.get((script_id, start_offset))
-        delta = entry["count"] - (before["count"] if before is not None else 0)
+    for key, count in counts.items():
+        delta = count - prev.get(key, 0)
         if delta > 0:
+            script_id, start_offset = key
+            url, function_name = meta[key]
             deltas.append(
                 {
                     "script_id": script_id,
-                    "url": entry["url"],
-                    "function_name": entry["function_name"],
+                    "url": url,
+                    "function_name": function_name,
                     "start_offset": start_offset,
                     "delta": delta,
                 }
             )
-    return deltas
+    return deltas, counts
 
 
 def coverage_event(node_id: str, delta: int, ts_ns: int, *, thread_id: int = 0) -> TraceEvent:
     """One coarse live ``call`` event for an active function (``frame_depth: 0``)."""
-    return {
-        "event": "call",
-        "node_id": node_id,
-        "ts_ns": ts_ns,
-        "thread_id": thread_id,
-        "frame_depth": 0,
-        "metadata": {"live": True, "count": delta},
-    }
+    return new_trace_event("call", node_id, ts_ns, thread_id, 0, {"live": True, "count": delta})

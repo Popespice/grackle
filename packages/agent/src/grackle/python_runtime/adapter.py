@@ -25,6 +25,13 @@ class PythonRuntimeAdapter:
     """Runtime adapter that traces Python script execution via sys.monitoring."""
 
     language: str = "python"
+    # .py/.pyw infer to Python. Extension-less scripts (shebang launchers) also
+    # default to Python, but that fallback stays in the CLI, not this index.
+    extensions: tuple[str, ...] = (".py", ".pyw")
+
+    def runtime_unavailable_reason(self, script: Path) -> str | None:
+        # sys.monitoring is guaranteed by requires-python >=3.12; nothing to gate.
+        return None
 
     def capabilities(self) -> Capabilities:
         # A ``RuntimeAdapter`` only advertises runtime capabilities.
@@ -97,12 +104,12 @@ class PythonRuntimeAdapter:
     ) -> Tracer:
         """Build and return a configured :class:`Tracer` for *root*."""
         from grackle.adapters import registry
-        from grackle.adapters.base import ParseOptions
 
-        static_adapter = registry.get_static("python")
-        if static_adapter is None:
-            raise RuntimeError("Python static adapter not registered; cannot resolve node IDs")
-
-        graph = static_adapter.parse(root, ParseOptions())
+        try:
+            graph = registry.build_static_graph("python", root)
+        except LookupError as exc:
+            # Preserve the historical (unreachable — __init__ always registers the
+            # python static parser) RuntimeError type for this guard.
+            raise RuntimeError(str(exc)) from exc
         resolver = NodeResolver(root, graph)
         return Tracer(resolver, options, sink=sink)

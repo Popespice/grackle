@@ -55,6 +55,8 @@ beforeEach(() => {
     _staticGraphHandlers: new Set(),
     _pendingReadSource: new Map(),
     _pendingTraceWindow: new Map(),
+    _pendingTraceQuery: new Map(),
+    _pendingSessionList: new Map(),
     _traceSessionStartHandlers: new Set(),
     _traceEventHandlers: new Set(),
     _traceSessionEndHandlers: new Set(),
@@ -441,6 +443,127 @@ describe("useGrackleClient", () => {
     // The pending promise must never resolve (it will timeout eventually).
     // We just confirm the map is clean — suppress the unhandled rejection.
     promise.catch(() => undefined);
+  });
+
+  it("trace_query_response resolves a pending requestTraceQuery promise", async () => {
+    const { connect, requestTraceQuery } = useGrackleClient.getState();
+    connect("ws://127.0.0.1:7878");
+    mockWs.simulateOpen();
+
+    const promise = requestTraceQuery("s", "cumulative_heat", 3);
+    expect(mockWs.sent).toHaveLength(1);
+    const sent = JSON.parse(mockWs.sent[0] ?? "{}") as {
+      id: string;
+      type: string;
+      payload: { session_id: string; kind: string; at_index: number };
+    };
+    expect(sent.type).toBe("trace_query_request");
+    expect(sent.payload.session_id).toBe("s");
+    expect(sent.payload.kind).toBe("cumulative_heat");
+    expect(sent.payload.at_index).toBe(3);
+
+    mockWs.simulateMessage(
+      JSON.stringify({
+        id: sent.id,
+        type: "trace_query_response",
+        payload: {
+          session_id: "s",
+          kind: "cumulative_heat",
+          at_index: 3,
+          data: { "app.py:main": 7 },
+        },
+      })
+    );
+
+    const result = await promise;
+    expect(result.type).toBe("trace_query_response");
+    expect(result.payload.data).toEqual({ "app.py:main": 7 });
+  });
+
+  it("trace_query_response with payload.error rejects requestTraceQuery", async () => {
+    const { connect, requestTraceQuery } = useGrackleClient.getState();
+    connect("ws://127.0.0.1:7878");
+    mockWs.simulateOpen();
+
+    const promise = requestTraceQuery("bad", "coverage", 0);
+    const sent = JSON.parse(mockWs.sent[0] ?? "{}") as { id: string };
+
+    mockWs.simulateMessage(
+      JSON.stringify({
+        id: sent.id,
+        type: "trace_query_response",
+        payload: { error: "no such session" },
+      })
+    );
+
+    await expect(promise).rejects.toThrow("no such session");
+  });
+
+  it("requestTraceQuery passes k when provided", () => {
+    const { connect, requestTraceQuery } = useGrackleClient.getState();
+    connect("ws://127.0.0.1:7878");
+    mockWs.simulateOpen();
+
+    const promise = requestTraceQuery("s", "top_k", 2, 5);
+    const sent = JSON.parse(mockWs.sent[0] ?? "{}") as {
+      payload: { k?: number };
+    };
+    expect(sent.payload.k).toBe(5);
+    promise.catch(() => undefined);
+  });
+
+  it("requestTraceQuery omits k when not provided", () => {
+    const { connect, requestTraceQuery } = useGrackleClient.getState();
+    connect("ws://127.0.0.1:7878");
+    mockWs.simulateOpen();
+
+    const promise = requestTraceQuery("s", "top_k", 2);
+    const sent = JSON.parse(mockWs.sent[0] ?? "{}") as {
+      payload: { k?: number };
+    };
+    expect("k" in sent.payload).toBe(false);
+    promise.catch(() => undefined);
+  });
+
+  it("requestTraceQuery rejects when not connected", async () => {
+    const { requestTraceQuery } = useGrackleClient.getState();
+    await expect(requestTraceQuery("s", "coverage", 0)).rejects.toThrow(
+      "not connected"
+    );
+  });
+
+  it("session_list_response resolves a pending requestSessionList promise", async () => {
+    const { connect, requestSessionList } = useGrackleClient.getState();
+    connect("ws://127.0.0.1:7878");
+    mockWs.simulateOpen();
+
+    const promise = requestSessionList();
+    expect(mockWs.sent).toHaveLength(1);
+    const sent = JSON.parse(mockWs.sent[0] ?? "{}") as {
+      id: string;
+      type: string;
+      payload: Record<string, unknown>;
+    };
+    expect(sent.type).toBe("session_list_request");
+    expect(sent.payload).toEqual({});
+
+    const fakeSessions = [{ session_id: "abc", started_ns: 0, event_count: 5 }];
+    mockWs.simulateMessage(
+      JSON.stringify({
+        id: sent.id,
+        type: "session_list_response",
+        payload: { sessions: fakeSessions },
+      })
+    );
+
+    const result = await promise;
+    expect(result.type).toBe("session_list_response");
+    expect(result.payload.sessions).toEqual(fakeSessions);
+  });
+
+  it("requestSessionList rejects when not connected", async () => {
+    const { requestSessionList } = useGrackleClient.getState();
+    await expect(requestSessionList()).rejects.toThrow("not connected");
   });
 
   it("late events from a stale socket are ignored (StrictMode guard)", () => {

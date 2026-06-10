@@ -26,9 +26,13 @@ class NoOpStaticParser:
 
 class NoOpRuntimeAdapter:
     language: str = "noop"
+    extensions: tuple[str, ...] = ()
 
     def capabilities(self) -> Capabilities:
         return Capabilities()
+
+    def runtime_unavailable_reason(self, script: Path) -> str | None:
+        return None
 
     def trace(self, script: Path, root: Path, options: TraceOptions) -> Iterator[TraceEvent]:
         yield from ()
