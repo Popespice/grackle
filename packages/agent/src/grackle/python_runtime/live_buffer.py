@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 _DEFAULT_BUFFER_SECONDS = 60.0
 
 
-def _trace_buffer_seconds() -> float:
+def trace_buffer_seconds() -> float:
     """Return the ring-buffer retention window from env or default."""
     raw = os.environ.get("GRACKLE_TRACE_BUFFER_SECONDS")
     if raw is not None:
@@ -39,7 +39,7 @@ def _trace_buffer_seconds() -> float:
     return _DEFAULT_BUFFER_SECONDS
 
 
-def _trace_buffer_max_events() -> int | None:
+def trace_buffer_max_events() -> int | None:
     """Return the ring-buffer event count cap from env, or None (unbounded).
 
     Set ``GRACKLE_TRACE_BUFFER_MAX_EVENTS`` to a positive integer to evict the
@@ -56,7 +56,7 @@ def _trace_buffer_max_events() -> int | None:
     return None
 
 
-def _trim_ring_buffer(
+def trim_ring_buffer(
     ring_buffer: collections.deque[tuple[int, str]],
     now_ns: int,
     buffer_seconds: float,
@@ -84,7 +84,7 @@ def _trim_ring_buffer(
             ring_buffer.popleft()
 
 
-async def _flush_ring_buffer(
+async def flush_ring_buffer(
     ws: ServerConnection,
     ring_buffer: collections.deque[tuple[int, str]],
 ) -> None:
@@ -102,7 +102,7 @@ async def _flush_ring_buffer(
             return
 
 
-async def _broadcast(
+async def broadcast(
     raw: str,
     connections: set[ServerConnection],
     exclude: ServerConnection | None = None,

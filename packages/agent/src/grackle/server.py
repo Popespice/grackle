@@ -16,17 +16,17 @@ from websockets.asyncio.server import serve as _ws_serve
 
 from grackle import protocol
 from grackle.python_runtime.file_replay import (
-    _load_stored_session,
-    _register_trace_source,
-    _replay_trace,
-    _SeekableSession,
+    SeekableSession,
+    load_stored_session,
+    register_trace_source,
+    replay_trace,
 )
 from grackle.python_runtime.live_buffer import (
-    _broadcast,
-    _flush_ring_buffer,
-    _trace_buffer_max_events,
-    _trace_buffer_seconds,
-    _trim_ring_buffer,
+    broadcast,
+    flush_ring_buffer,
+    trace_buffer_max_events,
+    trace_buffer_seconds,
+    trim_ring_buffer,
 )
 
 if TYPE_CHECKING:
@@ -164,7 +164,7 @@ async def _receive_loop(
     buffer_seconds: float,
     max_events: int | None = None,
     *,
-    seekable_sessions: dict[str, _SeekableSession] | None = None,
+    seekable_sessions: dict[str, SeekableSession] | None = None,
     store: SessionStore | None = None,
 ) -> None:
     """Process inbound messages from one connection.
@@ -345,7 +345,7 @@ async def _receive_loop(
                     path=str(load_path),
                 )
                 continue
-            asyncio.create_task(_load_stored_session(ws, load_path, load_sid, sessions))
+            asyncio.create_task(load_stored_session(ws, load_path, load_sid, sessions))
         elif etype in ("trace_session_start", "trace_event", "trace_session_end"):
             # Live-ingest path: a producer process is streaming events into
             # this server.  Buffer each message and broadcast to all consumers.
@@ -354,8 +354,8 @@ async def _receive_loop(
             # than 0 (vs. trim-before-append which allows a transient +1).
             now_ns = time.monotonic_ns()
             ring_buffer.append((now_ns, msg))
-            _trim_ring_buffer(ring_buffer, now_ns, buffer_seconds, max_events)
-            await _broadcast(msg, connections, exclude=ws)
+            trim_ring_buffer(ring_buffer, now_ns, buffer_seconds, max_events)
+            await broadcast(msg, connections, exclude=ws)
 
 
 async def serve(
@@ -392,8 +392,8 @@ async def serve(
     # Ring-buffer for live-attach late joiners.  Populated only by live ingest;
     # not used in file-replay mode (each connection re-reads the file).
     ring_buffer: collections.deque[tuple[int, str]] = collections.deque()
-    buffer_seconds = _trace_buffer_seconds()
-    max_events = _trace_buffer_max_events()
+    buffer_seconds = trace_buffer_seconds()
+    max_events = trace_buffer_max_events()
 
     # Agent-side analysis cache (hub-score + cycles), shared across connects so
     # the Tarjan SCC pass runs once per distinct graph topology, not per tab.
@@ -401,7 +401,7 @@ async def serve(
 
     # Registry of seekable/queryable sessions, keyed by session id.  Shared
     # across connections so a session loaded by one tab is queryable by all.
-    seekable_sessions: dict[str, _SeekableSession] = {}
+    seekable_sessions: dict[str, SeekableSession] = {}
 
     # File-replay mode: build the index + aggregates once in a single pass so
     # every connection can seek and query without re-scanning.  The session_id
@@ -414,10 +414,10 @@ async def serve(
         file_session_id = str(uuid4())
         try:
             idx, agg = build_seekable(trace_source)
-            seekable_sessions[file_session_id] = _SeekableSession(index=idx, aggregates=agg)
+            seekable_sessions[file_session_id] = SeekableSession(index=idx, aggregates=agg)
             log.info("trace index + aggregates built", path=str(trace_source), events=len(idx))
             if store is not None:
-                _register_trace_source(store, trace_source, idx, root_real)
+                register_trace_source(store, trace_source, idx, root_real)
         except Exception as exc:
             log.warning(
                 "trace index/aggregates build failed — seek + query disabled",
@@ -441,7 +441,7 @@ async def serve(
 
             # Flush ring-buffer history to late joiners (live mode only).
             if trace_source is None:
-                await _flush_ring_buffer(ws, ring_buffer)
+                await flush_ring_buffer(ws, ring_buffer)
 
             # Receive loop handles ping, read_source, live-ingest, seek, query,
             # and session library requests.
@@ -467,7 +467,7 @@ async def serve(
                 seekable = file_session is not None
                 total = len(file_session.index) if file_session is not None else 0
                 replay_task: asyncio.Task[None] = asyncio.create_task(
-                    _replay_trace(
+                    replay_trace(
                         ws,
                         trace_source,
                         pace,

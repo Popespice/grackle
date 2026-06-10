@@ -2,18 +2,80 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from grackle.node_runtime.coverage_poll import (
+    CoverageDelta,
+    CoverageKey,
     OffsetLineMap,
     coverage_event,
-    diff_coverage,
     iter_coverage_deltas,
-    normalize_precise_coverage,
 )
 
 if TYPE_CHECKING:
-    from grackle.node_runtime.coverage_poll import CoverageEntry, CoverageKey
+    from collections.abc import Iterable, Mapping
+
+
+# ---------------------------------------------------------------------------
+# Reference decomposition (oracle for iter_coverage_deltas equivalence tests)
+# normalize_precise_coverage + diff_coverage were removed from the production
+# module (they are dead in production); they live here as the test oracle only.
+# ---------------------------------------------------------------------------
+
+
+class CoverageEntry(TypedDict):
+    url: str
+    function_name: str
+    start_offset: int
+    count: int
+
+
+def normalize_precise_coverage(
+    result: Iterable[Mapping[str, Any]],
+) -> dict[CoverageKey, CoverageEntry]:
+    from grackle.node_runtime.coverage_poll import _as_int
+
+    out: dict[CoverageKey, CoverageEntry] = {}
+    for script in result:
+        script_id = str(script.get("scriptId", ""))
+        url = str(script.get("url", ""))
+        for fn in script.get("functions") or []:
+            ranges = fn.get("ranges") or []
+            if not ranges:
+                continue
+            head = ranges[0]
+            if not isinstance(head, dict):
+                continue
+            start_offset = _as_int(head.get("startOffset"))
+            count = _as_int(head.get("count"))
+            out[(script_id, start_offset)] = {
+                "url": url,
+                "function_name": str(fn.get("functionName", "")),
+                "start_offset": start_offset,
+                "count": count,
+            }
+    return out
+
+
+def diff_coverage(
+    prev: Mapping[CoverageKey, CoverageEntry],
+    curr: Mapping[CoverageKey, CoverageEntry],
+) -> list[CoverageDelta]:
+    deltas: list[CoverageDelta] = []
+    for (script_id, start_offset), entry in curr.items():
+        before = prev.get((script_id, start_offset))
+        delta = entry["count"] - (before["count"] if before is not None else 0)
+        if delta > 0:
+            deltas.append(
+                {
+                    "script_id": script_id,
+                    "url": entry["url"],
+                    "function_name": entry["function_name"],
+                    "start_offset": start_offset,
+                    "delta": delta,
+                }
+            )
+    return deltas
 
 
 def test_offset_line_map_basic() -> None:

@@ -100,7 +100,13 @@ type PendingResolver<R> = (msg: R) => void;
  * `R` is the reply type stored in the resolver map; `T` is what the returned
  * promise resolves to (often a narrowing of `R`).
  */
-function pendingRequest<R, T = R>(
+function pendingRequest<R>(
+  get: () => GrackleClientState,
+  getPending: () => Map<string, PendingResolver<R>>,
+  envelope: WsEnvelope,
+  timeoutLabel: string
+): Promise<R>;
+function pendingRequest<R, T>(
   get: () => GrackleClientState,
   getPending: () => Map<string, PendingResolver<R>>,
   envelope: WsEnvelope,
@@ -109,9 +115,18 @@ function pendingRequest<R, T = R>(
     msg: R,
     resolve: (value: T) => void,
     reject: (reason: Error) => void
-  ) => void = (msg, resolve) => {
-    resolve(msg as unknown as T);
-  }
+  ) => void
+): Promise<T>;
+function pendingRequest<R, T = R>(
+  get: () => GrackleClientState,
+  getPending: () => Map<string, PendingResolver<R>>,
+  envelope: WsEnvelope,
+  timeoutLabel: string,
+  onReply?: (
+    msg: R,
+    resolve: (value: T) => void,
+    reject: (reason: Error) => void
+  ) => void
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const { _ws, status } = get();
@@ -129,7 +144,11 @@ function pendingRequest<R, T = R>(
 
     getPending().set(id, (msg: R) => {
       clearTimeout(timeoutId);
-      onReply(msg, resolve, reject);
+      if (onReply) {
+        onReply(msg, resolve, reject);
+      } else {
+        resolve(msg as unknown as T);
+      }
     });
 
     _ws.send(JSON.stringify(sendEnvelope));
@@ -345,7 +364,7 @@ export const useGrackleClient = create<GrackleClientState>()((set, get) => ({
       type: "trace_query_request",
       payload,
     };
-    return pendingRequest<TraceQueryResponse>(
+    return pendingRequest<TraceQueryResponse, TraceQueryResponse>(
       get,
       () => get()._pendingTraceQuery,
       envelope,

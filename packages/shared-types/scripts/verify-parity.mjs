@@ -82,7 +82,9 @@ function unionMessageTypes(src) {
     // interface Foo extends ... { ... type: "x"; ... }
     // or: type Foo = ... & { type: "x"; ... }
     const decl = src.match(
-      new RegExp(`(?:interface|type)\\s+${name}\\b[\\s\\S]*?type:\\s*"([^"]+)"`)
+      new RegExp(
+        `(?:interface|type)\\s+${name}\\b[\\s\\S]*?\\btype:\\s*"([^"]+)"`
+      )
     );
     if (!decl) {
       throw new Error(`AnyKnownMessage member ${name}: no type: literal found`);

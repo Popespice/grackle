@@ -12,7 +12,7 @@ Key invariants:
 - A producer disconnecting mid-stream does not crash ongoing fan-out.
 
 Phase 7.1 additions:
-- ``_trim_ring_buffer`` unit tests for the count-cap eviction path.
+- ``trim_ring_buffer`` unit tests for the count-cap eviction path.
 - Integration test: late joiner receives ≤ GRACKLE_TRACE_BUFFER_MAX_EVENTS
   messages when the env var is set.
 """
@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from websockets.asyncio.client import connect
 
-from grackle.python_runtime.live_buffer import _trace_buffer_max_events, _trim_ring_buffer
+from grackle.python_runtime.live_buffer import trace_buffer_max_events, trim_ring_buffer
 from grackle.server import serve
 
 if TYPE_CHECKING:
@@ -238,7 +238,7 @@ async def test_producer_disconnect_doesnt_crash_fanout(live_server: int) -> None
 
 
 # ---------------------------------------------------------------------------
-# Phase 7.1 — _trim_ring_buffer count-cap unit tests
+# Phase 7.1 — trim_ring_buffer count-cap unit tests
 # ---------------------------------------------------------------------------
 
 
@@ -256,36 +256,36 @@ def _make_ring(n: int, base_ts: int = _RING_BASE_NS) -> collections.deque[tuple[
     return collections.deque((base_ts + i, f"msg-{i}") for i in range(n))
 
 
-def test_trim_ring_buffer_count_cap_evicts_oldest() -> None:
+def testtrim_ring_buffer_count_cap_evicts_oldest() -> None:
     """When max_events is set, oldest entries are evicted until len <= max_events."""
     buf = _make_ring(10)
     # now_ns is just past the last entry; buffer_seconds=60 → cutoff is negative
     # (no age eviction), so only the count cap fires.
     now_ns = _RING_BASE_NS + 10 + 1
-    _trim_ring_buffer(buf, now_ns=now_ns, buffer_seconds=60.0, max_events=3)
+    trim_ring_buffer(buf, now_ns=now_ns, buffer_seconds=60.0, max_events=3)
     assert len(buf) == 3
     # The *newest* three are retained (oldest evicted).
     assert buf[-1][1] == "msg-9"
     assert buf[0][1] == "msg-7"
 
 
-def test_trim_ring_buffer_count_cap_none_is_unbounded() -> None:
+def testtrim_ring_buffer_count_cap_none_is_unbounded() -> None:
     """max_events=None leaves size unlimited (original behaviour)."""
     buf = _make_ring(20)
     now_ns = _RING_BASE_NS + 20 + 1
-    _trim_ring_buffer(buf, now_ns=now_ns, buffer_seconds=60.0, max_events=None)
+    trim_ring_buffer(buf, now_ns=now_ns, buffer_seconds=60.0, max_events=None)
     assert len(buf) == 20
 
 
-def test_trim_ring_buffer_count_cap_already_within_limit() -> None:
+def testtrim_ring_buffer_count_cap_already_within_limit() -> None:
     """No eviction when len <= max_events."""
     buf = _make_ring(5)
     now_ns = _RING_BASE_NS + 5 + 1
-    _trim_ring_buffer(buf, now_ns=now_ns, buffer_seconds=60.0, max_events=10)
+    trim_ring_buffer(buf, now_ns=now_ns, buffer_seconds=60.0, max_events=10)
     assert len(buf) == 5
 
 
-def test_trim_ring_buffer_age_and_count_interplay() -> None:
+def testtrim_ring_buffer_age_and_count_interplay() -> None:
     """Age trim runs first; count cap then applies to whatever remains."""
     # 10 entries; first 5 are old, last 5 are recent.
     now_ns = 2_000_000_000
@@ -296,57 +296,57 @@ def test_trim_ring_buffer_age_and_count_interplay() -> None:
     # buffer_seconds=1 means cutoff = now_ns - 1e9 = 1_000_000_000
     # The old entries all have ts < 1_000_000_000, so they're evicted by age.
     # max_events=3 then caps the 5 remaining new entries to the newest 3.
-    _trim_ring_buffer(buf, now_ns=now_ns, buffer_seconds=1.0, max_events=3)
+    trim_ring_buffer(buf, now_ns=now_ns, buffer_seconds=1.0, max_events=3)
     assert len(buf) == 3
     assert all(entry[1].startswith("new-") for entry in buf)
 
 
-def test_trim_ring_buffer_default_max_events_is_none() -> None:
-    """Calling _trim_ring_buffer without max_events behaves as before."""
+def testtrim_ring_buffer_default_max_events_is_none() -> None:
+    """Calling trim_ring_buffer without max_events behaves as before."""
     buf = _make_ring(100)
     now_ns = _RING_BASE_NS + 100 + 1
-    _trim_ring_buffer(buf, now_ns=now_ns, buffer_seconds=60.0)
+    trim_ring_buffer(buf, now_ns=now_ns, buffer_seconds=60.0)
     assert len(buf) == 100
 
 
 # ---------------------------------------------------------------------------
-# Phase 7.1 — _trace_buffer_max_events env-var helper
+# Phase 7.1 — trace_buffer_max_events env-var helper
 # ---------------------------------------------------------------------------
 
 
-def test_trace_buffer_max_events_default_is_none(monkeypatch: pytest.MonkeyPatch) -> None:
+def testtrace_buffer_max_events_default_is_none(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GRACKLE_TRACE_BUFFER_MAX_EVENTS", raising=False)
-    assert _trace_buffer_max_events() is None
+    assert trace_buffer_max_events() is None
 
 
-def test_trace_buffer_max_events_positive_integer() -> None:
+def testtrace_buffer_max_events_positive_integer() -> None:
     os.environ["GRACKLE_TRACE_BUFFER_MAX_EVENTS"] = "500"
     try:
-        assert _trace_buffer_max_events() == 500
+        assert trace_buffer_max_events() == 500
     finally:
         del os.environ["GRACKLE_TRACE_BUFFER_MAX_EVENTS"]
 
 
-def test_trace_buffer_max_events_zero_returns_none() -> None:
+def testtrace_buffer_max_events_zero_returns_none() -> None:
     os.environ["GRACKLE_TRACE_BUFFER_MAX_EVENTS"] = "0"
     try:
-        assert _trace_buffer_max_events() is None
+        assert trace_buffer_max_events() is None
     finally:
         del os.environ["GRACKLE_TRACE_BUFFER_MAX_EVENTS"]
 
 
-def test_trace_buffer_max_events_negative_returns_none() -> None:
+def testtrace_buffer_max_events_negative_returns_none() -> None:
     os.environ["GRACKLE_TRACE_BUFFER_MAX_EVENTS"] = "-5"
     try:
-        assert _trace_buffer_max_events() is None
+        assert trace_buffer_max_events() is None
     finally:
         del os.environ["GRACKLE_TRACE_BUFFER_MAX_EVENTS"]
 
 
-def test_trace_buffer_max_events_non_integer_returns_none() -> None:
+def testtrace_buffer_max_events_non_integer_returns_none() -> None:
     os.environ["GRACKLE_TRACE_BUFFER_MAX_EVENTS"] = "not-a-number"
     try:
-        assert _trace_buffer_max_events() is None
+        assert trace_buffer_max_events() is None
     finally:
         del os.environ["GRACKLE_TRACE_BUFFER_MAX_EVENTS"]
 

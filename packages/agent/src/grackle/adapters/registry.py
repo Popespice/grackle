@@ -88,7 +88,7 @@ class AdapterRegistry:
             items = list(self._runtime.items())
         index: dict[str, str] = {}
         for lang, adapter in items:
-            for ext in getattr(adapter, "extensions", ()):
+            for ext in adapter.extensions:
                 index[ext.lower()] = lang
         return index
 

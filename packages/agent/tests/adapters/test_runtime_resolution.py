@@ -39,21 +39,24 @@ def test_index_unique_first_writer_wins_then_marks_ambiguous() -> None:
     assert index[("a.py", 1)] is None
 
 
-def test_python_resolver_builds_name_index_but_resolves_by_line(tmp_path: Path) -> None:
-    """The shared base builds a (path, name) index for Python too — harmless, since
-    Python's resolve() keys on line only (a wrong line falls to the file node, NOT
-    the name match)."""
+def test_python_resolver_skips_name_index_resolves_by_line(tmp_path: Path) -> None:
+    """Python resolver has _build_name_index=False, so the name index is empty.
+
+    Python's resolve() keys on line only (a wrong line falls to the file node,
+    not a name match). The name index is built only by the Node resolver which
+    uses V8's functionName as a fallback.
+    """
     nodes: list[dict[str, object]] = [
         {"id": "a.py", "kind": "file", "name": "a.py", "path": "a.py"},
         {"id": "a.py:f", "kind": "function", "name": "f", "path": "a.py", "line": 3},
     ]
     resolver = PyNodeResolver(tmp_path, _graph(nodes))
-    # The name index IS built (the dedup base populates it for both languages)...
-    assert resolver._name_index[("a.py", "f")] == "a.py:f"
+    # The name index is NOT built for Python (cost avoided, never read).
+    assert resolver._name_index == {}
     co_filename = str(tmp_path / "a.py")
-    # ...but Python resolution is line-based: right line → the function node.
+    # Python resolution is line-based: right line → the function node.
     assert resolver.resolve(co_filename, 3, "f") == "a.py:f"
-    # A wrong line falls to the FILE node, proving the name index is unused here.
+    # A wrong line falls to the FILE node.
     assert resolver.resolve(co_filename, 99, "f") == "a.py"
     # Module frames go straight to the file node.
     assert resolver.resolve(co_filename, 1, "<module>") == "a.py"

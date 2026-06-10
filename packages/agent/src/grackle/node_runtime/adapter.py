@@ -73,14 +73,15 @@ class NodeRuntimeAdapter:
     """Runtime adapter that traces Node/V8 execution of TypeScript via CDP."""
 
     language: str = "typescript"
-    # Extensions claimed for the CLI's extension→language inference. .tsx/.jsx are
-    # included for INFERENCE (so they resolve to this adapter and get a clean
-    # "JSX unsupported" error) even though they are rejected at the gate below —
-    # type-stripping strips type annotations but cannot transform JSX.
-    extensions: tuple[str, ...] = (".ts", ".mts", ".cts", ".tsx", ".jsx")
+    # Extensions routable to this adapter. Only includes extensions that are
+    # actually runnable; .tsx/.jsx are rejected at the gate (JSX is not supported
+    # until Phase 9) so they are omitted here — advertising them as "known" leads
+    # users to expect they work.
+    extensions: tuple[str, ...] = (".ts", ".mts", ".cts")
 
     # JSX extensions: type-stripping strips type annotations but cannot transform
-    # JSX. Out of scope until Phase 9 — surfaced as a clean, specific message.
+    # JSX. Out of scope until Phase 9 — surfaced as a clean, specific message when
+    # the user passes --language typescript explicitly.
     _UNSUPPORTED_EXTENSIONS = (".tsx", ".jsx")
 
     def runtime_unavailable_reason(self, script: Path) -> str | None:

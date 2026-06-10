@@ -61,17 +61,17 @@ def test_extensionless_script_traces_as_python(tmp_path: Path) -> None:
 
 
 def test_tsx_extension_clean_error(tmp_path: Path) -> None:
-    """#6: .tsx routes to typescript but JSX is unsupported → clean, specific error.
+    """#6: .tsx is not in any adapter's extensions → "cannot infer" usage error.
 
-    Fires before the Node capability gate, so it is deterministic regardless of
-    whether a Node toolchain is installed.
+    .tsx/.jsx are excluded from the Node adapter's extensions tuple because they
+    are always rejected at the gate (JSX not supported until Phase 9). Users who
+    want the JSX-specific message can pass --language typescript explicitly.
     """
     script = _write(tmp_path, "app.tsx", "export const x = 1;\n")
     result = CliRunner().invoke(main, ["trace", str(script), "--root", str(tmp_path)])
     assert result.exit_code != 0
     assert "Traceback" not in result.output
-    assert "JSX" in result.output
-    assert "Phase 9" in result.output
+    assert "cannot infer" in result.output
 
 
 def test_explicit_language_python(tmp_path: Path) -> None:

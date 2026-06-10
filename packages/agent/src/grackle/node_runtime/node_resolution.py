@@ -52,6 +52,8 @@ __all__ = ["UNRESOLVED", "NodeResolver"]
 class NodeResolver(RuntimeResolver):
     """Pre-indexed lookup from a V8 callFrame to a TypeScript node ID."""
 
+    _build_name_index: bool = True
+
     def resolve_frame(
         self,
         url: str,

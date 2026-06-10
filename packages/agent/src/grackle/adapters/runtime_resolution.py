@@ -9,19 +9,20 @@ node ID:
   ``lineNumber`` + ``functionName``.
 
 They share the whole index build, cached normalisation, the ``NOT_PROJECT``
-sentinel, and the ``(path,line)`` / ``(path,name)`` / file / ``UNRESOLVED``
-resolution machinery. They differ ONLY in how a raw identifier (a ``co_filename``
-vs a ``file://`` URL) normalises to a POSIX-relative project path — the single
-abstract method :meth:`RuntimeResolver._normalize`.
+sentinel, and the ``(path,line)`` / file / ``UNRESOLVED`` resolution machinery.
+They differ in two ways:
 
-The ``(path, name)`` name index is built for both languages but only the Node
-subclass queries it (V8 reports a ``functionName``; CPython resolution keys on
-line only). Building it for Python is a harmless few-bytes-per-session cost and
-keeps the two resolvers a true mirror.
+1. How a raw identifier normalises to a POSIX-relative project path — the single
+   abstract method :meth:`RuntimeResolver._normalize`.
+2. Whether a ``(path, name)`` name index is built. Node sets ``_build_name_index
+   = True`` because V8 reports a ``functionName`` usable as a fallback; CPython
+   resolution keys on line only, so the index is skipped to avoid the per-session
+   allocation cost.
 """
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -38,13 +39,16 @@ NOT_PROJECT = ""
 UNRESOLVED = "<unresolved>"
 
 
-class RuntimeResolver:
+class RuntimeResolver(ABC):
     """Pre-indexed lookup from a source identifier to a static-graph node ID.
 
     Args:
         root: Project root; subclasses normalise raw identifiers against it.
         graph: Static graph produced by the language's static parser.
     """
+
+    # Subclasses that use name-based resolution (Node only) set this to True.
+    _build_name_index: bool = False
 
     def __init__(self, root: Path, graph: StaticGraph) -> None:
         self._root = root.resolve()
@@ -54,6 +58,7 @@ class RuntimeResolver:
         # posix_path -> node_id  for file nodes (fallback).
         self._file_index: dict[str, str] = {}
         # (posix_path, name) -> node_id, or None when ambiguous.
+        # Only populated when _build_name_index is True (Node resolver).
         self._name_index: dict[tuple[str, str], str | None] = {}
         # raw identifier (str) -> posix_path or NOT_PROJECT. Bounded by the number
         # of distinct identifiers touched during one trace session.
@@ -69,9 +74,10 @@ class RuntimeResolver:
                 line = node.get("line")
                 if line is not None:
                     self._index_unique(self._sym_index, (path, line), node_id)
-                name = node.get("name")
-                if name:
-                    self._index_unique(self._name_index, (path, name), node_id)
+                if self._build_name_index:
+                    name = node.get("name")
+                    if name:
+                        self._index_unique(self._name_index, (path, name), node_id)
 
     @staticmethod
     def _index_unique[K](index: dict[K, str | None], key: K, node_id: str) -> None:
@@ -90,6 +96,7 @@ class RuntimeResolver:
     # Normalisation (the one subclass difference)
     # ------------------------------------------------------------------
 
+    @abstractmethod
     def _normalize(self, identifier: str) -> str | None:
         """Normalise a raw source identifier to a POSIX-relative path, or None.
 
@@ -97,7 +104,6 @@ class RuntimeResolver:
         the Node resolver parses a ``file://`` URL. ``None`` means "not a project
         file" (sentinel string, outside the root, unreadable scheme, etc.).
         """
-        raise NotImplementedError
 
     def _cached_normalize(self, identifier: str) -> str:
         cached = self._norm_cache.get(identifier)

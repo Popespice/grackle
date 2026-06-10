@@ -1,8 +1,8 @@
 """File-replay + stored-session machinery for the grackle WS server.
 
 Owns the value object pairing a JsonlIndex with TraceAggregates
-(:class:`_SeekableSession`), the windowed/streamed replay of a trace file to one
-connection (:func:`_replay_trace`), loading a stored session as a fresh seekable
+(:class:`SeekableSession`), the windowed/streamed replay of a trace file to one
+connection (:func:`replay_trace`), loading a stored session as a fresh seekable
 session (:func:`_load_stored_session`), and indexing a ``--trace-source`` file
 into the SessionStore (:func:`_register_trace_source`).  The server dispatch
 loop and connection handler orchestrate these; they do not contain the replay
@@ -39,7 +39,7 @@ log = structlog.get_logger()
 _MAX_GAP_S = 0.25
 
 
-class _SeekableSession:
+class SeekableSession:
     """A trace session the server can seek into and aggregate over.
 
     Pairs a :class:`JsonlIndex` (random-access windows) with a
@@ -54,7 +54,7 @@ class _SeekableSession:
         self.aggregates = aggregates
 
 
-async def _replay_trace(
+async def replay_trace(
     ws: ServerConnection,
     trace_source: Path,
     pace: bool,
@@ -126,15 +126,15 @@ async def _replay_trace(
         return
 
 
-async def _load_stored_session(
+async def load_stored_session(
     ws: ServerConnection,
     path: Path,
     session_id: str,
-    seekable_sessions: dict[str, _SeekableSession],
+    seekable_sessions: dict[str, SeekableSession],
 ) -> None:
     """Replay a stored session as a seekable session to one connection.
 
-    Builds (and registers) a :class:`_SeekableSession` so the loaded session
+    Builds (and registers) a :class:`SeekableSession` so the loaded session
     gains full seek **and** aggregate-query support — identical to a
     ``--trace-source`` replay.  The build is cached in ``seekable_sessions`` so
     re-loading the same session reuses the index/aggregates.
@@ -151,11 +151,11 @@ async def _load_stored_session(
         except Exception as exc:
             log.warning("session load: build failed", path=str(path), error=str(exc))
             return
-        seekable_sessions[session_id] = _SeekableSession(index=idx, aggregates=agg)
-    await _replay_trace(ws, path, False, session_id, seekable=True, total_events=len(idx))
+        seekable_sessions[session_id] = SeekableSession(index=idx, aggregates=agg)
+    await replay_trace(ws, path, False, session_id, seekable=True, total_events=len(idx))
 
 
-def _register_trace_source(
+def register_trace_source(
     store: SessionStore,
     trace_source: Path,
     index: JsonlIndex,

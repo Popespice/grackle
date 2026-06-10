@@ -216,7 +216,8 @@ async def run_coverage(
 
         # Fixed monotonic cadence: schedule each wake off the previous target, not
         # off "now", so poll() cost is absorbed into the interval rather than stacked
-        # on top of it. A slow poll just clamps the next wait to 0 and catches up.
+        # on top of it. If a poll takes longer than the interval, restart from now
+        # rather than accumulating back-to-back zero-wait iterations.
         start = time.monotonic()
         deadline = start + _RUN_TIMEOUT_S
         next_at = start + _POLL_INTERVAL_S
@@ -227,6 +228,9 @@ async def run_coverage(
             if outcome in ("done", "exited") or time.monotonic() >= deadline:
                 break
             next_at += _POLL_INTERVAL_S
+            now = time.monotonic()
+            if next_at < now:
+                next_at = now + _POLL_INTERVAL_S
         with contextlib.suppress(CDPError):
             await cdp.send("Profiler.stopPreciseCoverage", timeout=_CDP_CMD_TIMEOUT_S)
 

@@ -61,7 +61,12 @@ def _resolve_runtime_adapter(script: Path, language: str | None) -> RuntimeAdapt
         raise click.UsageError(f"no runtime adapter registered for language {lang!r}")
 
     # The adapter owns its gate (toolchain availability + unsupported inputs).
+    # Also check capabilities().runtime_tracing as an independent signal: a future
+    # adapter could correctly set that to False while returning None from
+    # runtime_unavailable_reason, and we must not proceed in that case.
     reason = adapter.runtime_unavailable_reason(script)
+    if reason is None and not adapter.capabilities().runtime_tracing:
+        reason = f"runtime tracing is not available for language {lang!r}"
     if reason is not None:
         raise click.ClickException(reason)
     return adapter
