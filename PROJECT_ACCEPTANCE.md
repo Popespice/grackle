@@ -1,7 +1,7 @@
 # Project-wide Acceptance Criteria
 
-> Last updated during the Phase 7.H close.
-> Three grids: whole-product definition-of-done + Phase 6 + Phase 7 acceptance.
+> Last updated during the Phase 8.H close.
+> Four grids: whole-product definition-of-done + Phase 6 + Phase 7 + Phase 8 acceptance.
 > Each item is marked **automated** (CI / per-chunk gate / bench) or **manual** (recorded in the phase `*_SUMMARY.md`).
 
 ---
@@ -15,11 +15,11 @@
 | 3 | **Polyglot static.** Python, TypeScript, Go, Rust adapters each emit a graph; `parse_all` merges them; HTTP-route + subprocess cross-language edges resolve on `tiny-polyglot`. | automated (`pytest`, `check-parity`) |
 | 4 | **Local-first invariant.** Server binds only to `127.0.0.1` (warns otherwise); zero network egress, no telemetry, no cloud dependency; works fully offline. | automated (`test_server.py` bind assertion) + manual |
 | 5 | **Cross-platform.** Identical node IDs and graphs on macOS / Linux / Windows (POSIX path discipline); CI matrix green on all three. | automated (CI matrix) |
-| 6 | **Runtime overlay.** `sys.monitoring` tracer (Python 3.12+) tags events to static node IDs; pre-3.12 degrades to static-only with a clear capability message — never a crash. | automated (`test_adapter.py`, capability test) |
+| 6 | **Runtime overlay.** Two runtime adapters tag events to static node IDs on the shared `TraceEvent` schema: `sys.monitoring` (Python 3.12+) and the V8 Inspector (TypeScript/Node ≥ 22.6, ADR-0022). A missing/old toolchain degrades to static-only with a clear capability message — never a crash. | automated (`test_adapter.py`, capability test, Node-gated e2e) |
 | 7 | **Performance.** Tracer overhead ≤10% on a 5s workload (including with the real-time `--stream` sink active); UI stays interactive during a real-time stream and a 50k-event replay (batched rAF ingest avoids quadratic accumulation). | bench (manual timing) + automated |
 | 8 | **Determinism.** `grackle parse` and `grackle trace` (with `PYTHONHASHSEED=0`) are reproducible; golden fixtures stable across runs. | automated (golden fixture tests) |
 | 9 | **Quality gates.** `pytest` + `mypy --strict` + `tsc` + `biome` + frontend tests + `check-parity` all green on the CI matrix; no skipped or disabled guards. | automated (CI + pre-push hooks) |
-| 10 | **Documented architecture.** Every cross-cutting decision has an accepted ADR (17 total); each phase has a `*_SUMMARY.md` card; `CLAUDE.md` current. | manual |
+| 10 | **Documented architecture.** Every cross-cutting decision has an accepted ADR (22 total); each phase has a `*_SUMMARY.md` card; `CLAUDE.md` current. | manual |
 | 11 | **Stable contracts.** JSON Schema is the single source of truth; generated TS/Py match (`check-parity`); message `type`, node/edge `kind`, trace `event` are open strings — unknown values ignored, never errors (ADR-0004). | automated (`check-parity`) |
 | 12 | **Robustness.** Malformed input (bad source, missing/garbled trace, non-3.12 interpreter, script outside `--root`, oversized source) yields a clear error or graceful skip — never a crash or hang. | automated (server + CLI error tests) |
 
@@ -57,6 +57,28 @@
 | 10 | **Schema parity.** The 3 new message types pass `check-parity`; all `type` values stay open strings (ADR-0004). | **7.3 ✓** automated |
 | 11 | **Cross-OS.** Real-time streaming (thread + asyncio + websockets) works on Python 3.12+ macOS + Windows; capability-gated otherwise. | **7.2 / CI ✓** automated |
 | 12 | **Ship.** ADR-0016 + 0017 accepted; `PHASE_7_SUMMARY.md`; `PROJECT_ACCEPTANCE.md` updated (17 ADRs, Phase 7 grid); `CLAUDE.md`; version 0.7.0; tag `v0.7.0-phase-7`. | **7.H ✓** |
+
+---
+
+## D. Phase 8 (analysis platform) acceptance grid
+
+| # | Criterion | Status |
+|---|---|---|
+| 1 | **Tee sink.** `grackle trace --stream --connect URL --output FILE` writes a lossless JSONL file **and** streams live; `file_count >= streamed_count`; on cap, the prefix is written before re-raise. | **✓** automated |
+| 2 | **Call-tree.** `buildCallTree` reconstructs `call`/`return` with depth-driven implicit-close recovery; `aggregateCallTree` is per-thread; `hotPath` returns the heaviest chain. | **8.2 ✓** automated |
+| 3 | **Flame graph.** `FlameGraphPanel` renders the call tree on canvas with click-to-focus; pure `layoutFlame`/`hitTest`/`maxDepth` are jsdom-tested; speedscope + Chrome-trace export round-trip on import. | **8.2 ✓** automated + manual |
+| 4 | **Aggregation engine.** `TraceAggregates` builds per-node sorted hits in one scan; `cumulative_heat` / `coverage_count` / `top_k` are `bisect`-based; `build_seekable` builds index + aggregates in a single pass. | **8.3 ✓** automated |
+| 5 | **Session store.** `serve --store PATH` persists session metadata (sqlite WAL, lock-guarded); `--trace-source` is indexed at startup with a stable id and survives restart. | **8.3 ✓** automated |
+| 6 | **Query / list / load over the wire.** `trace_query_request` → `trace_query_response`, `session_list_request` → `session_list_response`, `session_load_request`; loaded sessions are queryable. `KNOWN_MESSAGE_TYPES` 12 → 17, all open strings. | **8.3 ✓** automated |
+| 7 | **Differential analysis.** `diff.py` computes trace-vs-static (dead/cold) and trace-vs-trace (new/gone/hotter/colder); `grackle diff A B` prints text/JSON, honours `--only`, and **exits 1 on regression**. | **8.4 ✓** automated |
+| 8 | **Diff UI is non-destructive.** `DiffPanel` summary always shows; the graph overlay is opt-in (default off) and never suppresses the heat-map; a stale baseline is cleared on graph swap. | **8.4 ✓** automated |
+| 9 | **Polyglot runtime.** `grackle trace app.ts -o t.jsonl` drives Node over the V8 Inspector on `127.0.0.1`, resolves frames to TS static-graph node IDs, and emits the same `TraceEvent` schema; replay / heat / flame / `grackle diff` work on the file. | **8.5 ✓** automated (Node-gated e2e) |
+| 10 | **Two-channel fidelity.** Sampling channel (`trace()`) gives faithful `call`/`return` + `frame_depth` + `ts_ns`; coverage channel (`trace_streaming()`) gives coarse live counts (`metadata.count`). Asymmetry documented in ADR-0022 + `--help`. | **8.5 ✓** automated + design |
+| 11 | **Capability gate.** Node adapter registers unconditionally (visible in `grackle languages`); absent/old Node → clean remediation, never a traceback; `.tsx`/`.jsx` → clear "Phase 9" error; `.pyw`/extension-less → Python. | **8.5 ✓** automated |
+| 12 | **No wire change for 8.5/8.6.** `KNOWN_MESSAGE_TYPES` unchanged after 8.3; `check-parity` a no-op for 8.5 and 8.6; the A1 parity guard asserts schema ≡ `messages.ts` ≡ builders. | **8.5 / 8.6 ✓** automated |
+| 13 | **Tech-debt sweep is behavior-preserving.** `server.py` decomposed into `live_buffer.py` + `file_replay.py`; shared `RuntimeResolver` base; `new_trace_event`/`enforce_event_cap` factories; full gate green with no behavior change. | **8.6 ✓** automated |
+| 14 | **Cross-OS.** All of the above green on the Ubuntu + Windows CI matrix; Node e2e run on the Node-22 job; capability-gated otherwise. | **CI ✓** automated |
+| 15 | **Ship.** ADRs 0018–0022 accepted; `PHASE_8_SUMMARY.md`; `PROJECT_ACCEPTANCE.md` §D grid (22 ADRs); `CLAUDE.md` (Phase 8 shipped, Phase 9 planned); version 0.8.0; tag `v0.8.0-phase-8`. | **8.H ✓** |
 
 ---
 
