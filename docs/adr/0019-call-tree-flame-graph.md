@@ -1,6 +1,6 @@
 # ADR-0019 — Call-tree reconstruction & flame graph (Phase 8.2)
 
-**Status:** accepted  
+**Status:** Accepted  
 **Date:** 2026-05-28  
 **Deciders:** Connor Allen
 
