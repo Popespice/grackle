@@ -54,12 +54,36 @@ from __future__ import annotations
 
 import bisect
 import json
-from typing import TYPE_CHECKING
+import math
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from grackle.python_runtime.jsonl_index import JsonlIndex
+
+
+def _event_weight(event: dict[str, Any]) -> int:
+    """Return the count-weight of a parsed trace event (``metadata.count``, default 1).
+
+    Fully defensive: the loader tolerates any successfully-parsed JSON object,
+    so this never raises on a malformed event. ``metadata`` that is absent or
+    not a dict, a ``count`` that is absent/non-numeric/non-finite/bool, or a
+    value < 1, all collapse to the default weight of 1. Finite numeric counts
+    are truncated to ``int`` and floored at 1 (counts are >= 1 invocations).
+    """
+    metadata = event.get("metadata")
+    if not isinstance(metadata, dict):
+        return 1
+    raw = metadata.get("count", 1)
+    # bool is an int subclass — reject it as non-numeric rather than weight True->1.
+    if isinstance(raw, bool):
+        return 1
+    if isinstance(raw, int):
+        return max(1, raw)
+    if isinstance(raw, float) and math.isfinite(raw):
+        return max(1, int(raw))
+    return 1
 
 
 class TraceAggregates:
@@ -133,10 +157,7 @@ class TraceAggregates:
 
                         # Record in hit index (sparse or full)
                         if sparse_k == 1 or index % sparse_k == 0:
-                            raw_count = event.get("metadata", {}).get("count", 1)
-                            count = (
-                                max(1, int(raw_count)) if isinstance(raw_count, (int, float)) else 1
-                            )
+                            count = _event_weight(event)
                             node_hits = hits.setdefault(node_id, [])
                             node_hits.append(index)
                             wp = weight_prefix.setdefault(node_id, [])
@@ -288,8 +309,7 @@ def build_seekable(path: Path, *, sparse_k: int = 1) -> tuple[JsonlIndex, TraceA
                     if node_id not in first_seen:
                         first_seen[node_id] = index
                     if sparse_k == 1 or index % sparse_k == 0:
-                        raw_count = event.get("metadata", {}).get("count", 1)
-                        count = max(1, int(raw_count)) if isinstance(raw_count, (int, float)) else 1
+                        count = _event_weight(event)
                         hits.setdefault(node_id, []).append(index)
                         wp = weight_prefix.setdefault(node_id, [])
                         wp.append((wp[-1] if wp else 0) + count)

@@ -135,6 +135,85 @@ def test_unweighted_path_identical(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Defensive parsing — malformed metadata/count must never abort the scan
+# ---------------------------------------------------------------------------
+
+
+def test_metadata_null_tolerated(tmp_path: Path) -> None:
+    """A present-but-null metadata must not crash the scan (regression: AttributeError)."""
+    p = tmp_path / "t.jsonl"
+    # Hand-author the line so metadata is literally null (the dict default in
+    # event.get('metadata', {}) does NOT apply when the key is present).
+    p.write_text(
+        '{"event":"call","node_id":"n","ts_ns":1,"thread_id":1,"frame_depth":0,"metadata":null}\n'
+    )
+    agg = TraceAggregates.build(p)
+    assert agg.cumulative_heat("n", 999) == 1
+    _, agg2 = build_seekable(p)
+    assert agg2.cumulative_heat("n", 999) == 1
+
+
+def test_metadata_non_dict_tolerated(tmp_path: Path) -> None:
+    p = tmp_path / "t.jsonl"
+    p.write_text(
+        '{"event":"call","node_id":"n","ts_ns":1,"thread_id":1,"frame_depth":0,"metadata":[1,2]}\n'
+    )
+    agg = TraceAggregates.build(p)
+    assert agg.cumulative_heat("n", 999) == 1
+
+
+def test_count_nan_infinity_tolerated(tmp_path: Path) -> None:
+    """json.loads accepts NaN/Infinity; int() on them would crash without the guard."""
+    p = tmp_path / "t.jsonl"
+    p.write_text(
+        '{"event":"call","node_id":"a","ts_ns":1,"thread_id":1,"frame_depth":0,"metadata":{"count":NaN}}\n'
+        '{"event":"call","node_id":"b","ts_ns":2,"thread_id":1,"frame_depth":0,"metadata":{"count":Infinity}}\n'
+    )
+    agg = TraceAggregates.build(p)
+    assert agg.cumulative_heat("a", 999) == 1
+    assert agg.cumulative_heat("b", 999) == 1
+
+
+def test_count_bool_tolerated(tmp_path: Path) -> None:
+    """bool is an int subclass; count:true must weight as 1, not be treated as numeric."""
+    p = tmp_path / "t.jsonl"
+    _write_trace(
+        p,
+        [
+            {
+                "event": "call",
+                "node_id": "n",
+                "ts_ns": 1,
+                "thread_id": 1,
+                "frame_depth": 0,
+                "metadata": {"count": True},
+            },
+        ],
+    )
+    agg = TraceAggregates.build(p)
+    assert agg.cumulative_heat("n", 999) == 1
+
+
+def test_count_float_truncated(tmp_path: Path) -> None:
+    p = tmp_path / "t.jsonl"
+    _write_trace(
+        p,
+        [
+            {
+                "event": "call",
+                "node_id": "n",
+                "ts_ns": 1,
+                "thread_id": 1,
+                "frame_depth": 0,
+                "metadata": {"count": 2.9},
+            },
+        ],
+    )
+    agg = TraceAggregates.build(p)
+    assert agg.cumulative_heat("n", 999) == 2
+
+
+# ---------------------------------------------------------------------------
 # build_seekable uses the same weighting
 # ---------------------------------------------------------------------------
 

@@ -51,6 +51,11 @@ class RuntimeResolver(ABC):
 
     # Subclasses that use name-based resolution (Node only) set this to True.
     _build_name_index: bool = False
+    # Subclasses that resolve statement lines to the enclosing declaration (Go,
+    # whose covdata reports body lines not func-keyword lines) set this to True.
+    # Gated like _build_name_index so Python/Node sessions don't pay the per-file
+    # sort + allocation for an index they never query.
+    _build_decl_index: bool = False
 
     def __init__(self, root: Path, graph: StaticGraph) -> None:
         self._root = root.resolve()
@@ -65,11 +70,9 @@ class RuntimeResolver(ABC):
         # raw identifier (str) -> posix_path or NOT_PROJECT. Bounded by the number
         # of distinct identifiers touched during one trace session.
         self._norm_cache: dict[str, str] = {}
-        # Per-file sorted declaration-line index.
-        # posix -> [(decl_line, node_id)] sorted by decl_line.
-        # Used by _resolve_by_decl_line for runtimes that report statement lines
-        # rather than func-keyword lines (Go covdata).
-        _decl_unsorted: dict[str, list[tuple[int, str]]] = {}
+        # posix -> [(decl_line, node_id)] sorted by decl_line. Only populated when
+        # _build_decl_index is True (Go resolver). Queried via _resolve_by_decl_line.
+        self._decl_lines: dict[str, list[tuple[int, str]]] = {}
 
         for node in graph["nodes"]:
             node_id: str = node["id"]
@@ -81,19 +84,16 @@ class RuntimeResolver(ABC):
                 line = node.get("line")
                 if line is not None:
                     self._index_unique(self._sym_index, (path, line), node_id)
-                    _decl_unsorted.setdefault(path, []).append((line, node_id))
+                    if self._build_decl_index:
+                        self._decl_lines.setdefault(path, []).append((line, node_id))
                 if self._build_name_index:
                     name = node.get("name")
                     if name:
                         self._index_unique(self._name_index, (path, name), node_id)
 
-        # Finalise: sort each per-file list and build parallel key array.
-        self._decl_lines: dict[str, list[tuple[int, str]]] = {}
-        self._decl_keys: dict[str, list[int]] = {}
-        for posix, pairs in _decl_unsorted.items():
+        # Finalise: sort each per-file decl list by line for bisect.
+        for pairs in self._decl_lines.values():
             pairs.sort()
-            self._decl_lines[posix] = pairs
-            self._decl_keys[posix] = [p[0] for p in pairs]
 
     @staticmethod
     def _index_unique[K](index: dict[K, str | None], key: K, node_id: str) -> None:
@@ -144,13 +144,13 @@ class RuntimeResolver(ABC):
         than the func-keyword declaration line (Go covdata). Bisects the sorted
         per-file declaration index to find the enclosing function/method.
         """
-        keys = self._decl_keys.get(posix)
-        if not keys:
+        pairs = self._decl_lines.get(posix)
+        if not pairs:
             return None
-        idx = bisect.bisect_right(keys, line) - 1
+        idx = bisect.bisect_right(pairs, line, key=lambda p: p[0]) - 1
         if idx < 0:
             return None
-        return self._decl_lines[posix][idx][1]
+        return pairs[idx][1]
 
     def _resolve_by_name(self, posix: str, name: str | None) -> str | None:
         """Resolve a (file, function-name) pair to a node ID, or None.

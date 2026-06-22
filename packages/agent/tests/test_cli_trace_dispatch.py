@@ -106,6 +106,34 @@ def test_go_gate_closed_clean_error(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert "Go" in result.output
 
 
+def test_go_runtime_error_surfaced_clean(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A GoRuntimeError from trace() reaches the user as its own message, not 'trace error:'.
+
+    The gate is forced open and the adapter's trace() is patched to raise, so this
+    exercises the dedicated `except GoRuntimeError` branch without a Go toolchain.
+    """
+    from grackle.go_runtime import capability
+    from grackle.go_runtime.adapter import GoRuntimeAdapter
+    from grackle.go_runtime.errors import GoRuntimeError
+
+    monkeypatch.setattr(capability, "go_runtime_available", lambda: True)
+
+    def _boom(self: GoRuntimeAdapter, *a: object, **k: object) -> object:
+        raise GoRuntimeError("go build failed:\nboom.go:1: undefined: x")
+
+    monkeypatch.setattr(GoRuntimeAdapter, "trace", _boom)
+
+    script = _write(tmp_path, "main.go", "package main\n")
+    result = CliRunner().invoke(
+        main, ["trace", str(script), "--root", str(tmp_path), "--language", "go"]
+    )
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+    assert "go build failed" in result.output
+    # The dedicated branch preserves the typed message — no generic prefix.
+    assert "trace error:" not in result.output
+
+
 def test_typescript_gate_closed_clean_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

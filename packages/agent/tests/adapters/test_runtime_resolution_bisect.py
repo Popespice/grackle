@@ -15,6 +15,8 @@ if TYPE_CHECKING:
 class _DummyResolver(RuntimeResolver):
     """Minimal concrete subclass — _normalize returns None for everything."""
 
+    _build_decl_index = True
+
     def _normalize(self, identifier: str) -> str | None:
         return None
 

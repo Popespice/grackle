@@ -42,6 +42,7 @@ class GoResolver(RuntimeResolver):
     """Pre-indexed lookup from a covdata (import_path, line) pair to a node ID."""
 
     _build_name_index: bool = False
+    _build_decl_index: bool = True
 
     def __init__(self, root: Path, graph: StaticGraph) -> None:
         super().__init__(root, graph)

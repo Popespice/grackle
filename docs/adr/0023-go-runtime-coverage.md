@@ -50,6 +50,14 @@ user's project tree. The build target is the enclosing package directory of the 
 builds packages, not individual files). `-coverpkg=./...` instruments all packages in the
 module regardless of import reachability, so cross-package coverage is deterministic.
 
+The subprocesses run with `GOWORK=off` (the single-`go.mod` assumption — an inherited
+`go.work` workspace would re-scope `./...` and shift the import-path prefix, silently dropping
+every block at resolution), with stdin closed (a stdin-reading program fails fast instead of
+hanging to the timeout), and with stdout/stderr captured (a chatty traced program never
+pollutes grackle's own stdout). Spawn failures and timeouts from any of the three steps are
+wrapped in a typed `GoRuntimeError`, so the CLI degrades with a clear message and never a
+traceback.
+
 A non-zero program exit is **not fatal**: coverage counters are flushed on normal return and
 `os.Exit`. They are lost only on panic or SIGKILL (documented limitation). Failure is detected
 by the absence of `covmeta*`/`covcounters*` files after the run.
