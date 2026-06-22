@@ -100,7 +100,7 @@ def test_cli_trace_produces_jsonl(tmp_path: Path) -> None:
     runner = CliRunner()
     result = runner.invoke(
         main,
-        ["trace", str(_SCRIPT), "--language", "go", "-o", str(out)],
+        ["trace", str(_SCRIPT), "--root", str(_FIXTURE), "--language", "go", "-o", str(out)],
         catch_exceptions=False,
     )
     assert result.exit_code == 0, result.output
