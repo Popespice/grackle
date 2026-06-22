@@ -16,6 +16,10 @@ Two diff modes (both pure — no I/O, no side effects):
    - ``"colder"`` — fewer hits in B than A
    - ``"same"``   — equal hits in both (including both zero)
 
+Hit counts are ``metadata.count``-weighted (default 1 per event). Go coverage
+traces carry exact per-function call counts in ``metadata.count``, so diff
+results reflect true call frequency for all supported languages.
+
 Callers control the file-scan lifecycle by building
 :class:`~grackle.python_runtime.aggregates.TraceAggregates` objects beforehand via
 :func:`~grackle.python_runtime.aggregates.build_seekable` or

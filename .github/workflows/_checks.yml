@@ -32,6 +32,14 @@ jobs:
           node-version: "22"
           cache: pnpm
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          # The Go runtime adapter only builds the dependency-free tiny-go-app
+          # fixture (no go.sum), so there is nothing to cache; disabling the
+          # module cache avoids a misleading "go.sum not found" warning.
+          cache: false
+
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true

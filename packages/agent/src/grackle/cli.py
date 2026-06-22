@@ -261,6 +261,7 @@ def trace(
     import json as _json
 
     from grackle.adapters.base import TraceCapExceeded, TraceOptions
+    from grackle.go_runtime.errors import GoRuntimeError
     from grackle.node_runtime.errors import NodeRuntimeError
     from grackle.python_runtime.writer import write_jsonl
 
@@ -327,7 +328,7 @@ def trace(
             # Store cap error — write the file first (captured prefix is valid),
             # then re-raise below so the user gets both the file and the error.
             _cap_exc = click.ClickException(str(exc))
-        except NodeRuntimeError as exc:
+        except (NodeRuntimeError, GoRuntimeError) as exc:
             raise click.ClickException(str(exc)) from exc
         except Exception as exc:
             raise click.ClickException(f"trace error: {exc}") from exc
@@ -361,7 +362,7 @@ def trace(
         events = list(adapter.trace(script, root, options))
     except TraceCapExceeded as exc:
         raise click.ClickException(str(exc)) from exc
-    except NodeRuntimeError as exc:
+    except (NodeRuntimeError, GoRuntimeError) as exc:
         raise click.ClickException(str(exc)) from exc
     except Exception as exc:
         # Belt-and-suspenders: no adapter failure should reach the user as a
