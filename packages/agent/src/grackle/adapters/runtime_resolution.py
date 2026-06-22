@@ -7,6 +7,7 @@ node ID:
   ``co_filename`` + ``co_firstlineno``;
 * ``node_runtime.node_resolution.NodeResolver`` — a V8 callFrame's ``url`` +
   ``lineNumber`` + ``functionName``.
+* ``go_runtime.resolution.GoResolver`` — a covdata import-path + statement line.
 
 They share the whole index build, cached normalisation, the ``NOT_PROJECT``
 sentinel, and the ``(path,line)`` / file / ``UNRESOLVED`` resolution machinery.
@@ -22,6 +23,7 @@ They differ in two ways:
 
 from __future__ import annotations
 
+import bisect
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
@@ -63,6 +65,11 @@ class RuntimeResolver(ABC):
         # raw identifier (str) -> posix_path or NOT_PROJECT. Bounded by the number
         # of distinct identifiers touched during one trace session.
         self._norm_cache: dict[str, str] = {}
+        # Per-file sorted declaration-line index.
+        # posix -> [(decl_line, node_id)] sorted by decl_line.
+        # Used by _resolve_by_decl_line for runtimes that report statement lines
+        # rather than func-keyword lines (Go covdata).
+        _decl_unsorted: dict[str, list[tuple[int, str]]] = {}
 
         for node in graph["nodes"]:
             node_id: str = node["id"]
@@ -74,10 +81,19 @@ class RuntimeResolver(ABC):
                 line = node.get("line")
                 if line is not None:
                     self._index_unique(self._sym_index, (path, line), node_id)
+                    _decl_unsorted.setdefault(path, []).append((line, node_id))
                 if self._build_name_index:
                     name = node.get("name")
                     if name:
                         self._index_unique(self._name_index, (path, name), node_id)
+
+        # Finalise: sort each per-file list and build parallel key array.
+        self._decl_lines: dict[str, list[tuple[int, str]]] = {}
+        self._decl_keys: dict[str, list[int]] = {}
+        for posix, pairs in _decl_unsorted.items():
+            pairs.sort()
+            self._decl_lines[posix] = pairs
+            self._decl_keys[posix] = [p[0] for p in pairs]
 
     @staticmethod
     def _index_unique[K](index: dict[K, str | None], key: K, node_id: str) -> None:
@@ -120,6 +136,21 @@ class RuntimeResolver(ABC):
 
     def _is_project(self, identifier: str) -> bool:
         return self._cached_normalize(identifier) != NOT_PROJECT
+
+    def _resolve_by_decl_line(self, posix: str, line: int) -> str | None:
+        """Return the node whose declaration line is the greatest <= *line*, or None.
+
+        Used by runtimes that report statement lines inside a function body rather
+        than the func-keyword declaration line (Go covdata). Bisects the sorted
+        per-file declaration index to find the enclosing function/method.
+        """
+        keys = self._decl_keys.get(posix)
+        if not keys:
+            return None
+        idx = bisect.bisect_right(keys, line) - 1
+        if idx < 0:
+            return None
+        return self._decl_lines[posix][idx][1]
 
     def _resolve_by_name(self, posix: str, name: str | None) -> str | None:
         """Resolve a (file, function-name) pair to a node ID, or None.

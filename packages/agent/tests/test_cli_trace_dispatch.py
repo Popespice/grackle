@@ -90,13 +90,20 @@ def test_unknown_extension_errors(tmp_path: Path) -> None:
     assert "--language" in result.output
 
 
-def test_unsupported_language_errors(tmp_path: Path) -> None:
+def test_go_gate_closed_clean_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """When Go is unavailable, .go tracing fails with a clean, Go-mentioning error."""
+    from grackle.go_runtime import capability
+
+    monkeypatch.setattr(capability, "go_executable", lambda: None)
+    monkeypatch.setattr(capability, "go_version", lambda: None)
+
     script = _write(tmp_path, "main.go", "package main\n")
     result = CliRunner().invoke(
         main, ["trace", str(script), "--root", str(tmp_path), "--language", "go"]
     )
     assert result.exit_code != 0
-    assert "no runtime adapter" in result.output.lower()
+    assert "Traceback" not in result.output
+    assert "Go" in result.output
 
 
 def test_typescript_gate_closed_clean_error(

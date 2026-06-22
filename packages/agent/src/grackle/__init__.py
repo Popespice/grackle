@@ -1,6 +1,7 @@
 from importlib.metadata import PackageNotFoundError, version
 
 import grackle.go_parser  # noqa: F401  — triggers GoStaticParser registration
+import grackle.go_runtime  # noqa: F401  — triggers GoRuntimeAdapter registration
 import grackle.node_runtime  # noqa: F401  — triggers NodeRuntimeAdapter registration
 import grackle.python_parser  # noqa: F401  — triggers PythonStaticParser registration
 import grackle.python_runtime  # noqa: F401  — triggers PythonRuntimeAdapter registration

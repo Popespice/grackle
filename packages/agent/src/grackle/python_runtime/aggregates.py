@@ -17,6 +17,20 @@ in-memory indexes:
    queries in O(log N): ``bisect_right(sorted_first, at_index)`` counts distinct
    nodes whose first event precedes ``at_index``.
 
+Count-weighting
+---------------
+Events may carry ``metadata.count`` (an integer ≥ 1) indicating that a single
+event represents multiple logical invocations — Go coverage events use this to
+encode exact per-function call counts in one compact event.  A parallel
+``_weight_prefix`` array stores the cumulative weight alongside ``_hits``:
+``weight_prefix[i]`` is the sum of ``count`` values for hits 0..i inclusive.
+``cumulative_heat`` returns ``weight_prefix[pos - 1]`` instead of ``pos``.
+
+For events without ``metadata.count`` (Python/Node sampling), the default
+weight is 1, so ``weight_prefix == [1, 2, 3, …]`` and ``cumulative_heat``
+returns the same value as before — behaviour is **byte-identical** for all
+existing trace files.
+
 Sparse mode
 -----------
 When ``sparse_k > 1``, only event indices that are exact multiples of
@@ -25,7 +39,10 @@ When ``sparse_k > 1``, only event indices that are exact multiples of
 nearest multiple before the bisect, so results are approximations that are
 ≤ the true count and differ by at most ``sparse_k - 1`` events.  First-seen
 tracking is NOT sparsified: it records the exact first event index regardless
-of ``sparse_k`` so coverage queries remain accurate.
+of ``sparse_k`` so coverage queries remain accurate.  When count-weighting is
+combined with sparse mode, weights accumulate only over recorded (every-k-th)
+hits, so the result is a weighted approximation subject to the same ≤ true-
+count guarantee.
 
 Thread safety
 -------------
@@ -58,11 +75,16 @@ class TraceAggregates:
         first_seen: dict[str, int],
         total: int,
         sparse_k: int,
+        weight_prefix: dict[str, list[int]] | None = None,
     ) -> None:
         self._hits = hits
         self._first_seen = first_seen
         self._total = total
         self._sparse_k = sparse_k
+        # Per-node cumulative weight array parallel to _hits.
+        # weight_prefix[node_id][i] = sum of metadata.count for hits 0..i.
+        # Defaults to None (treated as all-weight-1 in cumulative_heat).
+        self._weight_prefix = weight_prefix
         # Pre-build sorted list of first-seen indices for O(log N) coverage.
         self._sorted_first: list[int] = sorted(first_seen.values())
 
@@ -87,6 +109,7 @@ class TraceAggregates:
             sparse_k = 1
 
         hits: dict[str, list[int]] = {}
+        weight_prefix: dict[str, list[int]] = {}
         first_seen: dict[str, int] = {}
         index = 0
 
@@ -110,16 +133,21 @@ class TraceAggregates:
 
                         # Record in hit index (sparse or full)
                         if sparse_k == 1 or index % sparse_k == 0:
-                            if node_id not in hits:
-                                hits[node_id] = []
-                            hits[node_id].append(index)
+                            raw_count = event.get("metadata", {}).get("count", 1)
+                            count = (
+                                max(1, int(raw_count)) if isinstance(raw_count, (int, float)) else 1
+                            )
+                            node_hits = hits.setdefault(node_id, [])
+                            node_hits.append(index)
+                            wp = weight_prefix.setdefault(node_id, [])
+                            wp.append((wp[-1] if wp else 0) + count)
 
                     index += 1
         except OSError:
             # Empty or missing file — return empty aggregates
             pass
 
-        return cls(hits, first_seen, index, sparse_k)
+        return cls(hits, first_seen, index, sparse_k, weight_prefix)
 
     # ------------------------------------------------------------------
     # Public API
@@ -130,7 +158,11 @@ class TraceAggregates:
         return self._total
 
     def cumulative_heat(self, node_id: str, at_index: int) -> int:
-        """Return number of events for *node_id* in events [0, at_index).
+        """Return the weighted hit count for *node_id* in events [0, at_index).
+
+        Each event contributes ``metadata.count`` (default 1) to the total.
+        For traces without count metadata the result equals the raw event count
+        (byte-identical to pre-9.1 behaviour).
 
         When built with ``sparse_k > 1``, ``at_index`` is rounded down to the
         nearest multiple of ``sparse_k`` before the lookup, so the result is
@@ -142,7 +174,14 @@ class TraceAggregates:
         if self._sparse_k > 1:
             # Round down to nearest multiple
             at_index = (at_index // self._sparse_k) * self._sparse_k
-        return bisect.bisect_right(hits, at_index - 1)
+        pos = bisect.bisect_right(hits, at_index - 1)
+        if pos == 0:
+            return 0
+        if self._weight_prefix is not None:
+            wp = self._weight_prefix.get(node_id)
+            if wp is not None:
+                return wp[pos - 1]
+        return pos
 
     def coverage_count(self, at_index: int) -> int:
         """Return number of distinct node_ids with at least one event in [0, at_index).
@@ -223,6 +262,7 @@ def build_seekable(path: Path, *, sparse_k: int = 1) -> tuple[JsonlIndex, TraceA
 
     offsets: list[int] = []
     hits: dict[str, list[int]] = {}
+    weight_prefix: dict[str, list[int]] = {}
     first_seen: dict[str, int] = {}
     index = 0
 
@@ -248,9 +288,16 @@ def build_seekable(path: Path, *, sparse_k: int = 1) -> tuple[JsonlIndex, TraceA
                     if node_id not in first_seen:
                         first_seen[node_id] = index
                     if sparse_k == 1 or index % sparse_k == 0:
+                        raw_count = event.get("metadata", {}).get("count", 1)
+                        count = max(1, int(raw_count)) if isinstance(raw_count, (int, float)) else 1
                         hits.setdefault(node_id, []).append(index)
+                        wp = weight_prefix.setdefault(node_id, [])
+                        wp.append((wp[-1] if wp else 0) + count)
                 index += 1
     except OSError:
         pass
 
-    return _JsonlIndex(path, offsets), TraceAggregates(hits, first_seen, index, sparse_k)
+    return (
+        _JsonlIndex(path, offsets),
+        TraceAggregates(hits, first_seen, index, sparse_k, weight_prefix),
+    )
