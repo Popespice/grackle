@@ -60,12 +60,13 @@ def run(script: Path, root: Path) -> str:
     # Resolve the Cargo package name for the given script.
     pkg_name = _resolve_package(script, root)
 
-    # Shared environment: append coverage flag, disable net/incremental to keep
-    # the temp build lean. Do not mutate os.environ directly.
+    # Shared environment: append coverage flag, disable incremental to keep the
+    # temp build lean. Do not mutate os.environ directly.
+    # CARGO_NET_OFFLINE is intentionally NOT set — users may have crates.io
+    # dependencies not yet in their local registry cache.
     base_env = {
         **os.environ,
-        "RUSTFLAGS": capability.build_rustflags(dict(os.environ)),
-        capability.CARGO_NET_OFFLINE_ENV: "true",
+        "RUSTFLAGS": capability.build_rustflags(os.environ),
         capability.CARGO_INCREMENTAL_ENV: "0",
     }
 
@@ -121,6 +122,14 @@ def _resolve_package(script: Path, root: Path) -> str:
         c for c in crates if c.posix_root == "" or script_posix.startswith(c.posix_root + "/")
     ]
     if not matched:
+        # Workspace-root-as-package: a Cargo.toml may carry both [workspace] and
+        # [package] (e.g. a binary at the repo root with helper crates under
+        # crates/). get_crates() returns only the explicit members list — the root
+        # package itself is absent. Fall back to reading it directly so that
+        # `cargo build -p <name>` targets the right package.
+        root_pkg = _try_root_package(root)
+        if root_pkg is not None:
+            return root_pkg
         raise RustRuntimeError(
             f"{script.name}: could not find a Cargo package for this file "
             f"under {root}. Ensure the file is inside a crate's src/ directory."
@@ -128,6 +137,22 @@ def _resolve_package(script: Path, root: Path) -> str:
     # Longest posix_root wins (most specific crate).
     best = max(matched, key=lambda c: len(c.posix_root))
     return best.name
+
+
+def _try_root_package(root: Path) -> str | None:
+    """Return the package name from the root Cargo.toml if it declares [package], else None."""
+    import tomllib
+
+    root_toml = root / "Cargo.toml"
+    if not root_toml.exists():
+        return None
+    try:
+        with root_toml.open("rb") as f:
+            data = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    name = data.get("package", {}).get("name")
+    return name if isinstance(name, str) and name else None
 
 
 def _build(

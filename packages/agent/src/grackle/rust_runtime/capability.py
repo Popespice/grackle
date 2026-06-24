@@ -19,6 +19,10 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 # Minimum Rust version that supports ``-Cinstrument-coverage`` for stable builds
 # (stabilised in Rust 1.60, March 2022).
@@ -214,10 +218,11 @@ def reset_cache() -> None:
 INSTRUMENT_COVERAGE_FLAG = "-Cinstrument-coverage"
 
 
-def build_rustflags(existing_env: dict[str, str]) -> str:
+def build_rustflags(existing_env: Mapping[str, str]) -> str:
     """Return the RUSTFLAGS value with ``-Cinstrument-coverage`` appended.
 
     Preserves any existing ``RUSTFLAGS`` value so user flags are not dropped.
+    Accepts any ``Mapping`` (including ``os.environ``) to avoid needless copies.
     """
     existing = existing_env.get("RUSTFLAGS", "").strip()
     flag = INSTRUMENT_COVERAGE_FLAG
@@ -266,11 +271,6 @@ def _require_cargo() -> str:
 # Expose LLVM_PROFILE_FILE env variable name as a constant.
 LLVM_PROFILE_FILE_ENV = "LLVM_PROFILE_FILE"
 LLVM_PROFILE_PATTERN = "grackle-%p-%m.profraw"
-
-# Guard environment variable: inhibit Cargo workspace merging like Go's GOWORK=off.
-# Rust has no direct analog but we set CARGO_NET_OFFLINE to avoid spurious network
-# access (registry fetches) when building dependency-free fixture crates.
-CARGO_NET_OFFLINE_ENV = "CARGO_NET_OFFLINE"
 
 # Disable incremental compilation in the temp target-dir (no benefit for single runs
 # and it writes extra files that waste disk space and slow the build slightly).

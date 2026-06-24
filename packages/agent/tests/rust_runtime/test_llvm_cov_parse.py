@@ -164,3 +164,57 @@ def test_multiple_data_sections() -> None:
     }
     results = parse_export(json.dumps(doc))
     assert len(results) == 2
+
+
+def test_macro_expansion_regions_ignored_for_start_line() -> None:
+    # A region with fileID==1 (macro-expansion, indexes a different file in filenames)
+    # must not lower start_line below the primary-file body. Without the fileID filter
+    # the expanded region at line 2 would win over the primary-file region at line 10,
+    # causing decl-bisect to attribute this function to the wrong node.
+    doc = {
+        "data": [
+            {
+                "functions": [
+                    {
+                        "name": "_ZN4foo3barE",
+                        "count": 1,
+                        "filenames": ["/src/main.rs", "/src/macros.rs"],
+                        "regions": [
+                            [10, 1, 15, 2, 1, 0, 0, 0],  # primary file, line 10
+                            [2, 5, 2, 30, 1, 1, 0, 0],  # macro expansion in macros.rs
+                        ],
+                        "branches": [],
+                    }
+                ]
+            }
+        ]
+    }
+    results = parse_export(json.dumps(doc))
+    assert len(results) == 1
+    assert results[0]["start_line"] == 10  # macro region at line 2 must be ignored
+
+
+def test_fully_macro_generated_function_uses_fallback() -> None:
+    # When ALL regions have fileID > 0 (fully macro-generated, no primary-file region),
+    # the fallback path uses all regions so the function is not silently dropped.
+    doc = {
+        "data": [
+            {
+                "functions": [
+                    {
+                        "name": "_ZN4foo6DeriveE",
+                        "count": 1,
+                        "filenames": ["/src/main.rs", "/src/macros.rs"],
+                        "regions": [
+                            [5, 1, 8, 2, 1, 1, 0, 0],  # macro expansion only
+                            [12, 1, 14, 2, 1, 1, 0, 0],  # another macro expansion
+                        ],
+                        "branches": [],
+                    }
+                ]
+            }
+        ]
+    }
+    results = parse_export(json.dumps(doc))
+    assert len(results) == 1
+    assert results[0]["start_line"] == 5  # fallback to min across all regions

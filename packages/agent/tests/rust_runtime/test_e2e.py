@@ -109,6 +109,10 @@ def test_bin_cold_nodes_absent(bin_events: list[dict[str, Any]]) -> None:
 def test_bin_no_stdlib_leaks(bin_events: list[dict[str, Any]]) -> None:
     for e in bin_events:
         nid = e["node_id"]
+        # Non-project paths are filtered to None by _normalize and never emitted.
+        # An unresolved in-project path would appear as "<unresolved>", not a bare
+        # project-relative ID — both indicate a resolution failure.
+        assert not nid.startswith("<"), f"unresolved node leaked into trace: {nid}"
         assert not nid.startswith("/"), f"absolute path leaked as node ID: {nid}"
 
 
@@ -148,6 +152,7 @@ def test_ws_cold_nodes_absent(ws_events: list[dict[str, Any]]) -> None:
 def test_ws_no_stdlib_leaks(ws_events: list[dict[str, Any]]) -> None:
     for e in ws_events:
         nid = e["node_id"]
+        assert not nid.startswith("<"), f"unresolved node leaked into workspace trace: {nid}"
         assert not nid.startswith("/"), f"absolute path leaked as node ID: {nid}"
 
 

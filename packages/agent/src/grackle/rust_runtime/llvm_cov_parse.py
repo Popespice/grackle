@@ -114,8 +114,31 @@ def _parse_function(fn: Any) -> RustCoverFunction | None:
 
 
 def _min_region_line(regions: list[Any]) -> int | None:
-    """Return the minimum line-start across all regions, or ``None`` if none parse."""
+    """Return the minimum start line across regions belonging to the primary file (fileID 0).
+
+    Region tuple: ``[lineStart, colStart, lineEnd, colEnd, count, fileID, expandedFileID, kind]``.
+    Regions with fileID > 0 are macro-expansion regions that index a *different* file
+    in the ``filenames`` array; including them can pull ``start_line`` below the
+    function body in the primary file and cause the decl-line bisect to map the
+    function to the wrong node. We filter to fileID==0 first, falling back to all
+    regions only when none qualify (rare: fully macro-generated functions with no
+    primary-file regions).
+    """
     min_line: int | None = None
+    # First pass: primary-file regions only (fileID == 0).
+    for r in regions:
+        if not isinstance(r, (list, tuple)) or len(r) < 6:
+            continue
+        if r[5] != 0:  # fileID != 0 → macro-expansion region for another file
+            continue
+        line = r[0]
+        if not isinstance(line, int) or isinstance(line, bool):
+            continue
+        if min_line is None or line < min_line:
+            min_line = line
+    if min_line is not None:
+        return min_line
+    # Fallback: include all regions (rare path for fully macro-generated functions).
     for r in regions:
         if not isinstance(r, (list, tuple)) or not r:
             continue
