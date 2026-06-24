@@ -44,3 +44,5 @@ NNNN-short-title.md
 | [0020](0020-trace-persistence-session-store.md) | Trace persistence & session store: SQLite index, --store flag, SessionLibraryPanel | accepted |
 | [0021](0021-differential-analysis.md) | Differential analysis: trace-vs-static, trace-vs-trace, grackle diff CLI, graph overlay | accepted |
 | [0022](0022-polyglot-runtime-v8-inspector.md) | Polyglot runtime via V8 Inspector: NodeRuntimeAdapter over CDP, hybrid sampling+coverage, type-stripping resolution | accepted |
+| [0023](0023-go-runtime-coverage.md) | Go runtime adapter via coverage instrumentation: go build -cover, covdata textfmt, decl-line bisect | accepted |
+| [0024](0024-rust-runtime-coverage.md) | Rust runtime adapter via LLVM coverage instrumentation: -Cinstrument-coverage, llvm-profdata, llvm-cov export, monomorphisation folding | accepted |
