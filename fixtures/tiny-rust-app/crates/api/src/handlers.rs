@@ -1,5 +1,5 @@
 use crate::UserRepository;
-use models::User;
+use models::{Store, User, UserStore};
 
 pub fn handle_get_users(repo: &UserRepository) -> Vec<User> {
     repo.list()

@@ -258,12 +258,16 @@ def _export(
     cwd: Path,
 ) -> str:
     """Export coverage data as JSON via llvm-cov."""
+    # --format=json is intentionally omitted: JSON is the default for llvm-cov
+    # export, and the Rust-specific sysroot build of llvm-cov (llvm-tools-preview)
+    # does not expose "json" as an explicit --format value even though it is the
+    # implicit default. Omitting the flag keeps compatibility across all sysroot
+    # versions while preserving JSON output.
     cmd = [
         llvm_cov_exe,
         "export",
         str(binary),
         f"-instr-profile={profdata}",
-        "--format=json",
     ]
     result = _run_step(cmd, cwd=cwd, env=env, timeout=_EXPORT_TIMEOUT_S, label="llvm-cov export")
     if result.returncode != 0:

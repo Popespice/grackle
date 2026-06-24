@@ -1,3 +1,5 @@
+use models::Store;
+
 fn main() {
     let mut repo = api::UserRepository::new();
     let user = api::create_user_in_repo(&mut repo, String::from("Alice"));
