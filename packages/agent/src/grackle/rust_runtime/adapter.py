@@ -48,18 +48,25 @@ class RustRuntimeAdapter:
     language: str = "rust"
     extensions: tuple[str, ...] = (".rs",)
 
-    # Source-tree paths whose component names unambiguously indicate non-binary
-    # entry points. Deeper toolchain detection (src_path match) handles the rest.
+    # Directory names that, as the *immediate* parent of a `.rs` file, indicate a
+    # Cargo integration-test or benchmark target (non-binary). Deeper toolchain
+    # detection (src_path bin match) handles any other non-bin input.
     _REJECT_COMPONENTS = frozenset({"tests", "benches"})
 
     def runtime_unavailable_reason(self, script: Path) -> str | None:
         """Reject test/bench files and a missing/incomplete Rust toolchain; else None."""
-        for part in script.parts:
-            if part in self._REJECT_COMPONENTS:
-                return (
-                    f"{script.name}: tracing files under '{part}/' is not supported. "
-                    "Pass a binary entry point (src/main.rs or src/bin/<name>.rs) instead."
-                )
+        # Cargo integration tests / benchmarks are the .rs files directly under a
+        # crate's `tests/` or `benches/` directory; they compile to non-bin
+        # targets. Match only the *immediate* parent directory, so an unrelated
+        # ancestor that merely happens to be named `tests`/`benches` (e.g. a
+        # checkout at `~/src/tests/myproj/src/main.rs`) does not wrongly reject a
+        # valid `src/main.rs` entry point.
+        parent = script.parent.name
+        if parent in self._REJECT_COMPONENTS:
+            return (
+                f"{script.name}: tracing files under '{parent}/' is not supported. "
+                "Pass a binary entry point (src/main.rs or src/bin/<name>.rs) instead."
+            )
         if not capability.rust_runtime_available():
             return capability.remediation_message()
         return None

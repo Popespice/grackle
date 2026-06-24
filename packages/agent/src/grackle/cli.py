@@ -363,7 +363,7 @@ def trace(
         events = list(adapter.trace(script, root, options))
     except TraceCapExceeded as exc:
         raise click.ClickException(str(exc)) from exc
-    except (NodeRuntimeError, GoRuntimeError) as exc:
+    except (NodeRuntimeError, GoRuntimeError, RustRuntimeError) as exc:
         raise click.ClickException(str(exc)) from exc
     except Exception as exc:
         # Belt-and-suspenders: no adapter failure should reach the user as a

@@ -66,6 +66,25 @@ def test_rejects_benches_directory(adapter: RustRuntimeAdapter, tmp_path: Path) 
     assert "benches/" in reason
 
 
+def test_ancestor_named_tests_not_rejected(adapter: RustRuntimeAdapter, tmp_path: Path) -> None:
+    # A valid src/main.rs whose *ancestor* directory merely happens to be named
+    # "tests" must not be rejected — only the immediate parent dir is a Cargo
+    # test/bench convention. The reject heuristic keys on script.parent.name.
+    from grackle.rust_runtime import capability
+
+    script = tmp_path / "tests" / "myproj" / "src" / "main.rs"
+    script.parent.mkdir(parents=True)
+    script.touch()
+    capability.reset_cache()
+    with patch("shutil.which", return_value=None):
+        capability.reset_cache()
+        reason = adapter.runtime_unavailable_reason(script)
+        # Gate is closed (no toolchain), but NOT because of the tests/ heuristic.
+        assert reason is not None
+        assert "tests/" not in reason
+    capability.reset_cache()
+
+
 def test_accepts_main_rs_when_toolchain_absent(adapter: RustRuntimeAdapter, tmp_path: Path) -> None:
     from grackle.rust_runtime import capability
 
