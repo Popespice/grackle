@@ -264,6 +264,7 @@ def trace(
     from grackle.go_runtime.errors import GoRuntimeError
     from grackle.node_runtime.errors import NodeRuntimeError
     from grackle.python_runtime.writer import write_jsonl
+    from grackle.rust_runtime.errors import RustRuntimeError
 
     # ------------------------------------------------------------------
     # Option validation
@@ -328,7 +329,7 @@ def trace(
             # Store cap error — write the file first (captured prefix is valid),
             # then re-raise below so the user gets both the file and the error.
             _cap_exc = click.ClickException(str(exc))
-        except (NodeRuntimeError, GoRuntimeError) as exc:
+        except (NodeRuntimeError, GoRuntimeError, RustRuntimeError) as exc:
             raise click.ClickException(str(exc)) from exc
         except Exception as exc:
             raise click.ClickException(f"trace error: {exc}") from exc
@@ -362,7 +363,7 @@ def trace(
         events = list(adapter.trace(script, root, options))
     except TraceCapExceeded as exc:
         raise click.ClickException(str(exc)) from exc
-    except (NodeRuntimeError, GoRuntimeError) as exc:
+    except (NodeRuntimeError, GoRuntimeError, RustRuntimeError) as exc:
         raise click.ClickException(str(exc)) from exc
     except Exception as exc:
         # Belt-and-suspenders: no adapter failure should reach the user as a

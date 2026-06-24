@@ -87,9 +87,10 @@ def test_tiny_rust_app_fixture() -> None:
     assert fixture.exists(), "tiny-rust-app fixture not found"
 
     crates = get_crates(fixture)
-    assert len(crates) == 2
+    assert len(crates) == 3
     names = {c.name for c in crates}
-    assert names == {"models", "api"}
+    assert names == {"models", "api", "app"}
     roots = {c.posix_root for c in crates}
     assert "crates/models" in roots
     assert "crates/api" in roots
+    assert "crates/app" in roots

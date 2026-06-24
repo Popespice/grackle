@@ -40,6 +40,10 @@ jobs:
           # module cache avoids a misleading "go.sum not found" warning.
           cache: false
 
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true

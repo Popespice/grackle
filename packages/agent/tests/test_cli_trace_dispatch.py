@@ -134,6 +134,35 @@ def test_go_runtime_error_surfaced_clean(tmp_path: Path, monkeypatch: pytest.Mon
     assert "trace error:" not in result.output
 
 
+def test_rust_runtime_error_surfaced_clean(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A RustRuntimeError from trace() reaches the user as its own message, not 'trace error:'.
+
+    Rust only ever uses the completed-trace path (trace_streaming always raises), so this
+    guards the `except (... RustRuntimeError)` branch on that path — the regression where
+    only the --stream clause had been updated.
+    """
+    from grackle.rust_runtime import capability
+    from grackle.rust_runtime.adapter import RustRuntimeAdapter
+    from grackle.rust_runtime.errors import RustRuntimeError
+
+    monkeypatch.setattr(capability, "rust_runtime_available", lambda: True)
+
+    def _boom(self: RustRuntimeAdapter, *a: object, **k: object) -> object:
+        raise RustRuntimeError("cargo build failed:\nerror[E0425]: cannot find value `x`")
+
+    monkeypatch.setattr(RustRuntimeAdapter, "trace", _boom)
+
+    script = _write(tmp_path / "src", "main.rs", "fn main() {}\n")
+    result = CliRunner().invoke(
+        main, ["trace", str(script), "--root", str(tmp_path), "--language", "rust"]
+    )
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+    assert "cargo build failed" in result.output
+    # The dedicated branch preserves the typed message — no generic prefix.
+    assert "trace error:" not in result.output
+
+
 def test_typescript_gate_closed_clean_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
