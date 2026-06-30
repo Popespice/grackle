@@ -33,6 +33,10 @@ import {
   diffTraceVsTrace,
   hasRegression,
 } from "../graph/diff";
+import {
+  persistBaseline,
+  restoreBaseline,
+} from "../graph/diffBaselinePersistence";
 import { useGraphStore } from "../graph/useGraphStore";
 import { useRuntimeCoverage } from "../graph/useRuntimeCoverage";
 
@@ -185,6 +189,27 @@ export function DiffPanel(): JSX.Element | null {
     };
   }, [clearDiffOverlay]);
 
+  // Restore a persisted baseline on graph (re)load — e.g. after F5 (Phase
+  // 9.3, ADR-0021 amendment). `setGraph` always clears `diffBaseline` to
+  // null on a new static_graph push, so this effect re-fires right after
+  // that clear and re-applies the stored value for the *same* project
+  // (graphCacheKey content hash). The `getState().graph === graph` identity
+  // check guards against a stale resolution from a previous graph landing
+  // after a newer graph has already replaced it; the `=== null` check
+  // avoids clobbering a baseline the user just set.
+  useEffect(() => {
+    if (!graph) return;
+    restoreBaseline(graph).then((stored) => {
+      if (
+        stored !== null &&
+        useGraphStore.getState().graph === graph &&
+        useGraphStore.getState().diffBaseline === null
+      ) {
+        setDiffBaseline(stored);
+      }
+    });
+  }, [graph, setDiffBaseline]);
+
   // Pre-filter the actionable buckets once (used by lists + empty-state checks)
   // instead of re-running entries.filter() several times during render.
   const hotterEntries = useMemo(
@@ -236,6 +261,9 @@ export function DiffPanel(): JSX.Element | null {
               // Setting a baseline is an explicit request to see the diff —
               // turn the graph overlay on so the result is visible.
               setOverlayEnabled(true);
+              // Persist on explicit user action only (never via a store
+              // subscriber — see the restore effect above for why).
+              void persistBaseline(graph, currentCounts).catch(() => {});
             }}
           >
             Set as baseline
@@ -244,7 +272,10 @@ export function DiffPanel(): JSX.Element | null {
           <button
             type="button"
             style={{ ...BTN, borderColor: "#f59e0b", color: "#f59e0b" }}
-            onClick={clearDiffBaseline}
+            onClick={() => {
+              clearDiffBaseline();
+              void persistBaseline(graph, null).catch(() => {});
+            }}
           >
             Clear baseline
           </button>

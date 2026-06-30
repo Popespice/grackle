@@ -31,6 +31,7 @@ from websockets.asyncio.client import connect
 
 from grackle.python_runtime.live_buffer import trace_buffer_max_events, trim_ring_buffer
 from grackle.server import serve
+from grackle.session_store import SessionStore
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -409,3 +410,197 @@ async def test_late_consumer_receives_at_most_max_events(capped_live_server: int
     assert all(t in ("trace_session_start", "trace_event", "trace_session_end") for t in types), (
         f"unexpected message types in ring-buffer flush: {types}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 9.3 — live-stream recording sink (ADR-0020 amendment)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def store_server(
+    free_port: int, tmp_path: Path
+) -> AsyncGenerator[tuple[int, SessionStore, Path], None]:
+    """Server with --store set (live-attach mode + recording sink enabled)."""
+    db_path = tmp_path / "sessions.db"
+    store = SessionStore.open(db_path)
+    task = asyncio.create_task(serve("127.0.0.1", free_port, root=tmp_path, store=store))
+    await asyncio.sleep(0.05)
+    yield free_port, store, tmp_path / "recordings"
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+
+async def test_live_session_recorded_to_store(
+    store_server: tuple[int, SessionStore, Path],
+) -> None:
+    """A clean producer session (start/events/end) is tee'd to disk and registered."""
+    port, store, recordings_dir = store_server
+
+    async with connect(f"ws://127.0.0.1:{port}") as producer:
+        await producer.send(_make_session_start("rec-1"))
+        for i in range(3):
+            await producer.send(_make_trace_event(i))
+        await producer.send(_make_session_end("rec-1", count=3))
+        await asyncio.sleep(0.1)
+
+    meta = store.get_session("rec-1")
+    assert meta is not None
+    assert meta.event_count == 3
+
+    final = recordings_dir / "rec-1.jsonl"
+    assert final.exists()
+    assert not (recordings_dir / "rec-1.jsonl.part").exists()
+
+
+async def test_producer_disconnect_without_end_finalizes(
+    store_server: tuple[int, SessionStore, Path],
+) -> None:
+    """A producer that disconnects mid-stream (no trace_session_end) still
+    gets its recording finalized via the receive-loop's finally block."""
+    port, store, recordings_dir = store_server
+
+    async with connect(f"ws://127.0.0.1:{port}") as producer:
+        await producer.send(_make_session_start("rec-2"))
+        for i in range(2):
+            await producer.send(_make_trace_event(i))
+        # producer goes out of scope without sending trace_session_end.
+
+    await asyncio.sleep(0.2)
+
+    meta = store.get_session("rec-2")
+    assert meta is not None
+    assert meta.event_count == 2
+
+    final = recordings_dir / "rec-2.jsonl"
+    assert final.exists()
+    assert not (recordings_dir / "rec-2.jsonl.part").exists()
+
+
+async def test_server_shutdown_cancel_finalizes(free_port: int, tmp_path: Path) -> None:
+    """Cancelling the server task mid-stream (no session_end) still finalizes
+    the in-flight recording via the shielded finally-block finalize."""
+    db_path = tmp_path / "sessions.db"
+    store = SessionStore.open(db_path)
+    recordings_dir = tmp_path / "recordings"
+    task = asyncio.create_task(serve("127.0.0.1", free_port, root=tmp_path, store=store))
+    await asyncio.sleep(0.05)
+
+    async with connect(f"ws://127.0.0.1:{free_port}") as producer:
+        await producer.send(_make_session_start("rec-3"))
+        for i in range(4):
+            await producer.send(_make_trace_event(i))
+        await asyncio.sleep(0.1)
+
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    # serve()'s own finally already closed `store` on shutdown; reopen from
+    # disk to verify the shielded finalize actually persisted before close.
+    reopened = SessionStore.open(db_path)
+    meta = reopened.get_session("rec-3")
+    reopened.close()
+    assert meta is not None
+    assert meta.event_count == 4
+
+    final = recordings_dir / "rec-3.jsonl"
+    assert final.exists()
+    assert not (recordings_dir / "rec-3.jsonl.part").exists()
+
+
+async def test_no_store_no_recording(live_server: int, tmp_path: Path) -> None:
+    """Without --store, no recordings/ directory is created and behavior is
+    unchanged (regression guard)."""
+    port = live_server
+
+    async with connect(f"ws://127.0.0.1:{port}") as producer:
+        await producer.send(_make_session_start("rec-4"))
+        await producer.send(_make_trace_event(0))
+        await producer.send(_make_session_end("rec-4", count=1))
+        await asyncio.sleep(0.05)
+
+    assert not (tmp_path / "recordings").exists()
+
+
+async def test_two_sessions_back_to_back(
+    store_server: tuple[int, SessionStore, Path],
+) -> None:
+    """Two sequential sessions on one connection produce two distinct
+    recordings + store rows."""
+    port, store, recordings_dir = store_server
+
+    async with connect(f"ws://127.0.0.1:{port}") as producer:
+        await producer.send(_make_session_start("rec-a"))
+        await producer.send(_make_trace_event(0))
+        await producer.send(_make_session_end("rec-a", count=1))
+
+        await producer.send(_make_session_start("rec-b"))
+        await producer.send(_make_trace_event(0))
+        await producer.send(_make_trace_event(1))
+        await producer.send(_make_session_end("rec-b", count=2))
+        await asyncio.sleep(0.1)
+
+    meta_a = store.get_session("rec-a")
+    meta_b = store.get_session("rec-b")
+    assert meta_a is not None and meta_a.event_count == 1
+    assert meta_b is not None and meta_b.event_count == 2
+    assert (recordings_dir / "rec-a.jsonl").exists()
+    assert (recordings_dir / "rec-b.jsonl").exists()
+
+
+async def test_replay_source_not_self_recorded(free_port: int, tmp_path: Path) -> None:
+    """With --trace-source AND --store set, a pure consumer (no inbound trace
+    messages) must not produce a recording beyond the register_trace_source
+    row for the replay file itself."""
+    import json as _json
+
+    trace_source = tmp_path / "source.jsonl"
+    trace_source.write_text(
+        _json.dumps(
+            {
+                "event": "call",
+                "node_id": "script.py:f",
+                "ts_ns": 0,
+                "thread_id": 1,
+                "frame_depth": 0,
+                "metadata": {},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "sessions.db"
+    store = SessionStore.open(db_path)
+    recordings_dir = tmp_path / "recordings"
+    task = asyncio.create_task(
+        serve(
+            "127.0.0.1",
+            free_port,
+            root=tmp_path,
+            trace_source=trace_source,
+            store=store,
+            pace=False,
+        )
+    )
+    await asyncio.sleep(0.05)
+
+    async with connect(f"ws://127.0.0.1:{free_port}") as consumer:
+        await consumer.send(json.dumps({"id": "c0", "type": "ping", "payload": {}}))
+        while True:
+            msg = json.loads(await asyncio.wait_for(consumer.recv(), timeout=5.0))
+            if msg["type"] == "pong":
+                break
+
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+    # serve()'s own finally already closed `store` on shutdown; reopen from disk.
+    reopened = SessionStore.open(db_path)
+    sessions = reopened.list_sessions()
+    reopened.close()
+    assert len(sessions) == 1  # only the replay-file's register_trace_source row
+    assert sessions[0].source_path == str(trace_source.resolve())
+    assert not recordings_dir.exists() or list(recordings_dir.glob("*.jsonl")) == []

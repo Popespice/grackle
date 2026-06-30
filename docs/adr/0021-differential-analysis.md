@@ -154,13 +154,19 @@ here as `left-sidebar` order 5, below `search-filter`.
 
 ---
 
+## Amendment — Phase 9.3 (2026-06-30)
+
+The frontend baseline now persists to `sessionStorage`, closing the "ephemeral" limitation noted below. `packages/frontend/src/graph/diffBaselinePersistence.ts` keys each entry `grackle:diff-baseline:<graphCacheKey(graph)>` — `graphCacheKey` (an existing, previously-unconsumed SHA-256 content hash over the graph's nodes/edges) keys persistence **per project** so a baseline from one project never restores onto another.
+
+Persistence is deliberately driven from `DiffPanel`'s "Set as baseline" / "Clear baseline" click handlers, never from a store subscriber on `diffBaseline`: `setGraph` unconditionally clears `diffBaseline` to `null` on every `static_graph` push (the existing graph-scoped invariant above), and a blind subscriber would observe that clear and delete the persisted entry before a restore effect could read it back. A separate `useEffect` keyed on `[graph]` restores from storage after each graph (re)load, guarded so it neither clobbers a baseline the user just set (`diffBaseline === null` check) nor applies a stale resolution from a since-replaced graph (`useGraphStore.getState().graph === graph` identity check). No wire-schema change, no store-shape change.
+
 ## Consequences
 
 - `diff.py` and `diff.ts` are pure — easy to test, no server dependency.
 - `grackle diff` is CI-usable without a running server.
-- The frontend baseline approach is simple but ephemeral (not persisted across
-  page reloads).  A future improvement could save the baseline to `sessionStorage`
-  or the server-side session store.
+- **(Phase 9.3)** The frontend baseline now persists to `sessionStorage`, keyed
+  per project — see the Amendment above. It still does not persist to the
+  server-side session store; that remains a possible future improvement.
 - The diff overlay displaces the heat-map when painted, so painting is opt-in
   (the "Show overlay" toggle) and the heat-map stays the default.  The trade-off
   is one extra click to see the graph coloured by the diff; the summary chips and
