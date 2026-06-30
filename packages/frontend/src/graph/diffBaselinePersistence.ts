@@ -18,13 +18,20 @@ function keyFor(graph: Graph): Promise<string> {
   return graphCacheKey(graph).then((hash) => KEY_PREFIX + hash);
 }
 
-/** True if `value` is a plain object mapping node ids to finite counts. */
+/**
+ * True if `value` is a non-empty plain object mapping node ids to
+ * non-negative finite counts. Empty objects are rejected: a `{}` baseline
+ * would classify every current node as `hotter` (0 → N) and show a phantom
+ * regression, so a degenerate empty snapshot must not round-trip.
+ */
 function isBaseline(value: unknown): value is Record<string, number> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return false;
   }
-  return Object.values(value).every(
-    (v) => typeof v === "number" && Number.isFinite(v)
+  const values = Object.values(value);
+  if (values.length === 0) return false;
+  return values.every(
+    (v) => typeof v === "number" && Number.isFinite(v) && v >= 0
   );
 }
 

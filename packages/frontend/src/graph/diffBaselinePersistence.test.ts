@@ -93,17 +93,19 @@ describe("diffBaselinePersistence", () => {
     ["a number", "42"],
     ["a string", '"oops"'],
     ["null", "null"],
-    ["an object with non-number values", '{"a":"x"}'],
-    ["an object with a NaN-producing value", '{"a":null}'],
+    ["a non-number value (string)", '{"a":"x"}'],
+    ["a null value (typeof !== number)", '{"a":null}'],
+    ["a negative count", '{"a":-5}'],
+    ["an empty object", "{}"],
   ])("restore rejects valid-but-wrong-shape JSON (%s)", async (_label, json) => {
     const key = `grackle:diff-baseline:${await graphCacheKey(GRAPH_A)}`;
     sessionStorage.setItem(key, json);
     expect(await restoreBaseline(GRAPH_A)).toBeNull();
   });
 
-  it("restore accepts an empty object as a valid (empty) baseline", async () => {
+  it("restore accepts a baseline with a legitimate zero count", async () => {
     const key = `grackle:diff-baseline:${await graphCacheKey(GRAPH_A)}`;
-    sessionStorage.setItem(key, "{}");
-    expect(await restoreBaseline(GRAPH_A)).toEqual({});
+    sessionStorage.setItem(key, JSON.stringify({ a: 0, b: 3 }));
+    expect(await restoreBaseline(GRAPH_A)).toEqual({ a: 0, b: 3 });
   });
 });

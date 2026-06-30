@@ -34,25 +34,24 @@ def _payload(i: int) -> dict[str, Any]:
 
 
 class _FlakyFile:
-    """Proxies a real file handle; write() raises once `fail_after` good
-    writes have gone through, so the prefix already on disk is genuine."""
+    """Proxies a real binary file handle. The (fail_after+1)-th write writes a
+    PARTIAL chunk of its bytes to disk and THEN raises — modelling a real disk
+    failure mid-write that leaves a torn trailing line. This forces the salvage
+    path (truncate back to the last good offset) to actually do work; a no-op
+    salvage would leave the partial bytes and make read_jsonl raise."""
 
     def __init__(self, real: Any, fail_after: int) -> None:
         self._real = real
         self._fail_after = fail_after
         self._calls = 0
 
-    def write(self, data: str) -> int:
+    def write(self, data: bytes) -> int:
         self._calls += 1
         if self._calls > self._fail_after:
+            # Write a partial fragment to disk, then fail — leaving a torn line.
+            self._real.write(data[: max(1, len(data) // 2)])
             raise OSError("disk full")
         return int(self._real.write(data))
-
-    def tell(self) -> int:
-        return int(self._real.tell())
-
-    def seek(self, pos: int, whence: int = 0) -> int:
-        return int(self._real.seek(pos, whence))
 
     def truncate(self, size: int | None = None) -> int:
         return int(self._real.truncate(size))
@@ -150,7 +149,9 @@ async def test_broken_write_after_events_salvages_prior_events(tmp_path: Path) -
 
     sink.write(_payload(0))
     sink.write(_payload(1))
-    sink.write(_payload(2))  # raises -- events 0 and 1 are already on disk
+    # The 3rd write pushes a PARTIAL fragment of event 2 into the file, then
+    # raises — leaving a torn trailing line that salvage must truncate away.
+    sink.write(_payload(2))
     assert sink._event_count == 2
     assert sink._broken is True
 
@@ -160,6 +161,9 @@ async def test_broken_write_after_events_salvages_prior_events(tmp_path: Path) -
     assert final.exists()
     assert not (recordings_dir / "sess-salvage.jsonl.part").exists()
 
+    # read_jsonl would raise json.JSONDecodeError on the torn fragment if
+    # salvage had NOT truncated it away — so this both counts and proves the
+    # file is clean JSONL.
     events = read_jsonl(final)
     assert len(events) == 2
     assert events[0]["node_id"] == "script.py:func_0"
@@ -188,8 +192,12 @@ async def test_save_session_failure_does_not_raise(tmp_path: Path) -> None:
 
     await sink.finalize()  # must not raise
 
+    # The file lands (close+rename happened before the failing store write)...
     final = recordings_dir / "sess-db-fail.jsonl"
     assert final.exists()
+    # ...but no row was registered (the patched save_session raised; get_session
+    # is unpatched and reads the real, empty table).
+    assert store.get_session("sess-db-fail") is None
     store.close()
 
 
@@ -249,6 +257,7 @@ async def test_tmp_uses_name_append_not_with_suffix(tmp_path: Path) -> None:
     ("session_id", "expected"),
     [
         ("a1b2c3", True),
+        ("A1B2_c3.d-4", True),
         ("", False),
         (".", False),
         ("..", False),
@@ -256,6 +265,11 @@ async def test_tmp_uses_name_append_not_with_suffix(tmp_path: Path) -> None:
         ("a/b", False),
         ("a\\b", False),
         ("a\x00b", False),
+        (".hidden", False),  # leading dot
+        ("-flag", False),  # leading dash (argv-injection guard)
+        ("a b", False),  # whitespace
+        ("x" * 129, False),  # over the length cap
+        ("x" * 128, True),  # at the length cap
     ],
 )
 def test_is_safe_session_id(session_id: str, expected: bool) -> None:

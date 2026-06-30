@@ -606,28 +606,51 @@ async def test_replay_source_not_self_recorded(free_port: int, tmp_path: Path) -
     assert not recordings_dir.exists() or list(recordings_dir.glob("*.jsonl")) == []
 
 
+async def _wait_for(path: Path, *, timeout: float = 5.0) -> None:
+    """Poll until *path* exists (deterministic hand-off between producers)."""
+    deadline = asyncio.get_event_loop().time() + timeout
+    while not path.exists():
+        if asyncio.get_event_loop().time() > deadline:
+            raise AssertionError(f"timed out waiting for {path}")
+        await asyncio.sleep(0.01)
+
+
 async def test_duplicate_session_id_second_producer_skipped(
     store_server: tuple[int, SessionStore, Path],
 ) -> None:
-    """Two producers racing to record the same session_id must not corrupt
-    each other -- the second is skipped (FileExistsError caught), the first
-    completes normally."""
+    """While producer A owns a recording for a session_id, a second producer B
+    that reuses the same id must be skipped (FileExistsError caught) and must
+    NOT corrupt A's recording. Ordering is made deterministic: B only sends its
+    colliding start after A's .part is observably on disk."""
     port, store, recordings_dir = store_server
+    part = recordings_dir / "rec-dup.jsonl.part"
+    final = recordings_dir / "rec-dup.jsonl"
 
-    async with (
-        connect(f"ws://127.0.0.1:{port}") as producer_a,
-        connect(f"ws://127.0.0.1:{port}") as producer_b,
-    ):
+    async with connect(f"ws://127.0.0.1:{port}") as producer_a:
+        # A opens the recording and writes one event, but does NOT end yet.
         await producer_a.send(_make_session_start("rec-dup"))
-        await producer_b.send(_make_session_start("rec-dup"))
         await producer_a.send(_make_trace_event(0))
+        await _wait_for(part)  # A now owns rec-dup.jsonl.part
+
+        # B reuses the same id while A holds the .part -> exclusive-create
+        # FileExistsError -> B is skipped, A is untouched.
+        async with connect(f"ws://127.0.0.1:{port}") as producer_b:
+            await producer_b.send(_make_session_start("rec-dup"))
+            await producer_b.send(_make_trace_event(1))
+            await asyncio.sleep(0.05)
+        # B disconnects; its skipped session leaves no recorder, so nothing to
+        # finalize. A's .part is still intact.
+        assert part.exists()
+
+        # A finishes cleanly.
         await producer_a.send(_make_session_end("rec-dup", count=1))
-        await asyncio.sleep(0.1)
+        await _wait_for(final)
 
     meta = store.get_session("rec-dup")
     assert meta is not None
-    assert meta.event_count == 1
+    assert meta.event_count == 1  # A's single event, not corrupted by B
 
-    final = recordings_dir / "rec-dup.jsonl"
     assert final.exists()
-    assert not (recordings_dir / "rec-dup.jsonl.part").exists()
+    assert not part.exists()
+    # Exactly one recording file for this id.
+    assert list(recordings_dir.glob("rec-dup*.jsonl")) == [final]

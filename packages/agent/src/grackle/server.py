@@ -388,7 +388,9 @@ async def _receive_loop(
                             # Defensive: a new session started without a
                             # matching end for the previous one — finalize it
                             # first so its file/row are not left dangling.
-                            await recorder.finalize()
+                            # Shielded so a cancellation arriving mid-await
+                            # cannot tear the prior session's finalize.
+                            await asyncio.shield(recorder.finalize())
                             recorder = None
                         sid = envelope["payload"].get("session_id")
                         if not (
@@ -411,6 +413,15 @@ async def _receive_loop(
                                     "recording sink: session_id already being recorded by "
                                     "another connection — skipping",
                                     session_id=sid,
+                                )
+                            except OSError as exc:
+                                # Any other I/O error opening the recording file
+                                # (permissions, dir removed mid-run) must skip the
+                                # recording, never crash the receive loop.
+                                log.warning(
+                                    "recording sink: could not open recording file — skipping",
+                                    session_id=sid,
+                                    error=str(exc),
                                 )
                     elif etype == "trace_event":
                         if recorder is not None:

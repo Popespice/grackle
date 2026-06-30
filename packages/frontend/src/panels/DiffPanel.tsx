@@ -147,6 +147,14 @@ export function DiffPanel(): JSX.Element | null {
   // vice versa).
   const persistQueueRef = useRef<Promise<void>>(Promise.resolve());
 
+  // Whether a baseline has already been restored on THIS mount. The restore
+  // effect re-fires on every static_graph re-push (setGraph nulls the
+  // baseline, then we re-apply it); we only auto-enable the overlay on the
+  // FIRST restore so a routine re-push can't override a user who has since
+  // toggled the overlay off. A real reload remounts the component and resets
+  // this ref, so F5 still restores the painted view.
+  const didAutoEnableOverlayRef = useRef(false);
+
   // Current node->count snapshot: prefer agent heat (accurate for seekable
   // sessions), fall back to local event counting.
   const currentCounts = useMemo<Record<string, number>>(() => {
@@ -213,8 +221,13 @@ export function DiffPanel(): JSX.Element | null {
       if (state.graph === graph && state.diffBaseline === null) {
         setDiffBaseline(stored);
         // Mirror "Set as baseline": a restored baseline is something the
-        // user previously asked to see painted, so restore the overlay too.
-        setOverlayEnabled(true);
+        // user previously asked to see painted, so restore the overlay too —
+        // but only on the first restore of this mount, so a later graph
+        // re-push doesn't override a user who has since hidden the overlay.
+        if (!didAutoEnableOverlayRef.current) {
+          didAutoEnableOverlayRef.current = true;
+          setOverlayEnabled(true);
+        }
       }
     });
   }, [graph, setDiffBaseline]);

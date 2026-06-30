@@ -239,12 +239,18 @@ describe("DiffPanel baseline persistence", () => {
   });
 
   it("setGraph(sameGraph) clears the store baseline but restore re-applies it", async () => {
-    useGraphStore.setState({ traceSessionId: "s1", graph: SIMPLE_GRAPH });
+    // Non-empty baseline (agentHeat present) so it survives the empty-object
+    // rejection in restoreBaseline.
+    useGraphStore.setState({
+      traceSessionId: "s1",
+      graph: SIMPLE_GRAPH,
+      agentHeat: { a: 5 },
+    });
     render(<DiffPanel />);
 
     fireEvent.click(screen.getByRole("button", { name: /set as baseline/i }));
     await waitFor(() =>
-      expect(useGraphStore.getState().diffBaseline).not.toBeNull()
+      expect(useGraphStore.getState().diffBaseline).toEqual({ a: 5 })
     );
 
     // A reload re-pushes the same graph content via setGraph, which clears
@@ -253,7 +259,7 @@ describe("DiffPanel baseline persistence", () => {
     useGraphStore.getState().setGraph({ ...SIMPLE_GRAPH });
 
     await waitFor(() =>
-      expect(useGraphStore.getState().diffBaseline).toEqual({})
+      expect(useGraphStore.getState().diffBaseline).toEqual({ a: 5 })
     );
   });
 
@@ -369,5 +375,74 @@ describe("DiffPanel baseline persistence", () => {
     // resolve its hash computation last.
     await new Promise((r) => setTimeout(r, 20));
     expect(sessionStorage.getItem(key)).toBeNull();
+  });
+
+  it("serializes Set/Clear persist calls in click order (the queue is load-bearing)", async () => {
+    // Spy so the Set persist hangs until we release it; the Clear persist must
+    // NOT run until the Set one resolves. Without the persistQueueRef chain
+    // both would fire immediately and this ordering would not hold.
+    const persistence = await import("../graph/diffBaselinePersistence");
+    const calls: string[] = [];
+    let resolveFirst: () => void = () => {};
+    const spy = vi
+      .spyOn(persistence, "persistBaseline")
+      .mockImplementationOnce(() => {
+        calls.push("set");
+        return new Promise<void>((r) => {
+          resolveFirst = r;
+        });
+      })
+      .mockImplementationOnce(() => {
+        calls.push("clear");
+        return Promise.resolve();
+      });
+
+    useGraphStore.setState({
+      traceSessionId: "s1",
+      graph: SIMPLE_GRAPH,
+      agentHeat: { a: 4 },
+    });
+    render(<DiffPanel />);
+
+    fireEvent.click(screen.getByRole("button", { name: /set as baseline/i }));
+    fireEvent.click(screen.getByRole("button", { name: /clear baseline/i }));
+
+    // Flush microtasks: the Set persist has run (and is hanging); the Clear
+    // persist is queued behind it and must not have run yet.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(calls).toEqual(["set"]);
+
+    resolveFirst();
+    await waitFor(() => expect(calls).toEqual(["set", "clear"]));
+    spy.mockRestore();
+  });
+
+  it("auto-enables the overlay only on the first restore, not on a later graph re-push", async () => {
+    const key = `grackle:diff-baseline:${await graphCacheKey(SIMPLE_GRAPH)}`;
+    sessionStorage.setItem(key, JSON.stringify({ a: 7 }));
+    useGraphStore.setState({
+      traceSessionId: "s1",
+      graph: SIMPLE_GRAPH,
+      agentHeat: { a: 7 },
+    });
+    render(<DiffPanel />);
+
+    // First restore enables the overlay.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /hide overlay/i })).toBeTruthy()
+    );
+
+    // User explicitly hides the overlay.
+    fireEvent.click(screen.getByRole("button", { name: /hide overlay/i }));
+    expect(screen.getByRole("button", { name: /show overlay/i })).toBeTruthy();
+
+    // A routine static_graph re-push clears + re-restores the baseline, but must
+    // NOT re-enable the overlay against the user's just-expressed Hide choice.
+    useGraphStore.getState().setGraph({ ...SIMPLE_GRAPH });
+    await waitFor(() =>
+      expect(useGraphStore.getState().diffBaseline).toEqual({ a: 7 })
+    );
+    await new Promise((r) => setTimeout(r, 10));
+    expect(screen.getByRole("button", { name: /show overlay/i })).toBeTruthy();
   });
 });
