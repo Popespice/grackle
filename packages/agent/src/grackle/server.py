@@ -17,6 +17,7 @@ from websockets.asyncio.server import serve as _ws_serve
 from grackle import protocol
 from grackle.python_runtime.file_replay import (
     SeekableSession,
+    detect_language,
     load_stored_session,
     register_trace_source,
     replay_trace,
@@ -28,7 +29,11 @@ from grackle.python_runtime.live_buffer import (
     trace_buffer_seconds,
     trim_ring_buffer,
 )
-from grackle.python_runtime.recording_sink import RecordingSink, sweep_orphaned_recordings
+from grackle.python_runtime.recording_sink import (
+    RecordingSink,
+    is_safe_session_id,
+    sweep_orphaned_recordings,
+)
 
 if TYPE_CHECKING:
     from grackle.adapters.base import StaticGraph, TraceEvent
@@ -386,8 +391,27 @@ async def _receive_loop(
                             await recorder.finalize()
                             recorder = None
                         sid = envelope["payload"].get("session_id")
-                        if isinstance(sid, str) and sid and sid != file_session_id:
-                            recorder = RecordingSink(recordings_dir, sid, store, recording_language)
+                        if not (
+                            isinstance(sid, str)
+                            and sid
+                            and sid != file_session_id
+                            and is_safe_session_id(sid)
+                        ):
+                            log.warning(
+                                "recording sink: skipping session with invalid/unsafe session_id",
+                                session_id=sid if isinstance(sid, str) else repr(sid),
+                            )
+                        else:
+                            try:
+                                recorder = RecordingSink(
+                                    recordings_dir, sid, store, recording_language
+                                )
+                            except FileExistsError:
+                                log.warning(
+                                    "recording sink: session_id already being recorded by "
+                                    "another connection — skipping",
+                                    session_id=sid,
+                                )
                     elif etype == "trace_event":
                         if recorder is not None:
                             payload = envelope["payload"]
@@ -458,16 +482,10 @@ async def serve(
     recordings_dir: Path | None = None
     recording_language = "python"
     if store is not None:
-        from grackle.adapters import registry
-
         recordings_dir = store.db_path.parent / "recordings"
         recordings_dir.mkdir(parents=True, exist_ok=True)
         sweep_orphaned_recordings(recordings_dir)
-        try:
-            detected = registry.detect(root_real)
-            recording_language = detected[0] if detected else "python"
-        except Exception:
-            recording_language = "python"
+        recording_language = detect_language(root_real)
 
     # File-replay mode: build the index + aggregates once in a single pass so
     # every connection can seek and query without re-scanning.  The session_id

@@ -604,3 +604,30 @@ async def test_replay_source_not_self_recorded(free_port: int, tmp_path: Path) -
     assert len(sessions) == 1  # only the replay-file's register_trace_source row
     assert sessions[0].source_path == str(trace_source.resolve())
     assert not recordings_dir.exists() or list(recordings_dir.glob("*.jsonl")) == []
+
+
+async def test_duplicate_session_id_second_producer_skipped(
+    store_server: tuple[int, SessionStore, Path],
+) -> None:
+    """Two producers racing to record the same session_id must not corrupt
+    each other -- the second is skipped (FileExistsError caught), the first
+    completes normally."""
+    port, store, recordings_dir = store_server
+
+    async with (
+        connect(f"ws://127.0.0.1:{port}") as producer_a,
+        connect(f"ws://127.0.0.1:{port}") as producer_b,
+    ):
+        await producer_a.send(_make_session_start("rec-dup"))
+        await producer_b.send(_make_session_start("rec-dup"))
+        await producer_a.send(_make_trace_event(0))
+        await producer_a.send(_make_session_end("rec-dup", count=1))
+        await asyncio.sleep(0.1)
+
+    meta = store.get_session("rec-dup")
+    assert meta is not None
+    assert meta.event_count == 1
+
+    final = recordings_dir / "rec-dup.jsonl"
+    assert final.exists()
+    assert not (recordings_dir / "rec-dup.jsonl.part").exists()

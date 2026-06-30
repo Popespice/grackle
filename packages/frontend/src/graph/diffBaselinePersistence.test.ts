@@ -87,4 +87,23 @@ describe("diffBaselinePersistence", () => {
       JSON.stringify(baseline)
     );
   });
+
+  it.each([
+    ["an array", "[1,2,3]"],
+    ["a number", "42"],
+    ["a string", '"oops"'],
+    ["null", "null"],
+    ["an object with non-number values", '{"a":"x"}'],
+    ["an object with a NaN-producing value", '{"a":null}'],
+  ])("restore rejects valid-but-wrong-shape JSON (%s)", async (_label, json) => {
+    const key = `grackle:diff-baseline:${await graphCacheKey(GRAPH_A)}`;
+    sessionStorage.setItem(key, json);
+    expect(await restoreBaseline(GRAPH_A)).toBeNull();
+  });
+
+  it("restore accepts an empty object as a valid (empty) baseline", async () => {
+    const key = `grackle:diff-baseline:${await graphCacheKey(GRAPH_A)}`;
+    sessionStorage.setItem(key, "{}");
+    expect(await restoreBaseline(GRAPH_A)).toEqual({});
+  });
 });

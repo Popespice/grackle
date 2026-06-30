@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+import os
+import time
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
+
+import pytest
 
 from grackle.python_runtime.jsonl_index import JsonlIndex
-from grackle.python_runtime.recording_sink import RecordingSink, sweep_orphaned_recordings
+from grackle.python_runtime.recording_sink import (
+    RecordingSink,
+    is_safe_session_id,
+    sweep_orphaned_recordings,
+)
 from grackle.python_runtime.writer import read_jsonl
 from grackle.session_store import SessionStore
 
@@ -22,6 +31,34 @@ def _payload(i: int) -> dict[str, Any]:
         "frame_depth": 0,
         "metadata": {"count": 1},
     }
+
+
+class _FlakyFile:
+    """Proxies a real file handle; write() raises once `fail_after` good
+    writes have gone through, so the prefix already on disk is genuine."""
+
+    def __init__(self, real: Any, fail_after: int) -> None:
+        self._real = real
+        self._fail_after = fail_after
+        self._calls = 0
+
+    def write(self, data: str) -> int:
+        self._calls += 1
+        if self._calls > self._fail_after:
+            raise OSError("disk full")
+        return int(self._real.write(data))
+
+    def tell(self) -> int:
+        return int(self._real.tell())
+
+    def seek(self, pos: int, whence: int = 0) -> int:
+        return int(self._real.seek(pos, whence))
+
+    def truncate(self, size: int | None = None) -> int:
+        return int(self._real.truncate(size))
+
+    def close(self) -> None:
+        self._real.close()
 
 
 async def test_write_then_finalize_creates_jsonl_and_row(tmp_path: Path) -> None:
@@ -79,25 +116,96 @@ async def test_finalize_zero_events_skips_save(tmp_path: Path) -> None:
     store.close()
 
 
-async def test_write_error_disables_sink_no_raise(tmp_path: Path) -> None:
+async def test_broken_write_on_first_event_discards(tmp_path: Path) -> None:
+    """A write failure before any event was successfully written has
+    nothing to salvage -- finalize takes the discard branch."""
     store = SessionStore.open(tmp_path / "sessions.db")
     recordings_dir = tmp_path / "recordings"
     recordings_dir.mkdir()
 
-    sink = RecordingSink(recordings_dir, "sess-3", store, "python")
+    sink = RecordingSink(recordings_dir, "sess-empty-break", store, "python")
+    sink._f = _FlakyFile(sink._f, fail_after=0)  # type: ignore[assignment]
+
+    sink.write(_payload(0))  # raises immediately; swallowed, no events recorded
+    assert sink._event_count == 0
+    assert sink._broken is True
+
+    await sink.finalize()
+
+    assert store.get_session("sess-empty-break") is None
+    assert not (recordings_dir / "sess-empty-break.jsonl").exists()
+    assert not (recordings_dir / "sess-empty-break.jsonl.part").exists()
+    store.close()
+
+
+async def test_broken_write_after_events_salvages_prior_events(tmp_path: Path) -> None:
+    """A write failure after N good events salvages those N events instead
+    of discarding the whole recording."""
+    store = SessionStore.open(tmp_path / "sessions.db")
+    recordings_dir = tmp_path / "recordings"
+    recordings_dir.mkdir()
+
+    sink = RecordingSink(recordings_dir, "sess-salvage", store, "python")
+    sink._f = _FlakyFile(sink._f, fail_after=2)  # type: ignore[assignment]
+
+    sink.write(_payload(0))
+    sink.write(_payload(1))
+    sink.write(_payload(2))  # raises -- events 0 and 1 are already on disk
+    assert sink._event_count == 2
+    assert sink._broken is True
+
+    await sink.finalize()
+
+    final = recordings_dir / "sess-salvage.jsonl"
+    assert final.exists()
+    assert not (recordings_dir / "sess-salvage.jsonl.part").exists()
+
+    events = read_jsonl(final)
+    assert len(events) == 2
+    assert events[0]["node_id"] == "script.py:func_0"
+    assert events[1]["node_id"] == "script.py:func_1"
+
+    meta = store.get_session("sess-salvage")
+    assert meta is not None
+    assert meta.event_count == 2
+    store.close()
+
+
+async def test_save_session_failure_does_not_raise(tmp_path: Path) -> None:
+    """A transient store error during finalize's save_session must not
+    propagate -- the file still lands even though the row doesn't."""
+    store = SessionStore.open(tmp_path / "sessions.db")
+    recordings_dir = tmp_path / "recordings"
+    recordings_dir.mkdir()
+
+    sink = RecordingSink(recordings_dir, "sess-db-fail", store, "python")
     sink.write(_payload(0))
 
-    class _Boom:
-        def write(self, _data: str) -> int:
-            raise OSError("disk full")
+    def _boom_save(meta: object) -> None:
+        raise RuntimeError("database is locked")
 
-    sink._f = _Boom()  # type: ignore[assignment]
-    sink.write(_payload(1))  # must swallow, not raise
+    store.save_session = _boom_save  # type: ignore[method-assign]
 
-    await sink.finalize()  # broken sink -> no DB row, no leftover files
-    assert store.get_session("sess-3") is None
-    assert not (recordings_dir / "sess-3.jsonl").exists()
-    assert not (recordings_dir / "sess-3.jsonl.part").exists()
+    await sink.finalize()  # must not raise
+
+    final = recordings_dir / "sess-db-fail.jsonl"
+    assert final.exists()
+    store.close()
+
+
+def test_duplicate_session_id_raises_file_exists_error(tmp_path: Path) -> None:
+    """Two RecordingSinks for the same session_id must not silently
+    truncate each other's file -- the second open fails loudly."""
+    store = SessionStore.open(tmp_path / "sessions.db")
+    recordings_dir = tmp_path / "recordings"
+    recordings_dir.mkdir()
+
+    first = RecordingSink(recordings_dir, "sess-dup", store, "python")
+    try:
+        with pytest.raises(FileExistsError):
+            RecordingSink(recordings_dir, "sess-dup", store, "python")
+    finally:
+        first._f.close()
     store.close()
 
 
@@ -137,18 +245,54 @@ async def test_tmp_uses_name_append_not_with_suffix(tmp_path: Path) -> None:
     store.close()
 
 
-def test_sweep_orphaned_recordings_removes_part_files(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("session_id", "expected"),
+    [
+        ("a1b2c3", True),
+        ("", False),
+        (".", False),
+        ("..", False),
+        ("../escape", False),
+        ("a/b", False),
+        ("a\\b", False),
+        ("a\x00b", False),
+    ],
+)
+def test_is_safe_session_id(session_id: str, expected: bool) -> None:
+    assert is_safe_session_id(session_id) is expected
+
+
+def test_is_safe_session_id_accepts_uuid4() -> None:
+    assert is_safe_session_id(str(uuid4())) is True
+
+
+def test_sweep_orphaned_recordings_removes_old_part_files(tmp_path: Path) -> None:
     recordings_dir = tmp_path / "recordings"
     recordings_dir.mkdir()
     orphan = recordings_dir / "dead-session.jsonl.part"
     orphan.write_text('{"event": "call"}\n', encoding="utf-8")
+    old_time = time.time() - 3600
+    os.utime(orphan, (old_time, old_time))
     keep = recordings_dir / "finished.jsonl"
     keep.write_text('{"event": "call"}\n', encoding="utf-8")
 
-    sweep_orphaned_recordings(recordings_dir)
+    sweep_orphaned_recordings(recordings_dir, min_age_s=30.0)
 
     assert not orphan.exists()
     assert keep.exists()
+
+
+def test_sweep_orphaned_recordings_keeps_fresh_part_files(tmp_path: Path) -> None:
+    """A .part younger than min_age_s is left alone -- it may belong to a
+    concurrently-starting recording, not a hard-killed one."""
+    recordings_dir = tmp_path / "recordings"
+    recordings_dir.mkdir()
+    fresh = recordings_dir / "in-progress.jsonl.part"
+    fresh.write_text('{"event": "call"}\n', encoding="utf-8")
+
+    sweep_orphaned_recordings(recordings_dir, min_age_s=30.0)
+
+    assert fresh.exists()
 
 
 def test_sweep_orphaned_recordings_missing_dir_is_noop(tmp_path: Path) -> None:

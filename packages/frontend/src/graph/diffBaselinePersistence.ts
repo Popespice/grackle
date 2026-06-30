@@ -18,6 +18,16 @@ function keyFor(graph: Graph): Promise<string> {
   return graphCacheKey(graph).then((hash) => KEY_PREFIX + hash);
 }
 
+/** True if `value` is a plain object mapping node ids to finite counts. */
+function isBaseline(value: unknown): value is Record<string, number> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  return Object.values(value).every(
+    (v) => typeof v === "number" && Number.isFinite(v)
+  );
+}
+
 export async function persistBaseline(
   graph: Graph,
   baseline: Record<string, number> | null
@@ -44,7 +54,8 @@ export async function restoreBaseline(
     const key = await keyFor(graph);
     const raw = sessionStorage.getItem(key);
     if (raw === null) return null;
-    return JSON.parse(raw) as Record<string, number>;
+    const parsed: unknown = JSON.parse(raw);
+    return isBaseline(parsed) ? parsed : null;
   } catch {
     return null;
   }

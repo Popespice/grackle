@@ -323,4 +323,51 @@ describe("DiffPanel baseline persistence", () => {
     expect(useGraphStore.getState().diffBaseline).toBeNull();
     spy.mockRestore();
   });
+
+  it("restoring a baseline also enables the overlay (mirrors 'Set as baseline')", async () => {
+    const key = `grackle:diff-baseline:${await graphCacheKey(SIMPLE_GRAPH)}`;
+    sessionStorage.setItem(key, JSON.stringify({ a: 7 }));
+
+    useGraphStore.setState({
+      traceSessionId: "s1",
+      graph: SIMPLE_GRAPH,
+      agentHeat: { a: 7 },
+    });
+    render(<DiffPanel />);
+
+    await waitFor(() =>
+      expect(useGraphStore.getState().diffBaseline).toEqual({ a: 7 })
+    );
+    // The "Set as baseline" handler flips this to "Hide overlay" and the
+    // restore path must do the same -- otherwise a baseline restored after
+    // F5 leaves the graph unpainted even though the panel says trace-vs-trace.
+    expect(screen.getByRole("button", { name: /hide overlay/i })).toBeTruthy();
+    await waitFor(() =>
+      expect(useGraphStore.getState().diffOverlay).not.toBeNull()
+    );
+  });
+
+  it("rapid Set-then-Clear does not leave a stale baseline in sessionStorage", async () => {
+    useGraphStore.setState({
+      traceSessionId: "s1",
+      graph: SIMPLE_GRAPH,
+      agentHeat: { a: 4 },
+    });
+    render(<DiffPanel />);
+    const key = `grackle:diff-baseline:${await graphCacheKey(SIMPLE_GRAPH)}`;
+
+    // Click Set then immediately Clear, with no await between them, so the
+    // two persistBaseline calls race unless the panel serializes them.
+    fireEvent.click(screen.getByRole("button", { name: /set as baseline/i }));
+    fireEvent.click(screen.getByRole("button", { name: /clear baseline/i }));
+
+    await waitFor(() =>
+      expect(useGraphStore.getState().diffBaseline).toBeNull()
+    );
+    // Give both queued persist writes time to settle, then assert the key
+    // reflects the LAST click (cleared), not whichever write happened to
+    // resolve its hash computation last.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(sessionStorage.getItem(key)).toBeNull();
+  });
 });
