@@ -10,6 +10,12 @@ Node ID scheme (ADR-0005):
   function → <file-id>:<func-name>            e.g. utils.py:hash_password
   method   → <file-id>:<class-qualname>.<name> e.g. services/auth.py:AuthService.login
   closure  → <file-id>:<parent-qualname>.<name>.<lineno>
+
+This scheme is name-based, so two distinct ``def``s/``class``es can compute
+the same base ID (a ``@property`` getter/setter pair, ``@overload`` stubs,
+a conditionally-redefined symbol). ``GraphBuilder.add_node`` disambiguates
+on collision by suffixing ``.<lineno>``, mirroring the closure scheme above
+— see its docstring for the full rule (including the @overload special case).
 """
 
 from __future__ import annotations
@@ -76,23 +82,6 @@ def _is_type_checking_guard(test: ast.expr) -> bool:
     return isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"
 
 
-def _is_overload_decorated(decorator_list: list[ast.expr]) -> bool:
-    """Return True for ``@overload`` or ``@typing.overload``.
-
-    PEP 484 overload stubs share their name with the real implementation
-    that follows them and carry no executable body (``...``) — emitting a
-    node per stub would collide with the implementation's node ID (and with
-    each other) since the node-ID scheme (ADR-0005) is name-based, not
-    signature-based.
-    """
-    for d in decorator_list:
-        if isinstance(d, ast.Name) and d.id == "overload":
-            return True
-        if isinstance(d, ast.Attribute) and d.attr == "overload":
-            return True
-    return False
-
-
 def _extract_platform_condition(test: ast.expr) -> str | None:
     """Return the platform string for ``if sys.platform == "<s>":`` or None."""
     if not isinstance(test, ast.Compare):
@@ -120,27 +109,74 @@ def _extract_platform_condition(test: ast.expr) -> str | None:
 # ---------------------------------------------------------------------------
 
 
+def _is_overload_node(node: GraphNode) -> bool:
+    """Best-effort check for a PEP 484 ``@overload``-decorated definition.
+
+    Used only to prefer a real implementation as the canonical (un-suffixed)
+    node when an overload stub and its implementation collide on the same
+    base ID — see ``GraphBuilder.add_node``. A name match on "overload" is
+    best-effort per ADR-0004, not a guarantee: an unrelated decorator
+    literally named ``overload`` would also match, but the worst outcome is
+    a less-ideal canonical-node choice, never data loss — every definition
+    still gets a node either way.
+    """
+    decorators = node.get("metadata", {}).get("decorators", [])
+    return any(d == "overload" or d.endswith(".overload") for d in decorators)
+
+
 class GraphBuilder:
     """Accumulates graph nodes and edges for a single file traversal."""
 
     def __init__(self) -> None:
         self.nodes: list[GraphNode] = []
         self.edges: list[GraphEdge] = []
-        self._node_ids: set[str] = set()
+        self._node_index: dict[str, int] = {}
 
-    def add_node(self, node: GraphNode) -> None:
-        # Node IDs are name-based (ADR-0005), so two distinct ``def``s can
-        # legitimately share an ID — e.g. a ``@property`` getter and its
-        # ``.setter``/``.deleter``, or a conditionally-redefined class. Keep
-        # the first definition seen; later ones still contribute their call
-        # edges (FunctionVisitor emits those unconditionally), just not a
-        # second node under the same ID. Without this, graphology's
-        # ``addNode`` throws on the duplicate client-side (the static graph
-        # contract requires unique node IDs).
-        if node["id"] in self._node_ids:
-            return
-        self._node_ids.add(node["id"])
+    def add_node(self, node: GraphNode) -> str:
+        """Append *node* and return the ID it was actually stored under.
+
+        Node IDs are name-based (ADR-0005), so two distinct ``def``s can
+        legitimately share a base ID — e.g. a ``@property`` getter and its
+        ``.setter``/``.deleter``, PEP 484 ``@overload`` stubs and their
+        implementation, or a conditionally-redefined function/class. Every
+        definition still gets its own node — silently dropping one would
+        both hide a real symbol from the graph and (for the property-accessor
+        case) break runtime trace attribution, since the ``NodeResolver``
+        indexes nodes by ``(path, line)`` and a dropped node's line becomes
+        unresolvable.
+
+        On a collision, the new node is suffixed with its own line number,
+        mirroring the closure disambiguation scheme already used for nested
+        functions (``<parent-qualname>.<name>.<lineno>``) — UNLESS the node
+        already occupying the base ID is an ``@overload`` stub and the new
+        one isn't, in which case the *stub* is demoted (suffixed) instead,
+        so the canonical (un-suffixed) node always points at executable
+        code rather than a type-checker-only placeholder.
+
+        Without this, graphology's ``addNode`` throws client-side on the
+        duplicate (the static graph contract requires unique node IDs).
+        """
+        base_id = node["id"]
+        existing_idx = self._node_index.get(base_id)
+        if existing_idx is None:
+            self._node_index[base_id] = len(self.nodes)
+            self.nodes.append(node)
+            return base_id
+
+        current = self.nodes[existing_idx]
+        if _is_overload_node(current) and not _is_overload_node(node):
+            demoted_id = f"{base_id}.{current.get('line', 0)}"
+            current["id"] = demoted_id
+            self._node_index[demoted_id] = existing_idx
+            self._node_index[base_id] = len(self.nodes)
+            self.nodes.append(node)
+            return base_id
+
+        suffixed_id = f"{base_id}.{node.get('line', 0)}"
+        node["id"] = suffixed_id
+        self._node_index[suffixed_id] = len(self.nodes)
         self.nodes.append(node)
+        return suffixed_id
 
     def add_edge(self, edge: GraphEdge) -> None:
         self.edges.append(edge)
@@ -330,15 +366,6 @@ class FunctionVisitor(ast.NodeVisitor):
         self._emit(node, is_async=True)
 
     def _emit(self, node: ast.FunctionDef | ast.AsyncFunctionDef, is_async: bool) -> None:
-        # @overload stubs are type-checker-only declarations with a ``...``
-        # body, immediately followed by the real (undecorated) implementation
-        # under the same name — skip them entirely so the implementation's
-        # node carries the meaningful line/decorators/call-edges instead of
-        # whichever overload happened to come first. See
-        # ``_is_overload_decorated``.
-        if _is_overload_decorated(node.decorator_list):
-            return
-
         # Qualname rules:
         # - top-level function  (no parent): "<name>"
         # - method              (parent + node_kind="method"): "<parent>.<name>"
@@ -360,7 +387,7 @@ class FunctionVisitor(ast.NodeVisitor):
         # to the file-node ID at trace time.
         first_line = node.decorator_list[0].lineno if node.decorator_list else node.lineno
 
-        self._builder.add_node(
+        actual_id = self._builder.add_node(
             {
                 "id": node_id,
                 "kind": self._node_kind,
@@ -375,8 +402,10 @@ class FunctionVisitor(ast.NodeVisitor):
             }
         )
 
-        # Emit unresolved call edges from this function's body.
-        call_vis = _CallVisitor(self._file_id, node_id, self._builder)
+        # Emit unresolved call edges from this function's body, attributed to
+        # whichever ID add_node actually stored this definition under (may
+        # differ from node_id on a same-name collision — see add_node).
+        call_vis = _CallVisitor(self._file_id, actual_id, self._builder)
         for stmt in node.body:
             call_vis.visit(stmt)
 
@@ -415,7 +444,7 @@ class ClassVisitor(ast.NodeVisitor):
         # ``co_firstlineno`` at runtime.
         first_line = node.decorator_list[0].lineno if node.decorator_list else node.lineno
 
-        self._builder.add_node(
+        actual_id = self._builder.add_node(
             {
                 "id": class_id,
                 "kind": "class",
@@ -436,12 +465,12 @@ class ClassVisitor(ast.NodeVisitor):
             target_id = self._resolve_local(base_name)
             if target_id is not None:
                 self._builder.add_edge(
-                    {"source": class_id, "target": target_id, "kind": "inherit", "metadata": {}}
+                    {"source": actual_id, "target": target_id, "kind": "inherit", "metadata": {}}
                 )
             else:
                 self._builder.add_edge(
                     {
-                        "source": class_id,
+                        "source": actual_id,
                         "target": base_name,
                         "kind": "inherit",
                         "metadata": {"resolved": False},
