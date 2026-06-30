@@ -15,12 +15,12 @@
     "prepare": "lefthook install && pnpm codegen"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.0.0",
-    "@commitlint/cli": "^19.0.0",
-    "@commitlint/config-conventional": "^19.0.0",
-    "concurrently": "^9.0.0",
-    "json-schema-to-typescript": "^14.0.0",
-    "lefthook": "^1.0.0",
+    "@biomejs/biome": "^2.5.1",
+    "@commitlint/cli": "^21.2.0",
+    "@commitlint/config-conventional": "^21.2.0",
+    "concurrently": "^10.0.3",
+    "json-schema-to-typescript": "^15.0.4",
+    "lefthook": "^2.1.9",
     "typescript": "^6.0.3"
   }
 }
