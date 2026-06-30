@@ -31,6 +31,14 @@ export function buildGraphology(graph: Graph): GrackleMultiGraph {
   const g = new MultiDirectedGraph<NodeAttributes, EdgeAttributes>();
 
   for (const node of graph.nodes) {
+    // Guard against duplicate node IDs. The static graph contract requires
+    // uniqueness, but adapters can still emit a collision (e.g. a Python
+    // @property getter/setter pair sharing a name) — graphology's addNode
+    // throws on a repeat, which would otherwise crash the whole canvas.
+    if (g.hasNode(node.id)) {
+      console.warn(`buildGraphology: duplicate node id "${node.id}", skipping`);
+      continue;
+    }
     g.addNode(node.id, {
       kind: node.kind,
       name: node.name,

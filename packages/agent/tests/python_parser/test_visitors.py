@@ -168,6 +168,84 @@ def test_decorator_chain_property() -> None:
     assert "property" in method["metadata"]["decorators"]
 
 
+def test_property_setter_does_not_duplicate_node() -> None:
+    # Getter + setter share a name (and therefore a node ID per ADR-0005).
+    # Regression guard for the GraphCanvas crash: graphology's addNode
+    # throws on a duplicate ID, so the static graph must emit exactly one
+    # node per ID even when Python allows multiple defs with that name.
+    b = _visit(
+        """
+        class Foo:
+            @property
+            def bar(self):
+                return self._bar
+
+            @bar.setter
+            def bar(self, value):
+                self._bar = value
+        """
+    )
+    methods = [n for n in _nodes(b, "method") if n["name"] == "bar"]
+    assert len(methods) == 1
+    # First definition (the getter) wins.
+    assert "property" in methods[0]["metadata"]["decorators"]
+
+
+def test_property_setter_call_edges_still_captured() -> None:
+    # The setter's body is still visited for call edges, attributed to the
+    # shared (deduplicated) node ID, even though it contributes no node.
+    b = _visit(
+        """
+        class Foo:
+            @property
+            def bar(self):
+                return self._bar
+
+            @bar.setter
+            def bar(self, value):
+                validate(value)
+        """
+    )
+    calls = _edges(b, "call")
+    assert any(e["source"] == "test.py:Foo.bar" and e["target"] == "validate" for e in calls)
+
+
+def test_overload_stub_not_emitted() -> None:
+    b = _visit(
+        """
+        from typing import overload
+
+        class Foo:
+            @overload
+            def get(self, key: str) -> str: ...
+            @overload
+            def get(self, key: str, default: str) -> str: ...
+            def get(self, key, default=None):
+                return self._d.get(key, default)
+        """
+    )
+    methods = [n for n in _nodes(b, "method") if n["name"] == "get"]
+    assert len(methods) == 1
+    # The canonical node is the real implementation, not a stub.
+    assert "overload" not in methods[0]["metadata"]["decorators"]
+
+
+def test_typing_overload_attribute_form_not_emitted() -> None:
+    b = _visit(
+        """
+        import typing
+
+        class Foo:
+            @typing.overload
+            def get(self, key: str) -> str: ...
+            def get(self, key):
+                return self._d[key]
+        """
+    )
+    methods = [n for n in _nodes(b, "method") if n["name"] == "get"]
+    assert len(methods) == 1
+
+
 def test_closure_qualname_includes_line() -> None:
     # Nested functions follow the closure scheme: <parent>.<name>.<line>.
     # Regression guard: ensure the line suffix appears exactly once, not duplicated.

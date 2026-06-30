@@ -76,6 +76,23 @@ def _is_type_checking_guard(test: ast.expr) -> bool:
     return isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"
 
 
+def _is_overload_decorated(decorator_list: list[ast.expr]) -> bool:
+    """Return True for ``@overload`` or ``@typing.overload``.
+
+    PEP 484 overload stubs share their name with the real implementation
+    that follows them and carry no executable body (``...``) — emitting a
+    node per stub would collide with the implementation's node ID (and with
+    each other) since the node-ID scheme (ADR-0005) is name-based, not
+    signature-based.
+    """
+    for d in decorator_list:
+        if isinstance(d, ast.Name) and d.id == "overload":
+            return True
+        if isinstance(d, ast.Attribute) and d.attr == "overload":
+            return True
+    return False
+
+
 def _extract_platform_condition(test: ast.expr) -> str | None:
     """Return the platform string for ``if sys.platform == "<s>":`` or None."""
     if not isinstance(test, ast.Compare):
@@ -109,8 +126,20 @@ class GraphBuilder:
     def __init__(self) -> None:
         self.nodes: list[GraphNode] = []
         self.edges: list[GraphEdge] = []
+        self._node_ids: set[str] = set()
 
     def add_node(self, node: GraphNode) -> None:
+        # Node IDs are name-based (ADR-0005), so two distinct ``def``s can
+        # legitimately share an ID — e.g. a ``@property`` getter and its
+        # ``.setter``/``.deleter``, or a conditionally-redefined class. Keep
+        # the first definition seen; later ones still contribute their call
+        # edges (FunctionVisitor emits those unconditionally), just not a
+        # second node under the same ID. Without this, graphology's
+        # ``addNode`` throws on the duplicate client-side (the static graph
+        # contract requires unique node IDs).
+        if node["id"] in self._node_ids:
+            return
+        self._node_ids.add(node["id"])
         self.nodes.append(node)
 
     def add_edge(self, edge: GraphEdge) -> None:
@@ -301,6 +330,15 @@ class FunctionVisitor(ast.NodeVisitor):
         self._emit(node, is_async=True)
 
     def _emit(self, node: ast.FunctionDef | ast.AsyncFunctionDef, is_async: bool) -> None:
+        # @overload stubs are type-checker-only declarations with a ``...``
+        # body, immediately followed by the real (undecorated) implementation
+        # under the same name — skip them entirely so the implementation's
+        # node carries the meaningful line/decorators/call-edges instead of
+        # whichever overload happened to come first. See
+        # ``_is_overload_decorated``.
+        if _is_overload_decorated(node.decorator_list):
+            return
+
         # Qualname rules:
         # - top-level function  (no parent): "<name>"
         # - method              (parent + node_kind="method"): "<parent>.<name>"
