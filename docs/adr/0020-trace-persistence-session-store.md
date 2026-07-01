@@ -55,7 +55,7 @@ New CLI option on the `serve` command.  When provided:
 
 **Concurrency.**  `session_list` / `session_load` (and the startup write) are serialized through a `threading.Lock` inside `SessionStore` and the read paths are offloaded to `run_in_executor`, so SQLite is never touched concurrently and never blocks the event loop.
 
-Auto-saving a *live* `--stream` producer (rather than a replay file) is still future work: it needs the server to record the producer's event stream to its own JSONL file on `trace_session_end`.  The schema and store fully support it; only the recording sink is unimplemented.
+~~Auto-saving a *live* `--stream` producer (rather than a replay file) is still future work~~ — implemented in Phase 9.3; see the Amendment section below.
 
 ### New message types
 
@@ -84,6 +84,14 @@ Behaviour:
 
 ---
 
+## Amendment — Phase 9.3 (2026-06-30)
+
+The live-stream recording sink deferred above is now implemented: `packages/agent/src/grackle/python_runtime/recording_sink.py` (`RecordingSink`).  When `serve --store PATH` is active, every inbound producer session (`trace_session_start` / `trace_event*` / `trace_session_end`) is tee'd to `<store_dir>/recordings/<session_id>.jsonl` and registered via the existing `save_session` — no wire-schema change, the sink only consumes the three message types ADR-0014 already defined.
+
+Finalization (close the `.jsonl.part`, atomically `Path.replace()` it, and call `save_session`) fires on whichever of three events happens first: a clean `trace_session_end`, the producer's WebSocket disconnecting without one (handled in `_receive_loop`'s `finally`), or the server itself shutting down mid-stream (the `finally` finalize is wrapped in `asyncio.shield` so the outer cancellation cannot tear the close+rename before it completes). A zero-event session (producer connected and dropped before any `trace_event`) is finalized to a deleted, unregistered file rather than polluting the library with an unloadable row. A startup sweep (`sweep_orphaned_recordings`) removes `.part` files left behind by a prior hard kill.
+
+This closes the negative/known-limit item below — "auto-saving a live `--stream` producer to the store is not yet wired" no longer applies.
+
 ## Consequences
 
 **Positive:**
@@ -91,8 +99,8 @@ Behaviour:
 - Zero new runtime dependencies — `sqlite3` is stdlib.
 - `session_load_request` reuses the existing seekable-session machinery end-to-end — loaded sessions get full seek **and** aggregate-query support, not a degraded subset.
 - `serve --store --trace-source` populates the library out of the box, so the feature is usable end-to-end (not just an unwired flag).
+- **(Phase 9.3)** Live `--stream` sessions are now auto-recorded and registered without any extra flag beyond `--store` — see the Amendment above.
 
 **Negative / known limits:**
-- Auto-saving a *live* `--stream` producer to the store is not yet wired (only replay/trace-source files are indexed).  The store and schema support it; only the server-side recording sink is unimplemented.  Until then, capture a live run with `--stream --output FILE` and serve that file with `--store --trace-source FILE`.
 - The store stores `source_path` as whatever string the caller provides.  On Windows this may be an absolute path with drive letter; the cross-platform implications are noted but not guarded — the load path uses `Path(meta.source_path)` which handles both.
-- No retention policy or size cap on the database.  At ~200 bytes per session record (metadata only, not blobs), 1M sessions = ~200 MB — acceptable for local-first use.
+- No retention policy or size cap on the database.  At ~200 bytes per session record (metadata only, not blobs), 1M sessions = ~200 MB — acceptable for local-first use.  The same applies to the new `recordings/` directory of JSONL files — no retention/cleanup policy beyond the startup orphan-`.part` sweep.

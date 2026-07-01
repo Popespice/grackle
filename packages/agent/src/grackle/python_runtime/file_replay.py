@@ -155,6 +155,35 @@ async def load_stored_session(
     await replay_trace(ws, path, False, session_id, seekable=True, total_events=len(idx))
 
 
+def detect_language(root: Path) -> str:
+    """Best-effort single-language guess for a project root.
+
+    Used to label a registered session when there is no other source of
+    truth for which language produced it — the live-stream wire protocol
+    carries no language field (no wire-schema change, Phase 9.3). When
+    multiple languages are detected in *root*, the alphabetically-first one
+    is used and a warning is logged so a mislabeled polyglot session is
+    diagnosable rather than silently wrong.
+    """
+    from grackle.adapters import registry
+
+    try:
+        detected = registry.detect(root)
+    except Exception:
+        return "python"
+    if not detected:
+        return "python"
+    if len(detected) > 1:
+        log.warning(
+            "language detection ambiguous for session registration — multiple "
+            "languages found, using the alphabetically-first as a heuristic",
+            root=str(root),
+            detected=detected,
+            chosen=detected[0],
+        )
+    return detected[0]
+
+
 def register_trace_source(
     store: SessionStore,
     trace_source: Path,
@@ -169,7 +198,6 @@ def register_trace_source(
     accumulating duplicates.  ``source_path`` is the absolute local path read
     back via ``Path`` at load time.
     """
-    from grackle.adapters import registry
     from grackle.session_store import SessionMeta
 
     abspath = str(trace_source.resolve())
@@ -177,11 +205,6 @@ def register_trace_source(
         mtime_ns = trace_source.stat().st_mtime_ns
     except OSError:
         mtime_ns = 0
-    try:
-        detected = registry.detect(root)
-        language = detected[0] if detected else "python"
-    except Exception:
-        language = "python"
     store.save_session(
         SessionMeta(
             id=str(uuid5(NAMESPACE_URL, abspath)),
@@ -190,6 +213,6 @@ def register_trace_source(
             ended_ns=mtime_ns,
             source_path=abspath,
             event_count=len(index),
-            language=language,
+            language=detect_language(root),
         )
     )

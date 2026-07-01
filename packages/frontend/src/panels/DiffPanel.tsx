@@ -23,7 +23,7 @@
  */
 
 import type { JSX } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { DiffStatus } from "../graph/diff";
 import {
   DIFF_STATUS_COLORS,
@@ -33,6 +33,10 @@ import {
   diffTraceVsTrace,
   hasRegression,
 } from "../graph/diff";
+import {
+  persistBaseline,
+  restoreBaseline,
+} from "../graph/diffBaselinePersistence";
 import { useGraphStore } from "../graph/useGraphStore";
 import { useRuntimeCoverage } from "../graph/useRuntimeCoverage";
 
@@ -136,6 +140,21 @@ export function DiffPanel(): JSX.Element | null {
   // the user opts in via the toggle, and setting a baseline auto-enables it.
   const [overlayEnabled, setOverlayEnabled] = useState(false);
 
+  // Serializes persistBaseline calls in click order. Set/Clear both call
+  // persistBaseline, which is itself async (awaits a SHA-256 digest); two
+  // un-awaited calls in quick succession could otherwise land out of order
+  // and leave sessionStorage holding a baseline the user just cleared (or
+  // vice versa).
+  const persistQueueRef = useRef<Promise<void>>(Promise.resolve());
+
+  // Whether a baseline has already been restored on THIS mount. The restore
+  // effect re-fires on every static_graph re-push (setGraph nulls the
+  // baseline, then we re-apply it); we only auto-enable the overlay on the
+  // FIRST restore so a routine re-push can't override a user who has since
+  // toggled the overlay off. A real reload remounts the component and resets
+  // this ref, so F5 still restores the painted view.
+  const didAutoEnableOverlayRef = useRef(false);
+
   // Current node->count snapshot: prefer agent heat (accurate for seekable
   // sessions), fall back to local event counting.
   const currentCounts = useMemo<Record<string, number>>(() => {
@@ -184,6 +203,34 @@ export function DiffPanel(): JSX.Element | null {
       clearDiffOverlay();
     };
   }, [clearDiffOverlay]);
+
+  // Restore a persisted baseline on graph (re)load — e.g. after F5 (Phase
+  // 9.3, ADR-0021 amendment). `setGraph` always clears `diffBaseline` to
+  // null on a new static_graph push, so this effect re-fires right after
+  // that clear and re-applies the stored value for the *same* project
+  // (graphCacheKey content hash). `state.graph === graph` guards against a
+  // stale resolution from a previous graph landing after a newer graph has
+  // already replaced it; `state.diffBaseline === null` avoids clobbering a
+  // baseline the user just set. Both are read from one snapshot so they
+  // can't observe two different points in time.
+  useEffect(() => {
+    if (!graph) return;
+    restoreBaseline(graph).then((stored) => {
+      if (stored === null) return;
+      const state = useGraphStore.getState();
+      if (state.graph === graph && state.diffBaseline === null) {
+        setDiffBaseline(stored);
+        // Mirror "Set as baseline": a restored baseline is something the
+        // user previously asked to see painted, so restore the overlay too —
+        // but only on the first restore of this mount, so a later graph
+        // re-push doesn't override a user who has since hidden the overlay.
+        if (!didAutoEnableOverlayRef.current) {
+          didAutoEnableOverlayRef.current = true;
+          setOverlayEnabled(true);
+        }
+      }
+    });
+  }, [graph, setDiffBaseline]);
 
   // Pre-filter the actionable buckets once (used by lists + empty-state checks)
   // instead of re-running entries.filter() several times during render.
@@ -236,6 +283,13 @@ export function DiffPanel(): JSX.Element | null {
               // Setting a baseline is an explicit request to see the diff —
               // turn the graph overlay on so the result is visible.
               setOverlayEnabled(true);
+              // Persist on explicit user action only (never via a store
+              // subscriber — see the restore effect above for why). Chained
+              // through the queue so a rapid Set→Clear can't land out of
+              // order (see persistQueueRef above).
+              persistQueueRef.current = persistQueueRef.current.then(() =>
+                persistBaseline(graph, currentCounts).catch(() => {})
+              );
             }}
           >
             Set as baseline
@@ -244,7 +298,12 @@ export function DiffPanel(): JSX.Element | null {
           <button
             type="button"
             style={{ ...BTN, borderColor: "#f59e0b", color: "#f59e0b" }}
-            onClick={clearDiffBaseline}
+            onClick={() => {
+              clearDiffBaseline();
+              persistQueueRef.current = persistQueueRef.current.then(() =>
+                persistBaseline(graph, null).catch(() => {})
+              );
+            }}
           >
             Clear baseline
           </button>

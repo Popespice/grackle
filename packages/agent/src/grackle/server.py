@@ -17,6 +17,7 @@ from websockets.asyncio.server import serve as _ws_serve
 from grackle import protocol
 from grackle.python_runtime.file_replay import (
     SeekableSession,
+    detect_language,
     load_stored_session,
     register_trace_source,
     replay_trace,
@@ -27,6 +28,11 @@ from grackle.python_runtime.live_buffer import (
     trace_buffer_max_events,
     trace_buffer_seconds,
     trim_ring_buffer,
+)
+from grackle.python_runtime.recording_sink import (
+    RecordingSink,
+    is_safe_session_id,
+    sweep_orphaned_recordings,
 )
 
 if TYPE_CHECKING:
@@ -166,6 +172,9 @@ async def _receive_loop(
     *,
     seekable_sessions: dict[str, SeekableSession] | None = None,
     store: SessionStore | None = None,
+    recordings_dir: Path | None = None,
+    recording_language: str = "python",
+    file_session_id: str | None = None,
 ) -> None:
     """Process inbound messages from one connection.
 
@@ -175,187 +184,260 @@ async def _receive_loop(
 
     Live-ingest messages (trace_session_start / trace_event /
     trace_session_end) are appended to the ring-buffer and broadcast to
-    all other connected consumers.
+    all other connected consumers.  When ``recordings_dir`` is set (i.e. the
+    server has a session store), each live-ingest session is also tee'd to a
+    JSONL recording and registered in the store on session end, producer
+    disconnect, or server shutdown (Phase 9.3, ADR-0020 amendment).
 
     Seek and query requests are answered only for session ids present in
     ``seekable_sessions`` — the file-replay session plus any session loaded from
     the store this server run.  Unknown ids get an error reply.
     """
     sessions = seekable_sessions if seekable_sessions is not None else {}
-    async for raw in ws:
-        try:
-            msg = raw.decode() if isinstance(raw, bytes) else raw
-        except UnicodeDecodeError:
-            continue
-        try:
-            envelope = protocol.parse_envelope(msg)
-        except protocol.InvalidEnvelope:
-            continue
+    recorder: RecordingSink | None = None
+    try:
+        async for raw in ws:
+            try:
+                msg = raw.decode() if isinstance(raw, bytes) else raw
+            except UnicodeDecodeError:
+                continue
+            try:
+                envelope = protocol.parse_envelope(msg)
+            except protocol.InvalidEnvelope:
+                continue
 
-        etype = envelope["type"]
-        if etype == "ping":
-            await ws.send(protocol.make_pong(envelope["id"]))
-        elif etype == "read_source":
-            path_val = envelope["payload"].get("path", "")
-            if not isinstance(path_val, str):
-                continue
-            source, enc_or_reason = _read_source(root_real, path_val)
-            if source is not None:
-                reply = protocol.make_source_response(
-                    envelope["id"], path_val, source, enc_or_reason
-                )
-            else:
-                reply = protocol.make_source_error(envelope["id"], path_val, enc_or_reason)
-            await ws.send(reply)
-        elif etype == "trace_seek_request":
-            # Server-side seek (Phase 7.3).  Works for any session registered in
-            # seekable_sessions (file-replay + store-loaded); live-attach is not.
-            seek_sid = envelope["payload"].get("session_id", "")
-            if not isinstance(seek_sid, str):
-                continue
-            sess = sessions.get(seek_sid)
-            if sess is None:
-                await ws.send(
-                    protocol.make_trace_seek_error(envelope["id"], seek_sid, "session not found")
-                )
-                continue
-            trace_index = sess.index
-            start_raw = envelope["payload"].get("start_index", 0)
-            count_raw = envelope["payload"].get("count", 0)
-            if not isinstance(start_raw, int) or not isinstance(count_raw, int):
-                await ws.send(
-                    protocol.make_trace_seek_error(
-                        envelope["id"], seek_sid, "invalid start_index or count"
+            etype = envelope["type"]
+            if etype == "ping":
+                await ws.send(protocol.make_pong(envelope["id"]))
+            elif etype == "read_source":
+                path_val = envelope["payload"].get("path", "")
+                if not isinstance(path_val, str):
+                    continue
+                source, enc_or_reason = _read_source(root_real, path_val)
+                if source is not None:
+                    reply = protocol.make_source_response(
+                        envelope["id"], path_val, source, enc_or_reason
                     )
-                )
-                continue
-            # Cap count to bound per-request I/O.  Compute clamped start here
-            # (mirrors read_window's own clamping) so the response payload
-            # echoes the actual start index rather than the raw unclamped value.
-            count_capped = min(max(0, count_raw), _MAX_SEEK_COUNT)
-            total = len(trace_index)
-            clamped_start = max(0, min(start_raw, total))
-            try:
-                loop = asyncio.get_running_loop()
-                seek_events: list[TraceEvent] = await loop.run_in_executor(
-                    None, trace_index.read_window, start_raw, count_capped
-                )
-            except Exception as exc:
-                log.warning("trace seek: read_window failed", error=str(exc))
-                await ws.send(
-                    protocol.make_trace_seek_error(envelope["id"], seek_sid, "read error")
-                )
-                continue
-            await ws.send(
-                protocol.make_trace_window(
-                    envelope["id"], seek_sid, clamped_start, seek_events, total
-                )
-            )
-        elif etype == "trace_query_request":
-            qsid = envelope["payload"].get("session_id", "")
-            kind = envelope["payload"].get("kind", "")
-            at_raw = envelope["payload"].get("at_index", 0)
-            sess = sessions.get(qsid) if isinstance(qsid, str) else None
-            if sess is None:
-                await ws.send(
-                    protocol.make_trace_query_response(
-                        envelope["id"], qsid, kind, 0, {}, error="session not found"
-                    )
-                )
-                continue
-            if not isinstance(at_raw, int):
-                await ws.send(
-                    protocol.make_trace_query_response(
-                        envelope["id"], qsid, kind, 0, {}, error="invalid at_index"
-                    )
-                )
-                continue
-            aggregates = sess.aggregates
-            at_index = max(0, min(at_raw, len(aggregates)))
-            try:
-                loop = asyncio.get_running_loop()
-                data: dict[str, Any]
-                if kind == "cumulative_heat":
-                    data = await loop.run_in_executor(
-                        None, aggregates.cumulative_heat_all, at_index
-                    )
-                elif kind == "coverage":
-                    count = await loop.run_in_executor(None, aggregates.coverage_count, at_index)
-                    data = {"count": count}
-                elif kind == "top_k":
-                    k = int(envelope["payload"].get("k", 20))
-                    entries = await loop.run_in_executor(None, aggregates.top_k, k, at_index)
-                    data = {"entries": [{"node_id": nid, "count": cnt} for nid, cnt in entries]}
                 else:
+                    reply = protocol.make_source_error(envelope["id"], path_val, enc_or_reason)
+                await ws.send(reply)
+            elif etype == "trace_seek_request":
+                # Server-side seek (Phase 7.3).  Works for any session registered in
+                # seekable_sessions (file-replay + store-loaded); live-attach is not.
+                seek_sid = envelope["payload"].get("session_id", "")
+                if not isinstance(seek_sid, str):
+                    continue
+                sess = sessions.get(seek_sid)
+                if sess is None:
                     await ws.send(
-                        protocol.make_trace_query_response(
-                            envelope["id"],
-                            qsid,
-                            kind,
-                            at_index,
-                            {},
-                            error=f"unknown kind: {kind!r}",
+                        protocol.make_trace_seek_error(
+                            envelope["id"], seek_sid, "session not found"
                         )
                     )
                     continue
+                trace_index = sess.index
+                start_raw = envelope["payload"].get("start_index", 0)
+                count_raw = envelope["payload"].get("count", 0)
+                if not isinstance(start_raw, int) or not isinstance(count_raw, int):
+                    await ws.send(
+                        protocol.make_trace_seek_error(
+                            envelope["id"], seek_sid, "invalid start_index or count"
+                        )
+                    )
+                    continue
+                # Cap count to bound per-request I/O.  Compute clamped start here
+                # (mirrors read_window's own clamping) so the response payload
+                # echoes the actual start index rather than the raw unclamped value.
+                count_capped = min(max(0, count_raw), _MAX_SEEK_COUNT)
+                total = len(trace_index)
+                clamped_start = max(0, min(start_raw, total))
+                try:
+                    loop = asyncio.get_running_loop()
+                    seek_events: list[TraceEvent] = await loop.run_in_executor(
+                        None, trace_index.read_window, start_raw, count_capped
+                    )
+                except Exception as exc:
+                    log.warning("trace seek: read_window failed", error=str(exc))
+                    await ws.send(
+                        protocol.make_trace_seek_error(envelope["id"], seek_sid, "read error")
+                    )
+                    continue
                 await ws.send(
-                    protocol.make_trace_query_response(envelope["id"], qsid, kind, at_index, data)
-                )
-            except Exception as exc:
-                log.warning("trace query error", kind=kind, error=str(exc))
-                await ws.send(
-                    protocol.make_trace_query_response(
-                        envelope["id"], qsid, kind, at_index, {}, error="query error"
+                    protocol.make_trace_window(
+                        envelope["id"], seek_sid, clamped_start, seek_events, total
                     )
                 )
-        elif etype == "session_list_request":
-            if store is None:
-                sessions_data: list[dict[str, Any]] = []
-            else:
+            elif etype == "trace_query_request":
+                qsid = envelope["payload"].get("session_id", "")
+                kind = envelope["payload"].get("kind", "")
+                at_raw = envelope["payload"].get("at_index", 0)
+                sess = sessions.get(qsid) if isinstance(qsid, str) else None
+                if sess is None:
+                    await ws.send(
+                        protocol.make_trace_query_response(
+                            envelope["id"], qsid, kind, 0, {}, error="session not found"
+                        )
+                    )
+                    continue
+                if not isinstance(at_raw, int):
+                    await ws.send(
+                        protocol.make_trace_query_response(
+                            envelope["id"], qsid, kind, 0, {}, error="invalid at_index"
+                        )
+                    )
+                    continue
+                aggregates = sess.aggregates
+                at_index = max(0, min(at_raw, len(aggregates)))
+                try:
+                    loop = asyncio.get_running_loop()
+                    data: dict[str, Any]
+                    if kind == "cumulative_heat":
+                        data = await loop.run_in_executor(
+                            None, aggregates.cumulative_heat_all, at_index
+                        )
+                    elif kind == "coverage":
+                        count = await loop.run_in_executor(
+                            None, aggregates.coverage_count, at_index
+                        )
+                        data = {"count": count}
+                    elif kind == "top_k":
+                        k = int(envelope["payload"].get("k", 20))
+                        entries = await loop.run_in_executor(None, aggregates.top_k, k, at_index)
+                        data = {"entries": [{"node_id": nid, "count": cnt} for nid, cnt in entries]}
+                    else:
+                        await ws.send(
+                            protocol.make_trace_query_response(
+                                envelope["id"],
+                                qsid,
+                                kind,
+                                at_index,
+                                {},
+                                error=f"unknown kind: {kind!r}",
+                            )
+                        )
+                        continue
+                    await ws.send(
+                        protocol.make_trace_query_response(
+                            envelope["id"], qsid, kind, at_index, data
+                        )
+                    )
+                except Exception as exc:
+                    log.warning("trace query error", kind=kind, error=str(exc))
+                    await ws.send(
+                        protocol.make_trace_query_response(
+                            envelope["id"], qsid, kind, at_index, {}, error="query error"
+                        )
+                    )
+            elif etype == "session_list_request":
+                if store is None:
+                    sessions_data: list[dict[str, Any]] = []
+                else:
+                    loop = asyncio.get_running_loop()
+                    metas = await loop.run_in_executor(None, store.list_sessions)
+                    sessions_data = [
+                        {
+                            "id": s.id,
+                            "label": s.label,
+                            "started_ns": s.started_ns,
+                            "ended_ns": s.ended_ns,
+                            "source_path": s.source_path,
+                            "event_count": s.event_count,
+                            "language": s.language,
+                        }
+                        for s in metas
+                    ]
+                await ws.send(protocol.make_session_list_response(envelope["id"], sessions_data))
+            elif etype == "session_load_request":
+                load_sid = envelope["payload"].get("session_id", "")
+                if store is None:
+                    log.warning("session load ignored: server has no --store", session_id=load_sid)
+                    continue
                 loop = asyncio.get_running_loop()
-                metas = await loop.run_in_executor(None, store.list_sessions)
-                sessions_data = [
-                    {
-                        "id": s.id,
-                        "label": s.label,
-                        "started_ns": s.started_ns,
-                        "ended_ns": s.ended_ns,
-                        "source_path": s.source_path,
-                        "event_count": s.event_count,
-                        "language": s.language,
-                    }
-                    for s in metas
-                ]
-            await ws.send(protocol.make_session_list_response(envelope["id"], sessions_data))
-        elif etype == "session_load_request":
-            load_sid = envelope["payload"].get("session_id", "")
-            if store is None:
-                log.warning("session load ignored: server has no --store", session_id=load_sid)
-                continue
-            loop = asyncio.get_running_loop()
-            meta = await loop.run_in_executor(None, store.get_session, load_sid)
-            if meta is None:
-                log.warning("session load: unknown session id", session_id=load_sid)
-                continue
-            load_path = Path(meta.source_path)
-            if not load_path.exists():
-                log.warning(
-                    "session load: source file missing",
-                    session_id=load_sid,
-                    path=str(load_path),
-                )
-                continue
-            asyncio.create_task(load_stored_session(ws, load_path, load_sid, sessions))
-        elif etype in ("trace_session_start", "trace_event", "trace_session_end"):
-            # Live-ingest path: a producer process is streaming events into
-            # this server.  Buffer each message and broadcast to all consumers.
-            # Append before trim so the count cap is enforced immediately after
-            # each message lands — the buffer never exceeds max_events by more
-            # than 0 (vs. trim-before-append which allows a transient +1).
-            now_ns = time.monotonic_ns()
-            ring_buffer.append((now_ns, msg))
-            trim_ring_buffer(ring_buffer, now_ns, buffer_seconds, max_events)
-            await broadcast(msg, connections, exclude=ws)
+                meta = await loop.run_in_executor(None, store.get_session, load_sid)
+                if meta is None:
+                    log.warning("session load: unknown session id", session_id=load_sid)
+                    continue
+                load_path = Path(meta.source_path)
+                if not load_path.exists():
+                    log.warning(
+                        "session load: source file missing",
+                        session_id=load_sid,
+                        path=str(load_path),
+                    )
+                    continue
+                asyncio.create_task(load_stored_session(ws, load_path, load_sid, sessions))
+            elif etype in ("trace_session_start", "trace_event", "trace_session_end"):
+                # Live-ingest path: a producer process is streaming events into
+                # this server.  Buffer each message and broadcast to all consumers.
+                # Append before trim so the count cap is enforced immediately after
+                # each message lands — the buffer never exceeds max_events by more
+                # than 0 (vs. trim-before-append which allows a transient +1).
+                now_ns = time.monotonic_ns()
+                ring_buffer.append((now_ns, msg))
+                trim_ring_buffer(ring_buffer, now_ns, buffer_seconds, max_events)
+                await broadcast(msg, connections, exclude=ws)
+
+                # Recording sink (Phase 9.3, ADR-0020 amendment): tee live
+                # sessions to JSONL + register in the store, when enabled.
+                # recordings_dir is only ever set (in serve()) when store is
+                # also set, but both are independent Optional params here, so
+                # narrow on both for mypy --strict.
+                if recordings_dir is not None and store is not None:
+                    if etype == "trace_session_start":
+                        if recorder is not None:
+                            # Defensive: a new session started without a
+                            # matching end for the previous one — finalize it
+                            # first so its file/row are not left dangling.
+                            # Shielded so a cancellation arriving mid-await
+                            # cannot tear the prior session's finalize.
+                            await asyncio.shield(recorder.finalize())
+                            recorder = None
+                        sid = envelope["payload"].get("session_id")
+                        if not (
+                            isinstance(sid, str)
+                            and sid
+                            and sid != file_session_id
+                            and is_safe_session_id(sid)
+                        ):
+                            log.warning(
+                                "recording sink: skipping session with invalid/unsafe session_id",
+                                session_id=sid if isinstance(sid, str) else repr(sid),
+                            )
+                        else:
+                            try:
+                                recorder = RecordingSink(
+                                    recordings_dir, sid, store, recording_language
+                                )
+                            except FileExistsError:
+                                log.warning(
+                                    "recording sink: session_id already being recorded by "
+                                    "another connection — skipping",
+                                    session_id=sid,
+                                )
+                            except OSError as exc:
+                                # Any other I/O error opening the recording file
+                                # (permissions, dir removed mid-run) must skip the
+                                # recording, never crash the receive loop.
+                                log.warning(
+                                    "recording sink: could not open recording file — skipping",
+                                    session_id=sid,
+                                    error=str(exc),
+                                )
+                    elif etype == "trace_event":
+                        if recorder is not None:
+                            payload = envelope["payload"]
+                            if isinstance(payload, dict):
+                                recorder.write(payload)
+                    elif etype == "trace_session_end":
+                        if recorder is not None:
+                            await recorder.finalize()
+                            recorder = None
+    finally:
+        if recorder is not None:
+            # Shield so a finalize triggered by the outer cancellation (producer
+            # disconnect or server shutdown) still completes the close+rename+
+            # save_session sequence rather than being torn mid-await.
+            await asyncio.shield(recorder.finalize())
 
 
 async def serve(
@@ -402,6 +484,19 @@ async def serve(
     # Registry of seekable/queryable sessions, keyed by session id.  Shared
     # across connections so a session loaded by one tab is queryable by all.
     seekable_sessions: dict[str, SeekableSession] = {}
+
+    # Live-stream recording sink (Phase 9.3, ADR-0020 amendment): when a
+    # session store is present, inbound producer sessions are tee'd to
+    # <db_dir>/recordings/<session_id>.jsonl and registered in the store.
+    # Language is detected once (root is fixed for the server's lifetime)
+    # rather than per-session on the event loop.
+    recordings_dir: Path | None = None
+    recording_language = "python"
+    if store is not None:
+        recordings_dir = store.db_path.parent / "recordings"
+        recordings_dir.mkdir(parents=True, exist_ok=True)
+        sweep_orphaned_recordings(recordings_dir)
+        recording_language = detect_language(root_real)
 
     # File-replay mode: build the index + aggregates once in a single pass so
     # every connection can seek and query without re-scanning.  The session_id
@@ -455,6 +550,9 @@ async def serve(
                     max_events,
                     seekable_sessions=seekable_sessions,
                     store=store,
+                    recordings_dir=recordings_dir,
+                    recording_language=recording_language,
+                    file_session_id=file_session_id,
                 )
             )
             tasks.append(receive_task)
