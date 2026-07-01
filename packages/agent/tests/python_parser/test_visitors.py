@@ -168,6 +168,166 @@ def test_decorator_chain_property() -> None:
     assert "property" in method["metadata"]["decorators"]
 
 
+def test_property_setter_gets_disambiguated_id() -> None:
+    # Getter + setter share a base ID per ADR-0005's name-based scheme, but
+    # each is a distinct, executable definition: dropping either would both
+    # hide it from the graph and break runtime trace attribution for that
+    # accessor (NodeResolver indexes nodes by (path, line); a dropped
+    # node's line becomes unresolvable). The setter is disambiguated with a
+    # line suffix, mirroring the closure scheme.
+    b = _visit(
+        """
+        class Foo:
+            @property
+            def bar(self):
+                return self._bar
+
+            @bar.setter
+            def bar(self, value):
+                self._bar = value
+        """
+    )
+    methods = [n for n in _nodes(b, "method") if n["name"] == "bar"]
+    assert len(methods) == 2
+    ids = {m["id"] for m in methods}
+    assert ids == {"test.py:Foo.bar", "test.py:Foo.bar.7"}
+    getter = next(m for m in methods if m["id"] == "test.py:Foo.bar")
+    setter = next(m for m in methods if m["id"] == "test.py:Foo.bar.7")
+    assert "property" in getter["metadata"]["decorators"]
+    assert getter["line"] == 3
+    assert setter["line"] == 7
+
+
+def test_property_setter_call_edges_attributed_to_its_own_node() -> None:
+    # The setter's call edges are attributed to its own disambiguated ID,
+    # not the getter's — each accessor is now independently traceable
+    # instead of being conflated under one shared ID.
+    b = _visit(
+        """
+        class Foo:
+            @property
+            def bar(self):
+                return self._bar
+
+            @bar.setter
+            def bar(self, value):
+                validate(value)
+        """
+    )
+    calls = _edges(b, "call")
+    assert any(e["source"] == "test.py:Foo.bar.7" and e["target"] == "validate" for e in calls)
+
+
+def test_duplicate_method_name_gets_disambiguated_id() -> None:
+    # Two genuinely distinct defs sharing a name within one class (not a
+    # property accessor pair, not @overload) — the generic collision path.
+    b = _visit(
+        """
+        class Foo:
+            def bar(self):
+                return 1
+
+            def bar(self):
+                return 2
+        """
+    )
+    methods = [n for n in _nodes(b, "method") if n["name"] == "bar"]
+    assert len(methods) == 2
+    ids = {m["id"] for m in methods}
+    assert len(ids) == 2
+    assert "test.py:Foo.bar" in ids
+
+
+def test_overload_stub_demoted_when_implementation_follows() -> None:
+    # The real implementation becomes the canonical (un-suffixed) node; the
+    # stubs are demoted to suffixed IDs rather than dropped, so they're
+    # still visible and nothing about them is silently lost.
+    b = _visit(
+        """
+        from typing import overload
+
+        class Foo:
+            @overload
+            def get(self, key: str) -> str: ...
+            @overload
+            def get(self, key: str, default: str) -> str: ...
+            def get(self, key, default=None):
+                return self._d.get(key, default)
+        """
+    )
+    methods = [n for n in _nodes(b, "method") if n["name"] == "get"]
+    assert len(methods) == 3
+    ids = {m["id"] for m in methods}
+    assert ids == {"test.py:Foo.get", "test.py:Foo.get.5", "test.py:Foo.get.7"}
+    canonical = next(m for m in methods if m["id"] == "test.py:Foo.get")
+    assert "overload" not in canonical["metadata"]["decorators"]
+    assert canonical["line"] == 9
+
+
+def test_typing_overload_attribute_form_demoted() -> None:
+    b = _visit(
+        """
+        import typing
+
+        class Foo:
+            @typing.overload
+            def get(self, key: str) -> str: ...
+            def get(self, key):
+                return self._d[key]
+        """
+    )
+    methods = [n for n in _nodes(b, "method") if n["name"] == "get"]
+    assert len(methods) == 2
+    ids = {m["id"] for m in methods}
+    assert ids == {"test.py:Foo.get", "test.py:Foo.get.5"}
+    canonical = next(m for m in methods if m["id"] == "test.py:Foo.get")
+    assert "overload" not in canonical["metadata"]["decorators"]
+
+
+def test_overload_only_stub_still_emits_a_node() -> None:
+    # Regression guard: a Protocol/ABC method declared only via @overload
+    # stubs (no concrete implementation anywhere in this file) must not
+    # silently vanish from the graph — it's a real, visible symbol even
+    # though it's never executed.
+    b = _visit(
+        """
+        from typing import overload
+
+        class Foo:
+            @overload
+            def get(self, key: str) -> str: ...
+            @overload
+            def get(self, key: str, default: str) -> str: ...
+        """
+    )
+    methods = [n for n in _nodes(b, "method") if n["name"] == "get"]
+    assert len(methods) == 2
+    assert "test.py:Foo.get" in {m["id"] for m in methods}
+
+
+def test_decorator_named_overload_does_not_lose_function() -> None:
+    # A decorator that merely happens to be NAMED "overload" (not
+    # typing.overload) is matched best-effort (ADR-0004) for canonical-node
+    # preference, but must never cause data loss: the function and its call
+    # edges always survive as a node.
+    b = _visit(
+        """
+        def overload(f):
+            return f
+
+        class Foo:
+            @overload
+            def handle(self):
+                real_work()
+        """
+    )
+    methods = [n for n in _nodes(b, "method") if n["name"] == "handle"]
+    assert len(methods) == 1
+    assert methods[0]["id"] == "test.py:Foo.handle"
+    calls = _edges(b, "call")
+    assert any(e["target"] == "real_work" for e in calls)
+
+
 def test_closure_qualname_includes_line() -> None:
     # Nested functions follow the closure scheme: <parent>.<name>.<line>.
     # Regression guard: ensure the line suffix appears exactly once, not duplicated.

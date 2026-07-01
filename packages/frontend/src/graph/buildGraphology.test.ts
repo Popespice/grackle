@@ -72,6 +72,25 @@ describe("buildGraphology", () => {
     expect(g.edges("a", "b").length).toBe(2);
   });
 
+  it("skips duplicate node ids instead of throwing", () => {
+    // Regression guard: adapters can legitimately emit a duplicate ID (e.g.
+    // a Python @property getter/setter pair sharing a name) — graphology's
+    // addNode throws on a repeat, which used to crash GraphCanvas with no
+    // recovery path.
+    const graph = {
+      version: 1,
+      language: "python",
+      nodes: [
+        { id: "a.py:Foo.bar", kind: "method", name: "bar", path: "a.py" },
+        { id: "a.py:Foo.bar", kind: "method", name: "bar", path: "a.py" },
+      ],
+      edges: [],
+    };
+    expect(() => buildGraphology(graph)).not.toThrow();
+    const g = buildGraphology(graph);
+    expect(g.order).toBe(1);
+  });
+
   it("skips edges whose source node is missing", () => {
     const graph = {
       version: 1,

@@ -1,4 +1,5 @@
 import type { JSX } from "react";
+import { ErrorBoundary } from "../components/ErrorBoundary";
 import { panels as defaultPanels, type PanelRegistry } from "./registry";
 
 interface SlotContainerProps {
@@ -16,7 +17,9 @@ export function SlotContainer({
   return (
     <>
       {entries.map(({ id, component: Panel }) => (
-        <Panel key={id} />
+        <ErrorBoundary key={id} label={id}>
+          <Panel />
+        </ErrorBoundary>
       ))}
     </>
   );
