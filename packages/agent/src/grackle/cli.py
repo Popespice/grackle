@@ -223,6 +223,60 @@ def parse(
         "Ignored when --stream is active (real-time mode has no pacing)."
     ),
 )
+@click.option(
+    "--capture-values",
+    is_flag=True,
+    default=False,
+    help=(
+        "Capture sampled call args and return values onto each event's 'values' "
+        "field (ADR-0025). Python-only; default OFF (opt-in consent posture). "
+        "Captured values persist to any -o/--stream recording — treat this as "
+        "data at rest, not just wire traffic. Redaction is name-based (password, "
+        "token, api_key, etc.) and on by default; see --no-redact. The tuning "
+        "flags below are no-ops unless --capture-values is set."
+    ),
+)
+@click.option(
+    "--max-value-len",
+    default=120,
+    show_default=True,
+    type=click.IntRange(min=1),
+    help="Character clamp on one formatted captured value.",
+)
+@click.option(
+    "--max-value-items",
+    default=10,
+    show_default=True,
+    type=click.IntRange(min=1),
+    help="Collection items / dataclass fields shown per captured value.",
+)
+@click.option(
+    "--max-value-depth",
+    default=3,
+    show_default=True,
+    type=click.IntRange(min=1),
+    help="Nesting levels shown per captured value before elision.",
+)
+@click.option(
+    "--capture-first-n",
+    default=100,
+    show_default=True,
+    type=click.IntRange(min=1),
+    help=(
+        "Per-node_id budget on how many events capture values. Call/return "
+        "events are still always emitted beyond the budget — only value "
+        "capture stops, so heat/coverage/flame stay complete."
+    ),
+)
+@click.option(
+    "--no-redact",
+    is_flag=True,
+    default=False,
+    help=(
+        "Disable name-based redaction of captured values (password, token, "
+        "api_key, etc.). Escape hatch; redaction is on by default."
+    ),
+)
 def trace(
     script: Path,
     output: Path | None,
@@ -233,6 +287,12 @@ def trace(
     connect: str | None,
     stream: bool,
     no_pace: bool,
+    capture_values: bool,
+    max_value_len: int,
+    max_value_items: int,
+    max_value_depth: int,
+    capture_first_n: int,
+    no_redact: bool,
 ) -> None:
     """Trace SCRIPT and emit runtime events as JSONL.
 
@@ -257,6 +317,9 @@ def trace(
     unchanged; the Node adapter executes SCRIPT in a separate ``node``
     subprocess. If the script relies on a specific ``sys.argv``/cwd, set them
     before invoking ``grackle trace``.
+
+    ``--capture-values`` (ADR-0025) is Python-only; passing it for any other
+    language raises a clean error.
     """
     import json as _json
 
@@ -286,7 +349,23 @@ def trace(
     # Dispatch to the runtime adapter for SCRIPT's language; gate on its
     # capability (e.g. the Node toolchain) before doing any work.
     adapter = _resolve_runtime_adapter(script, language)
-    options = TraceOptions(include_line_events=lines, max_events=max_events)
+
+    if capture_values and adapter.language != "python":
+        raise click.UsageError(
+            f"--capture-values is Python-only (ADR-0025); {adapter.language!r} "
+            "is not supported yet."
+        )
+
+    options = TraceOptions(
+        include_line_events=lines,
+        max_events=max_events,
+        capture_values=capture_values,
+        max_value_len=max_value_len,
+        max_value_items=max_value_items,
+        max_value_depth=max_value_depth,
+        capture_first_n=capture_first_n,
+        redact_values=not no_redact,
+    )
 
     # ------------------------------------------------------------------
     # Real-time streaming path  (--connect URL --stream)

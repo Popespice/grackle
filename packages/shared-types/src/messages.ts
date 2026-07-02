@@ -49,6 +49,21 @@ export interface ReadSourceError extends WsEnvelope {
   };
 }
 
+/** One captured, formatted argument (mirrors trace.schema.json#/$defs/ArgValue). See ADR-0025. */
+export interface ArgValue {
+  name: string;
+  repr: string;
+  redacted?: boolean;
+  truncated?: boolean;
+}
+
+/** Sampled captured values on a TraceEvent. Only 'call' carries args; only 'return' carries ret. */
+export interface TraceValues {
+  args?: ArgValue[];
+  ret?: string;
+  ret_truncated?: boolean;
+}
+
 /** Shape of a single runtime trace event (mirrors trace.schema.json#/$defs/TraceEvent). */
 export interface TraceEvent {
   event: string;
@@ -57,6 +72,8 @@ export interface TraceEvent {
   thread_id: number;
   frame_depth: number;
   metadata?: Record<string, unknown>;
+  /** Absent unless --capture-values (Python-only, opt-in, sampled). See ADR-0025. */
+  values?: TraceValues;
 }
 
 export interface TraceSessionStartMessage extends WsEnvelope {

@@ -59,6 +59,254 @@ def test_trace_writes_output_file(tmp_path: Path) -> None:
         assert "node_id" in e
 
 
+def test_trace_capture_values_flag_in_help() -> None:
+    """``trace --help`` must document --capture-values (ADR-0025, chunk 10.2)."""
+    result = CliRunner().invoke(main, ["trace", "--help"])
+    assert result.exit_code == 0
+    assert "--capture-values" in result.output
+    assert "--no-redact" in result.output
+    assert "--capture-first-n" in result.output
+
+
+def test_trace_capture_values_emits_values_field(tmp_path: Path) -> None:
+    script = _write_simple_script(tmp_path)
+    out = tmp_path / "trace.jsonl"
+    result = CliRunner().invoke(
+        main,
+        [
+            "trace",
+            str(script),
+            "--root",
+            str(tmp_path),
+            "--output",
+            str(out),
+            "--capture-values",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    lines = [json.loads(raw) for raw in out.read_text(encoding="utf-8").splitlines()]
+    assert any("values" in e for e in lines)
+
+
+def test_trace_no_redact_flag_bypasses_redaction(tmp_path: Path) -> None:
+    """``--no-redact`` must actually flow through to the tracer, not just parse."""
+    root = tmp_path
+    root.mkdir(parents=True, exist_ok=True)
+    script = root / "script.py"
+    script.write_text(
+        "def login(username, password):\n    return username\n\nlogin('ada', password='s3cret')\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "trace.jsonl"
+    result = CliRunner().invoke(
+        main,
+        [
+            "trace",
+            str(script),
+            "--root",
+            str(root),
+            "--output",
+            str(out),
+            "--capture-values",
+            "--no-redact",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    lines = [json.loads(raw) for raw in out.read_text(encoding="utf-8").splitlines()]
+    call = next(e for e in lines if e["event"] == "call" and e["node_id"].endswith(":login"))
+    args_by_name = {a["name"]: a for a in call["values"]["args"]}
+    assert args_by_name["password"]["repr"] == "'s3cret'"
+    assert "redacted" not in args_by_name["password"]
+
+
+def test_trace_password_redacted_by_default_via_cli(tmp_path: Path) -> None:
+    """Without ``--no-redact``, a sensitive-named arg is redacted end-to-end through the CLI."""
+    root = tmp_path
+    root.mkdir(parents=True, exist_ok=True)
+    script = root / "script.py"
+    script.write_text(
+        "def login(username, password):\n    return username\n\nlogin('ada', password='s3cret')\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "trace.jsonl"
+    result = CliRunner().invoke(
+        main,
+        [
+            "trace",
+            str(script),
+            "--root",
+            str(root),
+            "--output",
+            str(out),
+            "--capture-values",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    lines = [json.loads(raw) for raw in out.read_text(encoding="utf-8").splitlines()]
+    call = next(e for e in lines if e["event"] == "call" and e["node_id"].endswith(":login"))
+    args_by_name = {a["name"]: a for a in call["values"]["args"]}
+    assert args_by_name["password"]["repr"] == "<redacted>"
+    assert args_by_name["password"]["redacted"] is True
+
+
+def test_trace_max_value_len_flag_truncates_via_cli(tmp_path: Path) -> None:
+    """``--max-value-len`` must actually bound the captured repr length."""
+    root = tmp_path
+    root.mkdir(parents=True, exist_ok=True)
+    script = root / "script.py"
+    script.write_text(
+        "def take(s):\n    return s\n\ntake('x' * 500)\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "trace.jsonl"
+    result = CliRunner().invoke(
+        main,
+        [
+            "trace",
+            str(script),
+            "--root",
+            str(root),
+            "--output",
+            str(out),
+            "--capture-values",
+            "--max-value-len",
+            "40",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    lines = [json.loads(raw) for raw in out.read_text(encoding="utf-8").splitlines()]
+    call = next(e for e in lines if e["event"] == "call" and e["node_id"].endswith(":take"))
+    arg = next(a for a in call["values"]["args"] if a["name"] == "s")
+    assert arg["truncated"] is True
+    assert len(arg["repr"]) <= 40
+
+
+def test_trace_max_value_items_flag_is_honored_via_cli(tmp_path: Path) -> None:
+    """``--max-value-items`` must actually reach the tracer, not just parse.
+
+    Uses a 15-item list with ``--max-value-items 20`` (larger than the
+    default of 10). The default alone would truncate a 15-item list
+    (15 > 10); a value of 20 would not (15 <= 20). Asserting NOT truncated
+    is the discriminating check — a regression that silently drops the flag
+    and falls back to the default would still truncate, and this would fail.
+    """
+    root = tmp_path
+    root.mkdir(parents=True, exist_ok=True)
+    script = root / "script.py"
+    script.write_text(
+        "def take(items):\n    return items\n\ntake(list(range(15)))\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "trace.jsonl"
+    result = CliRunner().invoke(
+        main,
+        [
+            "trace",
+            str(script),
+            "--root",
+            str(root),
+            "--output",
+            str(out),
+            "--capture-values",
+            "--max-value-items",
+            "20",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    lines = [json.loads(raw) for raw in out.read_text(encoding="utf-8").splitlines()]
+    call = next(e for e in lines if e["event"] == "call" and e["node_id"].endswith(":take"))
+    arg = next(a for a in call["values"]["args"] if a["name"] == "items")
+    assert "truncated" not in arg
+    assert arg["repr"] == "[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]"
+
+
+def test_trace_max_value_depth_flag_is_honored_via_cli(tmp_path: Path) -> None:
+    """``--max-value-depth`` must actually reach the tracer, not just parse.
+
+    Uses ``[[1]]`` (2 levels of list nesting) with ``--max-value-depth 1``.
+    The default of 3 would NOT truncate this value; depth 1 does. Asserting
+    truncated is the discriminating check — a regression that silently
+    drops the flag and falls back to the default would not truncate, and
+    this would fail.
+    """
+    root = tmp_path
+    root.mkdir(parents=True, exist_ok=True)
+    script = root / "script.py"
+    script.write_text(
+        "def take(x):\n    return x\n\ntake([[1]])\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "trace.jsonl"
+    result = CliRunner().invoke(
+        main,
+        [
+            "trace",
+            str(script),
+            "--root",
+            str(root),
+            "--output",
+            str(out),
+            "--capture-values",
+            "--max-value-depth",
+            "1",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    lines = [json.loads(raw) for raw in out.read_text(encoding="utf-8").splitlines()]
+    call = next(e for e in lines if e["event"] == "call" and e["node_id"].endswith(":take"))
+    arg = next(a for a in call["values"]["args"] if a["name"] == "x")
+    assert arg["truncated"] is True
+    assert arg["repr"] == "[[...]]"
+
+
+def test_trace_capture_first_n_flag_bounds_capture_via_cli(tmp_path: Path) -> None:
+    """``--capture-first-n`` must actually bound how many events capture values,
+    while every call/return event is still emitted (never dropped)."""
+    root = tmp_path
+    root.mkdir(parents=True, exist_ok=True)
+    script = root / "script.py"
+    script.write_text(
+        "def hot(i):\n    return i\n\nfor _n in range(60):\n    hot(_n)\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "trace.jsonl"
+    result = CliRunner().invoke(
+        main,
+        [
+            "trace",
+            str(script),
+            "--root",
+            str(root),
+            "--output",
+            str(out),
+            "--capture-values",
+            "--capture-first-n",
+            "10",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    lines = [json.loads(raw) for raw in out.read_text(encoding="utf-8").splitlines()]
+    calls = [e for e in lines if e["event"] == "call" and e["node_id"].endswith(":hot")]
+    returns = [e for e in lines if e["event"] == "return" and e["node_id"].endswith(":hot")]
+    assert len(calls) == 60
+    assert len(returns) == 60
+    total_captured = sum("values" in e for e in calls) + sum("values" in e for e in returns)
+    assert total_captured == 10
+
+
+def test_trace_default_omits_values_field(tmp_path: Path) -> None:
+    """Without --capture-values, no event carries a 'values' key (byte-identical default)."""
+    script = _write_simple_script(tmp_path)
+    out = tmp_path / "trace.jsonl"
+    result = CliRunner().invoke(
+        main,
+        ["trace", str(script), "--root", str(tmp_path), "--output", str(out)],
+    )
+    assert result.exit_code == 0, result.output
+    lines = [json.loads(raw) for raw in out.read_text(encoding="utf-8").splitlines()]
+    assert all("values" not in e for e in lines)
+
+
 def test_trace_stdout(tmp_path: Path) -> None:
     script = _write_simple_script(tmp_path)
     result = CliRunner().invoke(main, ["trace", str(script), "--root", str(tmp_path)])

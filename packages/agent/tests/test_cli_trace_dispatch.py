@@ -180,6 +180,24 @@ def test_typescript_gate_closed_clean_error(
     assert "22.6" in result.output
 
 
+def test_capture_values_rejected_for_non_python_language(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--capture-values is Python-only (ADR-0025); other languages get a clean error."""
+    from grackle.go_runtime import capability
+
+    monkeypatch.setattr(capability, "go_runtime_available", lambda: True)
+
+    script = _write(tmp_path, "main.go", "package main\n")
+    result = CliRunner().invoke(
+        main,
+        ["trace", str(script), "--root", str(tmp_path), "--language", "go", "--capture-values"],
+    )
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+    assert "Python-only" in result.output
+
+
 def test_typescript_gate_closed_via_explicit_language(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
