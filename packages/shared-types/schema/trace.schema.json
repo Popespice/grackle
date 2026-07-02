@@ -4,6 +4,26 @@
   "title": "grackle trace event",
   "description": "Single runtime trace event emitted by a RuntimeAdapter. Produced by the sys.monitoring tracer and serialised as JSONL. The 'event' discriminator is an open string per ADR-0004 — consumers must ignore unknown values.",
   "$defs": {
+    "ArgValue": {
+      "type": "object",
+      "description": "One captured, formatted argument. See ADR-0025.",
+      "properties": {
+        "name": { "type": "string" },
+        "repr": {
+          "type": "string",
+          "description": "Bounded safe-repr; never a live user __repr__."
+        },
+        "redacted": {
+          "type": "boolean",
+          "description": "Omitted unless true. Name matched a credential pattern."
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "Omitted unless true. Value was elided to fit caps."
+        }
+      },
+      "required": ["name", "repr"]
+    },
     "TraceEvent": {
       "type": "object",
       "description": "A single instrumentation event emitted during script execution.",
@@ -32,8 +52,20 @@
         },
         "metadata": {
           "type": "object",
-          "description": "Event-specific payload. 'call': {args_repr?}; 'return': {retval_repr?}; 'exception': {exc_type}.",
+          "description": "Event-specific payload. 'exception': {exc_type}; 'line': {line}. Superseded by 'values' for captured call args / return values (ADR-0025).",
           "additionalProperties": true
+        },
+        "values": {
+          "type": "object",
+          "description": "Sampled captured values. Only 'call' carries args; only 'return' carries ret. Absent unless --capture-values. See ADR-0025.",
+          "properties": {
+            "args": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/ArgValue" }
+            },
+            "ret": { "type": "string" },
+            "ret_truncated": { "type": "boolean" }
+          }
         }
       },
       "required": ["event", "node_id", "ts_ns", "thread_id", "frame_depth"]
