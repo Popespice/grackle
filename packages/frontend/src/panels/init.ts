@@ -11,6 +11,7 @@ import { SessionLibraryPanel } from "./SessionLibraryPanel";
 import { SourceViewer } from "./SourceViewer";
 import { StatsPanel } from "./StatsPanel";
 import { TimelinePanel } from "./TimelinePanel";
+import { ValueInspectorPanel } from "./ValueInspectorPanel";
 
 panels.register({
   slot: "top-bar",
@@ -41,6 +42,12 @@ panels.register({
   id: "node-inspector",
   component: NodeInspectorPanel,
   order: 10,
+});
+panels.register({
+  slot: "right-sidebar",
+  id: "value-inspector",
+  component: ValueInspectorPanel,
+  order: 15,
 });
 panels.register({
   slot: "right-sidebar",
