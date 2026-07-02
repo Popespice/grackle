@@ -21,11 +21,27 @@ Design notes (ADR-0013):
   ``frame_depth`` value for code inside a generator may therefore drift by
   one until the generator returns; documented as a known limitation in
   ADR-0013.
+
+Value capture (ADR-0025, chunk 10.2): when ``TraceOptions.capture_values`` is
+set, ``_on_call``/``_on_return`` additionally attach a ``values`` payload
+built from ``python_runtime.value_repr`` (bounded, security-hardened
+formatting — see that module's docstring). Returns are free (``retval`` is
+handed straight to the ``PY_RETURN`` callback); args require reading the
+just-started frame's locals, which needs the **verified-frame technique**:
+call ``sys._getframe(1)`` directly inside ``_on_call`` (not a nested helper —
+each extra call frame shifts the depth) and check ``frame.f_code is code``
+before trusting ``f_locals``. A mismatch (dispatch-shape differences across
+Python versions, or a resumed generator/coroutine frame whose ``f_locals`` no
+longer reflect entry args) degrades to no-args capture; the call event is
+still always emitted. A per-``node_id`` budget (``capture_first_n``) bounds
+how many events *capture* values — it never drops the call/return event
+itself, so heat/coverage/flame stay complete regardless of capture settings.
 """
 
 from __future__ import annotations
 
 import contextlib
+import inspect
 import sys
 import threading
 import time
@@ -34,8 +50,9 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
-    from types import CodeType
+    from types import CodeType, FrameType
 
+    from grackle.adapters.base import ArgValue, TraceValues
     from grackle.python_runtime.node_resolution import NodeResolver
 
 from grackle.adapters.base import (
@@ -45,11 +62,36 @@ from grackle.adapters.base import (
     enforce_event_cap,
     new_trace_event,
 )
+from grackle.python_runtime.value_repr import ValueCaptureLimits, format_arg, safe_repr
 
 # Tool ID used with sys.monitoring. IDs 0-2 are reserved (debugger, coverage,
 # profiler). 3 is the first freely usable ID.
 _GRACKLE_TOOL_ID = 3
 _TOOL_NAME = "grackle"
+
+
+def _declared_arg_names(code: CodeType) -> list[str]:
+    """Names of *code*'s declared parameters, in ``co_varnames`` order.
+
+    Covers positional-only, positional-or-keyword, and keyword-only params
+    (``co_varnames[: co_argcount + co_kwonlyargcount]`` — positional-only
+    params are a prefix of ``co_argcount`` so no separate handling is
+    needed), plus ``*args``/``**kwargs`` names when ``CO_VARARGS``/
+    ``CO_VARKEYWORDS`` is set. Never includes ordinary function-body locals.
+
+    Synthetic dot-prefixed names (CPython's implicit ``.0`` iterator
+    parameter for a generator expression's frame) are filtered out — they
+    are never a real user parameter, so such frames capture nothing instead
+    of a raw iterator repr under a meaningless ``.0`` label.
+    """
+    argn = code.co_argcount + code.co_kwonlyargcount
+    names = list(code.co_varnames[:argn])
+    if code.co_flags & inspect.CO_VARARGS:
+        names.append(code.co_varnames[argn])
+        argn += 1
+    if code.co_flags & inspect.CO_VARKEYWORDS:
+        names.append(code.co_varnames[argn])
+    return [n for n in names if not n.startswith(".")]
 
 
 class Tracer:
@@ -88,6 +130,19 @@ class Tracer:
         # into the script and is caught by run()'s BaseException handler.
         # We store it here so it can be re-raised after _stop() completes.
         self._sink_exc: BaseException | None = None
+        # Value capture (ADR-0025). Built once from options rather than per
+        # call/return — ValueCaptureLimits is frozen and shared safely since
+        # safe_repr()/format_arg() construct their own per-call formatter state.
+        self._limits = ValueCaptureLimits(
+            max_len=options.max_value_len,
+            max_items=options.max_value_items,
+            max_depth=options.max_value_depth,
+        )
+        # Per-node_id count of events that have captured values so far — bounds
+        # *capture* only (never event emission). No lock: same unlocked
+        # posture as self._count above; a rare race just over/under-counts
+        # the budget slightly, which is harmless.
+        self._value_capture_counts: dict[str, int] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -187,7 +242,27 @@ class Tracer:
         depth = self._depth.get(tid, 0)
         self._depth[tid] = depth + 1
         node_id = self._resolver.resolve(code.co_filename, code.co_firstlineno, code.co_name)
-        self._emit(new_trace_event("call", node_id, time.monotonic_ns(), tid, depth))
+
+        values: TraceValues | None = None
+        if self._options.capture_values and self._budget_remaining(node_id):
+            # sys._getframe(1) called directly here (NOT in a nested helper —
+            # each additional call frame would shift the index by one) is the
+            # frame of the function that just started: PY_START fires with
+            # that frame already current, and f_back-chaining across the
+            # C-level dispatch in between is transparent. Verify identity
+            # before trusting f_locals — a mismatch (dispatch-shape
+            # differences across Python versions, or a resumed
+            # generator/coroutine frame whose f_locals no longer reflect
+            # entry args) means we degrade to no-args capture. The call event
+            # is emitted either way.
+            frame = sys._getframe(1)
+            if frame.f_code is code:
+                args = self._read_declared_args(code, frame)
+                if args:
+                    values = {"args": args}
+                    self._consume_budget(node_id)
+
+        self._emit(new_trace_event("call", node_id, time.monotonic_ns(), tid, depth, values=values))
         return None
 
     def _on_return(self, code: CodeType, offset: int, retval: object) -> None:
@@ -199,7 +274,53 @@ class Tracer:
         depth = max(0, self._depth.get(tid, 1) - 1)
         self._depth[tid] = depth
         node_id = self._resolver.resolve(code.co_filename, code.co_firstlineno, code.co_name)
-        self._emit(new_trace_event("return", node_id, time.monotonic_ns(), tid, depth))
+
+        values: TraceValues | None = None
+        # Returns are free — retval is already handed to this callback, no
+        # frame access needed.
+        if self._options.capture_values and self._budget_remaining(node_id):
+            text, truncated = safe_repr(retval, self._limits)
+            values = {"ret": text}
+            if truncated:
+                values["ret_truncated"] = True
+            self._consume_budget(node_id)
+
+        self._emit(
+            new_trace_event("return", node_id, time.monotonic_ns(), tid, depth, values=values)
+        )
+
+    def _budget_remaining(self, node_id: str) -> bool:
+        """True if *node_id* has not yet hit ``capture_first_n`` captures."""
+        return self._value_capture_counts.get(node_id, 0) < self._options.capture_first_n
+
+    def _consume_budget(self, node_id: str) -> None:
+        """Record that *node_id* just captured one set of values."""
+        self._value_capture_counts[node_id] = self._value_capture_counts.get(node_id, 0) + 1
+
+    def _read_declared_args(self, code: CodeType, frame: FrameType) -> list[ArgValue]:
+        """Format every declared parameter of *code* from *frame*'s locals.
+
+        Only declared parameters (positional, keyword-only, ``*args``,
+        ``**kwargs``) are read — never arbitrary locals. Synthetic
+        dot-prefixed names (e.g. the ``.0`` implicit iterator argument of a
+        generator expression's frame — list/dict/set comprehensions no longer
+        create a frame at all since PEP 709) are filtered out by
+        ``_declared_arg_names``, so such frames capture nothing rather than a
+        raw iterator repr under a meaningless label.
+        """
+        args: list[ArgValue] = []
+        for name in _declared_arg_names(code):
+            if name not in frame.f_locals:
+                continue
+            args.append(
+                format_arg(
+                    name,
+                    frame.f_locals[name],
+                    limits=self._limits,
+                    redact=self._options.redact_values,
+                )
+            )
+        return args
 
     def _on_unwind(self, code: CodeType, offset: int, exception: BaseException) -> None:
         """Frame is exiting because an exception is propagating through it.
