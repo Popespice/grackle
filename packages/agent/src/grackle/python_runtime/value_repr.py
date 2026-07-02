@@ -60,8 +60,11 @@ first:
    ``str``) — safe C-level ``repr()`` calls, bounded/truncated; the int path
    is additionally guarded against the digit-limit ``ValueError``. ``range``/
    ``slice`` get their own handler that formats each of ``start``/``stop``/
-   ``step`` through the same guarded int path (rather than calling
-   ``repr(x)`` directly), since a huge-int bound hits the identical trap.
+   ``step`` through the full ``repr1`` ladder (rather than calling
+   ``repr(x)`` directly) — a real int still gets the guarded int path (a
+   huge-int bound would otherwise hit the identical trap), and ``slice``,
+   which unlike ``range`` accepts a component of any type, gets the same
+   safe handling as everything else instead of an unchecked assumption.
 3. **Exact containers** (``list``, ``tuple``, ``dict``, ``set``,
    ``frozenset``) — bounded item count and nesting depth via ``itertools.
    islice`` (never a full ``list(x)`` materialization, even for ``set``/
