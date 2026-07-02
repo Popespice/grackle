@@ -241,6 +241,48 @@ describe("ValueInspectorPanel", () => {
     expect(screen.queryByRole("button", { name: /Select/ })).toBeNull();
   });
 
+  it("marks the stack unavailable at exactly the truncated prefix boundary", () => {
+    // playhead === events.length with a TRUNCATED prefix: the next event was
+    // never paged, so the stack is unknown (guards the `>=`-not-`>` gate).
+    const events = [call("a.py:main", 0), call("a.py:handle", 1)];
+    mockUseFullTrace.mockReturnValue(
+      fullTrace({ events, loaded: true, truncated: true })
+    );
+    useGraphStore.setState({
+      traceSessionId: "s1",
+      traceSeekable: true,
+      traceTotal: 100000,
+      tracePlayhead: 2, // === events.length
+    });
+
+    render(<ValueInspectorPanel />);
+    expect(
+      screen.getByText(/Call stack unavailable beyond/)
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Select/ })).toBeNull();
+  });
+
+  it("shows the end-of-trace stack at the boundary when the prefix is complete", () => {
+    // playhead === events.length but NOT truncated: this is the legitimate
+    // "after the final event" position and its stack is reconstructable.
+    const events = [call("a.py:main", 0), call("a.py:handle", 1)];
+    mockUseFullTrace.mockReturnValue(
+      fullTrace({ events, loaded: true, truncated: false })
+    );
+    useGraphStore.setState({
+      traceSessionId: "s1",
+      traceSeekable: true,
+      traceTotal: 2,
+      tracePlayhead: 2, // === events.length, whole trace paged
+    });
+
+    render(<ValueInspectorPanel />);
+    expect(screen.queryByText(/Call stack unavailable beyond/)).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Select handle frame" })
+    ).toBeInTheDocument();
+  });
+
   it("shows a loading state while paging a seekable session", () => {
     mockUseFullTrace.mockReturnValue(fullTrace({ loading: true }));
     useGraphStore.setState({

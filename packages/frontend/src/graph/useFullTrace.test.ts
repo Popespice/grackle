@@ -103,6 +103,36 @@ describe("useFullTrace", () => {
     expect(result.current.truncated).toBe(true);
   });
 
+  it("re-pages when the same session id's total changes (content invalidation)", async () => {
+    // A store-loaded session id is a stable uuid5 of the file path, so an
+    // overwritten-and-reloaded trace reuses the id with new content. Keying the
+    // cache on sessionId:traceTotal must make that a miss, not a stale hit.
+    const request = vi.fn(async (_sid: string, start: number) =>
+      win([ev(0), ev(1), ev(2)], start)
+    );
+    useGrackleClient.setState({ requestTraceWindow: request });
+    useGraphStore.setState({
+      traceSessionId: "sX",
+      traceSeekable: true,
+      traceTotal: 3,
+    });
+
+    const { result } = renderHook(() => useFullTrace());
+    await act(async () => {
+      result.current.load();
+      await flush();
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+
+    // Same session id, new total (file overwritten & reloaded) → cache miss.
+    act(() => useGraphStore.setState({ traceTotal: 5 }));
+    await act(async () => {
+      result.current.load();
+      await flush();
+    });
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
   it("does not fetch before the total is known", () => {
     const request = vi.fn();
     useGrackleClient.setState({ requestTraceWindow: request });

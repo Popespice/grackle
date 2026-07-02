@@ -18,13 +18,25 @@ export interface UseFullTraceResult {
 }
 
 /**
- * Module-level promise cache keyed by session id. Deduplicates concurrent
- * consumers to a single `fetchFullTrace` per session (so two panels sharing the
- * prefix don't double-page) and preserves a loaded prefix across scrubs — a
- * scrub must never re-page. Only seekable sessions are cached; buffered
- * sessions read the live store directly.
+ * Module-level promise cache keyed by `sessionId:traceTotal`. Deduplicates
+ * concurrent consumers to a single `fetchFullTrace` per session (so two panels
+ * sharing the prefix don't double-page) and preserves a loaded prefix across
+ * scrubs — a scrub must never re-page. Only seekable sessions are cached;
+ * buffered sessions read the live store directly.
+ *
+ * The `traceTotal` component matters for correctness: a store-loaded session id
+ * is a *stable* uuid5 of the trace file's path, so overwriting that file (e.g.
+ * re-running `grackle … -o out.jsonl`) and reloading reuses the id with new
+ * content. Folding `traceTotal` into the key makes a changed trace a cache miss
+ * (a re-run almost always changes the event count) instead of serving a stale
+ * prefix; it also re-pages if the total is refined after a first `load()`.
  */
 const fullTraceCache = new Map<string, Promise<FullTraceResult>>();
+
+/** Compose the content-aware cache key for a seekable session. */
+function cacheKey(sessionId: string, total: number): string {
+  return `${sessionId}:${total}`;
+}
 
 /** Test-only: reset the module cache between test cases. */
 export function _resetFullTraceCache(): void {
@@ -68,14 +80,15 @@ export function useFullTrace(): UseFullTraceResult {
     // seek handshake reports the total (traceTotal is 0 until then).
     if (!traceSeekable || traceSessionId === null || traceTotal <= 0) return;
     const sid = traceSessionId;
+    const key = cacheKey(sid, traceTotal);
     const stale = () => useGraphStore.getState().traceSessionId !== sid;
 
-    let promise = fullTraceCache.get(sid);
+    let promise = fullTraceCache.get(key);
     if (!promise) {
       // Bound the cache — a debug tool, not a memory-critical path.
       if (fullTraceCache.size > 8) fullTraceCache.clear();
       promise = fetchFullTrace(requestTraceWindow, sid, traceTotal);
-      fullTraceCache.set(sid, promise);
+      fullTraceCache.set(key, promise);
     }
     setLoading(true);
     setError(false);
@@ -88,7 +101,7 @@ export function useFullTrace(): UseFullTraceResult {
       () => {
         // Evict the failed promise so a later load() re-fetches instead of
         // resolving the same rejection forever.
-        fullTraceCache.delete(sid);
+        fullTraceCache.delete(key);
         if (stale()) return;
         setError(true);
         setLoading(false);

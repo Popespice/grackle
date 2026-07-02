@@ -58,6 +58,12 @@ const SECTION_LABEL: React.CSSProperties = {
   fontSize: "0.9em",
 };
 
+/** Shared referentially-stable empty result for the no-stack case. */
+const EMPTY_STACKS: AncestorStacks = {
+  byThread: new Map<number, StackFrame[]>(),
+  activeThreadId: null,
+};
+
 const MUTED: React.CSSProperties = { color: "var(--color-text-subtle)" };
 
 const CODE: React.CSSProperties = {
@@ -199,9 +205,7 @@ export function ValueInspectorPanel(): JSX.Element | null {
 
   const stacks = useMemo(
     (): AncestorStacks =>
-      snapIndex >= 0
-        ? ancestorStackAt(full.events, snapIndex)
-        : { byThread: new Map<number, StackFrame[]>(), activeThreadId: null },
+      snapIndex >= 0 ? ancestorStackAt(full.events, snapIndex) : EMPTY_STACKS,
     [full.events, snapIndex]
   );
 
@@ -378,7 +382,13 @@ export function ValueInspectorPanel(): JSX.Element | null {
           </div>
         );
       }
-      if (tracePlayhead > full.events.length) {
+      // A partial (>50k) prefix can only reconstruct the stack for playheads it
+      // actually contains — events [0, events.length). At playhead ===
+      // events.length (and beyond) the next event was never paged, so the stack
+      // is unknown. Gate only when `truncated`: an untruncated prefix is the
+      // whole trace, where playhead === events.length is the legitimate
+      // "after the final event" position and its stack IS reconstructable.
+      if (full.truncated && tracePlayhead >= full.events.length) {
         return (
           <div style={MUTED}>
             Call stack unavailable beyond the first{" "}
