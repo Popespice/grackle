@@ -167,6 +167,34 @@ describe("ancestorStackAt", () => {
     expect(open).toEqual(synthetic);
     expect(open).toEqual(new Set(["a.py:main", "a.py:a"]));
   });
+
+  it("pops deeper orphaned children when a shallower frame returns", () => {
+    // return at depth 1 must pop b(d2) (a child that never returned) AND the
+    // matching a(d1) — exercises the return-side `depth > d` unwind branch.
+    const events = [
+      ev("call", "a.py:main", 0, 1),
+      ev("call", "a.py:a", 1, 2),
+      ev("call", "a.py:b", 2, 3),
+      ev("return", "a.py:a", 1, 4),
+    ];
+    expect(openIds(events, 3)).toEqual(["a.py:main"]);
+  });
+
+  it("holds the stack stable across non-structural (line) events", () => {
+    // The invariant the panel's boundary-snap memo relies on: the open stack
+    // does not change between a structural event and the `line` ticks after it.
+    const events = [
+      ev("call", "a.py:f", 0, 1),
+      ev("line", "a.py:f", 0, 2),
+      ev("line", "a.py:f", 0, 3),
+      ev("call", "a.py:g", 1, 4),
+      ev("line", "a.py:g", 1, 5),
+    ];
+    expect(openIds(events, 1)).toEqual(openIds(events, 0)); // line after call f
+    expect(openIds(events, 2)).toEqual(openIds(events, 1)); // second line
+    expect(openIds(events, 4)).toEqual(openIds(events, 3)); // line after call g
+    expect(openIds(events, 4)).toEqual(["a.py:f", "a.py:g"]);
+  });
 });
 
 describe("call/return boundary helpers", () => {

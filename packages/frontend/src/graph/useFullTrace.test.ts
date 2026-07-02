@@ -172,6 +172,11 @@ describe("useFullTrace", () => {
       await flush();
     });
 
-    expect(result.current.loaded).toBe(false); // stale result was not written
+    // Discriminates the stale() guard from the reset effect: the reset (on the
+    // s3→s4 change) runs BEFORE the resolve, so a broken guard would let the
+    // resolve write s3's event into state AFTERward. Assert both the flag and
+    // the data stayed empty.
+    expect(result.current.loaded).toBe(false);
+    expect(result.current.events).toHaveLength(0);
   });
 });

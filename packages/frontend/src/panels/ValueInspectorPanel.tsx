@@ -242,15 +242,36 @@ export function ValueInspectorPanel(): JSX.Element | null {
     if (idx !== null) setPlayhead(idx);
   }, [full.events, tracePlayhead, setPlayhead]);
 
+  // Derive the displayable stack once per stack change (not per render) — a
+  // `line`-tick render with an unchanged snapIndex reuses it.
+  const view = useMemo(() => {
+    const activeStack =
+      (stacks.activeThreadId !== null
+        ? stacks.byThread.get(stacks.activeThreadId)
+        : undefined) ?? [];
+    return {
+      displayFrames: activeStack.slice().reverse(), // innermost first
+      otherThreads: countOtherActiveThreads(stacks),
+    };
+  }, [stacks]);
+
+  // Whether the run captured any values — a bounded prefix scan (values appear
+  // on the first sampled calls), so the "enable --capture-values" hint never
+  // false-fires on a lone value-less event (e.g. a module-level call) in a
+  // capture-ON run. Uses the loaded prefix, else the live store window.
+  const captureSeen = useMemo(() => {
+    const events = full.loaded ? full.events : traceEvents;
+    const limit = Math.min(events.length, 2000);
+    for (let i = 0; i < limit; i++) {
+      if (events[i]?.values !== undefined) return true;
+    }
+    return false;
+  }, [full.loaded, full.events, traceEvents]);
+
   // ── EARLY RETURN (after all hooks) ──────────────────────────────────────
   if (traceSessionId === null) return null;
 
-  const activeStack =
-    (stacks.activeThreadId !== null
-      ? stacks.byThread.get(stacks.activeThreadId)
-      : undefined) ?? [];
-  const displayFrames = activeStack.slice().reverse(); // innermost first
-  const otherThreads = countOtherActiveThreads(stacks);
+  const { displayFrames, otherThreads } = view;
 
   const currentArgs =
     currentEvent && currentEvent.event === "call"
@@ -265,20 +286,19 @@ export function ValueInspectorPanel(): JSX.Element | null {
     currentEvent?.event === "return" &&
     currentEvent.values?.ret_truncated === true;
 
-  const stackHasArgs = displayFrames.some(
-    (f) => f.args !== undefined && f.args.length > 0
-  );
-  const showCaptureHint =
-    currentEvent !== undefined &&
-    currentEvent.values === undefined &&
-    !stackHasArgs;
-
   const total = traceSeekable ? traceTotal : traceEvents.length;
   const canStep = full.events.length > 0;
+  const showCaptureHint = currentEvent !== undefined && !captureSeen;
 
   const renderCurrentEvent = (): JSX.Element => {
     if (!currentEvent)
-      return <div style={MUTED}>No event at this position.</div>;
+      return (
+        <div style={MUTED}>
+          {tracePlayhead >= total
+            ? "End of trace."
+            : "No event at this position."}
+        </div>
+      );
     return (
       <>
         <div style={ROW_STYLE}>

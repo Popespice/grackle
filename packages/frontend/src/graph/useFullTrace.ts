@@ -1,5 +1,5 @@
 import type { TraceEvent } from "@grackle/shared-types";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useGrackleClient } from "../ws/client";
 import { type FullTraceResult, fetchFullTrace } from "./fetchFullTrace";
 import { useGraphStore } from "./useGraphStore";
@@ -67,6 +67,17 @@ export function useFullTrace(): UseFullTraceResult {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
 
+  // Skip a resolve/reject that lands after unmount — the cached promise
+  // outlives this component (module cache), so a fetch settling post-unmount
+  // must not setState. `stale()` only catches a session *change*, not unmount.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
   // A new session's prefix is unrelated — reset local state on session change.
   // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on session id only.
   useEffect(() => {
@@ -85,8 +96,14 @@ export function useFullTrace(): UseFullTraceResult {
 
     let promise = fullTraceCache.get(key);
     if (!promise) {
-      // Bound the cache — a debug tool, not a memory-critical path.
-      if (fullTraceCache.size > 8) fullTraceCache.clear();
+      // Bound the cache — a debug tool, not a memory-critical path. Evict the
+      // single oldest entry (Map preserves insertion order) rather than
+      // clear()-ing all, so one 9th session can't wipe the other 8 and force
+      // their consumers to re-page.
+      if (fullTraceCache.size > 8) {
+        const oldest = fullTraceCache.keys().next().value;
+        if (oldest !== undefined) fullTraceCache.delete(oldest);
+      }
       promise = fetchFullTrace(requestTraceWindow, sid, traceTotal);
       fullTraceCache.set(key, promise);
     }
@@ -94,7 +111,7 @@ export function useFullTrace(): UseFullTraceResult {
     setError(false);
     promise.then(
       (res) => {
-        if (stale()) return;
+        if (!mounted.current || stale()) return;
         setResult(res);
         setLoading(false);
       },
@@ -102,7 +119,7 @@ export function useFullTrace(): UseFullTraceResult {
         // Evict the failed promise so a later load() re-fetches instead of
         // resolving the same rejection forever.
         fullTraceCache.delete(key);
-        if (stale()) return;
+        if (!mounted.current || stale()) return;
         setError(true);
         setLoading(false);
       }
