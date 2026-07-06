@@ -1,8 +1,8 @@
 # ADR-0026 — Explanation Layer: Edge Evidence (and the Causal Path)
 
-**Status:** Accepted (implemented in Phase 10.4, 2026-07-05)
+**Status:** Accepted (implemented in Phase 10.4, 2026-07-05; extended in Phase 10.5, 2026-07-08)
 **Date:** 2026-07-05
-**Phase:** 10.4
+**Phase:** 10.4, 10.5
 
 ---
 
@@ -17,15 +17,16 @@ and shows a function's args, return, and live call stack.
 This ADR governs the *"why they connect"* half — the **explanation layer** — as one
 "show the user why" thesis with two chunks:
 
-- **10.4 (this chunk): edge evidence.** Every graph edge already records *that* B
+- **10.4: edge evidence.** Every graph edge already records *that* B
   imports / calls / inherits / implements A (or reaches it across a language boundary
   via an HTTP route / subprocess spawn). What it lacked was the **justifying source
   line**: the exact `from a import foo` (a.py:3) that makes the connection real and
   clickable. 10.4 records that line and builds the UI to surface it.
-- **10.5 (extends this ADR): the causal "why did this fire" path.** From a selected
-  firing, render the ancestor call-path chain annotated with the values (ADR-0025)
-  that drove each hop. 10.5 will amend this document's Decision and Future-work
-  sections rather than open a new ADR — it is the same thesis, one design.
+- **10.5 (this extension): the causal "why did this fire" path.** From a selected
+  node's firing, render the ancestor call-path chain annotated with the values
+  (ADR-0025) that drove each hop. This extension amends this document's Decision and
+  Future-work sections rather than opening a new ADR — it is the same thesis, one
+  design (§8).
 
 Unlike 10.2 (which deliberately ended the no-wire-schema-change streak with a typed
 `values` field), 10.4 is a **no-wire-schema-change chunk**: the evidence rides on the
@@ -111,13 +112,100 @@ omits the snippet and disables the jump for that row rather than erroring.
   the source node's definition line — and an incoming edge's evidence line is in a
   *different* file entirely. **10.5 reuses this action** for causal-path hop navigation.
 
-### 7. Future work
+### 7. The causal path (10.5): a selection-driven complement to the time-travel inspector
 
-- **The causal path (10.5)** — the second half of this thesis; will annotate the
-  ancestor call chain with ADR-0025 values and reuse `jumpToSourceLine`.
+10.3's `ValueInspectorPanel` is **playhead-driven**: scrub to a moment and see the call
+stack open at that instant. To ask "why did *this node* fire?" you first had to already
+know when it fired. 10.5 adds a **selection-driven** `CausalPathPanel` (right-sidebar,
+order 27, adjacent to `EdgeEvidencePanel`): pick a node, pick which firing (when it fired
+more than once), and read the ancestor chain **root → … → THIS** with the argument values
+that drove each hop — fusing 10.2's captured values, 10.3's stack reconstruction
+(`ancestorStackAt`), and 10.4's edge evidence.
+
+**The causal path is already computable from shipped infrastructure.** A new pure module,
+`graph/causalPath.ts`, adds only what `ancestorStackAt` doesn't provide:
+
+- `firingsOf(events, nodeId)` enumerates every `call` event for a node, capped at 200
+  enumerated firings (`MAX_FIRINGS`) so a hot helper called thousands of times doesn't
+  materialize thousands of stepper states — the scan stops as soon as the cap is hit
+  (cheaper than a full-prefix scan), and the panel notes when the list is capped.
+- `nearestFiring(firings, playhead)` picks a sensible default invocation (the latest
+  *collected* firing at or before the current playhead, falling back to the earliest if
+  the playhead precedes all of them) — but **only as the initial default**. When the list
+  is capped and the playhead sits at or past the last collected firing, a truer "nearest"
+  firing may exist beyond the cap; `CausalPathPanel` surfaces this explicitly rather than
+  silently presenting the last collected firing as if it were confirmed nearest. Once shown, the firing
+  index is a user-controlled stepper immune to playhead moves triggered by a hop's own
+  "time-travel" action, so clicking that action never silently swaps which firing the
+  panel displays.
+- `causalPathAt(events, callIndex, threadId)` is a thin, drift-guarded wrapper:
+  `ancestorStackAt(events, callIndex).byThread.get(threadId)` **is** the causal path for
+  that firing — at the instant a `call` event opens, the open stack on its thread is
+  exactly `[root, …, THIS]`, each frame already carrying its opening call's captured
+  `values.args`. A cross-check test asserts the wrapper never diverges from calling
+  `ancestorStackAt` directly, the same drift-guard discipline `ancestorStackAt` itself
+  uses against `callTree.ts`.
+
+**Firings are disambiguated by `ts_ns` and `callIndex`, never by argument values** — a
+run captured without `--capture-values`, or one where every invocation happens to share
+identical arguments, would otherwise render every firing indistinguishable.
+
+**Truncation posture: a completeness banner, not a hard gate — the one place 10.5
+deliberately diverges from 10.3.** `ValueInspectorPanel` hard-gates past `useFullTrace`'s
+50k-event paging cap because its *playhead* can point past the paged prefix, yielding a
+plausible-but-wrong stack. 10.5 never creates that situation: it only ever enumerates
+firings *from* the already-paged prefix and reconstructs `causalPathAt(events, callIndex)`
+for a `callIndex` that is, by construction, within that prefix. Because the prefix is a
+**true prefix rooted at absolute index 0**, replaying `[0, callIndex]` is byte-identical
+whether or not events exist past the 50k cliff — truncation only removes events *after*
+`callIndex`, which never participate in that replay. **Every causal path 10.5 renders is
+therefore correct; truncation only limits which firings can be *enumerated*, never the
+correctness of a path for one already found.** `CausalPathPanel` shows all enumerable
+firings plus a "N firings within the first 50k events — later firings not shown" banner
+when the prefix is truncated, rather than an unavailable state. This correctness rests
+on one precondition, load-bearing enough to be commented directly in `causalPath.ts`:
+the events array passed to `causalPathAt` must never be a windowed slice with a non-zero
+start — that would resurrect `ancestorStackAt`'s orphan-return case (a return with no
+matching open frame, because its call opened before the window) and silently produce a
+wrong path.
+
+**Per-hop navigation fuses all three shipped mechanisms**, one action per button so none
+of them compose in a way that could silently clobber another:
+
+- **`→ time-travel`** — `setPlayhead(hop.callIndex)` alone, moving the global scrubber so
+  `ValueInspectorPanel` reflects that hop's args/return, without touching node selection
+  or the source viewer.
+- **`select`** — graph-guarded `selectNode(hop.nodeId)` (the `ValueInspectorPanel`
+  `onSelectFrame` precedent: skip nodes absent from the static graph, since selecting an
+  unresolved/imported id would dim the whole Sigma view), re-rooting the panel to "climb"
+  the chain.
+- **`↳ call site`** — looks up the **parent→hop** edge in the static graph and, when it
+  carries a 10.4 `metadata.line`, calls `jumpToSourceLine(parentPath, line)`. The root hop
+  has no parent and so no call-site button. Because a `MultiDirectedGraph` can carry
+  parallel parent→hop edges on different lines, the first line-bearing match is used —
+  a documented approximation, not necessarily *this* firing's exact call site (see Known
+  limitations). Each action is a single store dispatch; none combine `selectNode` (which
+  clears `sourceViewerTarget`) with `jumpToSourceLine` (which sets it) in one click, so
+  there is no risk of one silently undoing the other.
+
+**Shared state extracted, not mirrored.** The seekable-prefix load state machine
+(loading / error+retry / "Load call stack" / the bounded `captureSeen` scan) is
+*behavioral*, not stylistic, and is identical across `ValueInspectorPanel` and
+`CausalPathPanel` except for the truncation branch (hard gate vs. completeness banner).
+A new shared hook, `graph/useSeekablePrefixState.ts`, is consumed by both — extracted
+rather than mirrored because a silent divergence here (e.g. a forgotten guard) would be a
+real correctness bug, unlike the purely cosmetic styling constants the two panels still
+deliberately mirror (`PANEL_STYLE`, `Badge`, `argsPreview`, and similar), consistent with
+the codebase's existing "mirror simple styling, extract genuinely-shared behavior"
+judgment (the same one that keeps `ancestorStack.ts` a deliberate mirror of `callTree.ts`
+rather than a shared implementation).
+
+### 8. Future work
+
 - **A server-side `trace_ancestors_at` query** (noted in ADR-0025 §6) — a runtime
   causal-path query that would add an 18th message type; deferred, client-side prefix
-  reconstruction is the MVP.
+  reconstruction remains the MVP for both the time-travel inspector (10.3) and the
+  causal path (10.5).
 - **Backend-emitted snippet / column capture** — rejected below; revisitable if a
   consumer needs evidence without loading source, or sub-line precision.
 - **Cross-language line-threading from *runtime* hints** — the static regex hints cover
@@ -144,13 +232,16 @@ omits the snippet and disables the jump for that row rather than erroring.
 ## Constraints honored
 
 - **No wire-schema change / `check-parity` no-op** — evidence is an open-metadata key
-  (ADR-0004), not a schema field.
+  (ADR-0004), not a schema field. 10.5 is frontend-only and touches no schema either;
+  `check-parity` stays a no-op across both chunks under this ADR.
 - **POSIX path discipline (ADR-0001)** — the edge carries no path; the line is an
   integer, the file comes from the already-POSIX source node ID.
 - **Open strings, not enums (ADR-0004)** — `metadata.line` extends an open bag; no
   registry or `KNOWN_*` change.
 - **Graceful degradation** — line-less edges (stale cache, Go method-set synthesis)
-  render without a snippet and disable their jump rather than erroring.
+  render without a snippet and disable their jump rather than erroring; 10.5's causal
+  path degrades the same way (no call-site button when the parent→hop edge carries no
+  line) and additionally never hard-gates on trace truncation (§7).
 - `mypy --strict` on all new Python code; Biome + `tsc -b` clean on the frontend.
 - Bind only to `127.0.0.1` — N/A (no networking changes).
 
@@ -176,3 +267,21 @@ omits the snippet and disables the jump for that row rather than erroring.
   snippets are shown only for out-edges (which share the node's file); incoming edges
   show `path:line` and rely on the jump to reveal the code in the other file. Fetching
   every referenced file's source at once is out of scope.
+- **(10.5) The causal path's "call site" jump can pick the wrong line among parallel
+  edges.** When a parent calls the same hop from two different lines (a
+  `MultiDirectedGraph` can carry both), `CausalPathPanel` picks the first line-bearing
+  parent→hop **`call`/`cross_language_call`** edge rather than the one that actually
+  produced *this specific* firing — the static graph edge doesn't record which
+  invocation it corresponds to. (Only invocation-kind edges are considered; an
+  import/inherit/implements edge sharing the same source/target pair is never mistaken
+  for a call site.) The jump is still a correct, in-file call site for that parent→hop
+  relationship; it just isn't guaranteed to be the exact call expression this firing
+  came from. A per-firing exact call site would require correlating trace timing with
+  source position, out of scope here.
+- **(10.5) Firing enumeration is capped at 200 (`MAX_FIRINGS`) per node.** A node called
+  thousands of times shows only its first 200 firings, with a "showing the first 200"
+  note; `firingsOf` stops scanning as soon as the cap is hit, so the excess firings are
+  never seen at all (cheaper than a full-prefix scan). When the playhead sits at or past
+  the last collected firing while capped, `CausalPathPanel` shows an explicit warning
+  that a truer "nearest" firing may exist beyond the cap, rather than silently presenting
+  the last collected firing as a confirmed-nearest default.
