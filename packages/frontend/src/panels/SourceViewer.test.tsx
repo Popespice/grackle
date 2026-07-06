@@ -31,6 +31,7 @@ beforeEach(() => {
   useGraphStore.setState({
     graph: MOCK_GRAPH,
     selectedNodeId: null,
+    sourceViewerTarget: null,
     hiddenKinds: new Set<string>(),
     searchTerm: "",
     excludeGlobs: [],
@@ -115,5 +116,38 @@ describe("SourceViewer", () => {
         screen.getByText(/Click a node to view source/i)
       ).toBeInTheDocument()
     );
+  });
+
+  // Edge evidence (Phase 10.4): an explicit sourceViewerTarget drives the view.
+
+  it("renders from an explicit sourceViewerTarget with no node selected", async () => {
+    useGraphStore.setState({
+      selectedNodeId: null,
+      sourceViewerTarget: { path: "b.py", line: 1 },
+    });
+    render(<SourceViewer />);
+    await waitFor(() =>
+      expect(screen.getByLabelText(/Source viewer/i)).toBeInTheDocument()
+    );
+    expect(screen.getByText("b.py")).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Click a node to view source/i)
+    ).not.toBeInTheDocument();
+  });
+
+  it("prefers sourceViewerTarget over the selected node's own file", async () => {
+    // A selected node (a.py) AND an edge-evidence jump into a DIFFERENT file
+    // (b.py) — the explicit target must win so the jump lands where clicked.
+    useGraphStore.setState({
+      selectedNodeId: "a.py:App",
+      sourceViewerTarget: { path: "b.py", line: 3 },
+    });
+    render(<SourceViewer />);
+    await waitFor(() =>
+      expect(screen.getByLabelText(/Source viewer/i)).toBeInTheDocument()
+    );
+    // Header shows the TARGET file (b.py), not the selected node's file (a.py):
+    // under a node-wins regression this would read "a.py" and fail.
+    expect(screen.getByText("b.py")).toBeInTheDocument();
   });
 });

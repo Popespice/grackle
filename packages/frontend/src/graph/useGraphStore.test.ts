@@ -15,6 +15,8 @@ beforeEach(() => {
   useGraphStore.setState({
     graph: null,
     selectedNodeId: null,
+    selectedEdge: null,
+    sourceViewerTarget: null,
     hiddenKinds: new Set<string>(),
     searchTerm: "",
     excludeGlobs: [],
@@ -464,5 +466,56 @@ describe("useGraphStore", () => {
     useGraphStore.getState().play();
     expect(useGraphStore.getState().tracePlayhead).toBe(0); // rewound
     expect(useGraphStore.getState().tracePlaying).toBe(true);
+  });
+
+  // -------------------------------------------------------------------------
+  // Edge evidence (Phase 10.4)
+  // -------------------------------------------------------------------------
+
+  it("selectEdge sets selectedEdge and clears selectedNodeId", () => {
+    useGraphStore.getState().selectNode("a.py:App");
+    useGraphStore
+      .getState()
+      .selectEdge({ source: "a.py:App", target: "b.py:main" });
+    const state = useGraphStore.getState();
+    expect(state.selectedEdge).toEqual({
+      source: "a.py:App",
+      target: "b.py:main",
+    });
+    expect(state.selectedNodeId).toBeNull();
+  });
+
+  it("jumpToSourceLine sets an explicit source-viewer target", () => {
+    useGraphStore.getState().jumpToSourceLine("a.py", 7);
+    expect(useGraphStore.getState().sourceViewerTarget).toEqual({
+      path: "a.py",
+      line: 7,
+    });
+  });
+
+  it("selectNode clears a prior edge selection AND source-viewer target", () => {
+    // Simulate clicking an edge row (sets a jump target) then picking a node.
+    useGraphStore
+      .getState()
+      .selectEdge({ source: "a.py:App", target: "b.py:main" });
+    useGraphStore.getState().jumpToSourceLine("b.py", 3);
+    useGraphStore.getState().selectNode("a.py:App");
+    const state = useGraphStore.getState();
+    expect(state.selectedNodeId).toBe("a.py:App");
+    // Both must clear so the SourceViewer falls back to the node's definition
+    // (regression guard: a stale target would show the wrong file/line).
+    expect(state.selectedEdge).toBeNull();
+    expect(state.sourceViewerTarget).toBeNull();
+  });
+
+  it("setGraph clears selectedEdge and sourceViewerTarget", () => {
+    useGraphStore
+      .getState()
+      .selectEdge({ source: "a.py:App", target: "b.py:main" });
+    useGraphStore.getState().jumpToSourceLine("a.py", 2);
+    useGraphStore.getState().setGraph(MOCK_GRAPH);
+    const state = useGraphStore.getState();
+    expect(state.selectedEdge).toBeNull();
+    expect(state.sourceViewerTarget).toBeNull();
   });
 });
