@@ -1,4 +1,5 @@
 import { GraphCanvas } from "../graph/GraphCanvas";
+import { CausalPathPanel } from "./CausalPathPanel";
 import { CyclesPanel } from "./CyclesPanel";
 import { DiffPanel } from "./DiffPanel";
 import { EdgeEvidencePanel } from "./EdgeEvidencePanel";
@@ -61,6 +62,12 @@ panels.register({
   id: "edge-evidence",
   component: EdgeEvidencePanel,
   order: 25,
+});
+panels.register({
+  slot: "right-sidebar",
+  id: "causal-path",
+  component: CausalPathPanel,
+  order: 27,
 });
 panels.register({
   slot: "right-sidebar",

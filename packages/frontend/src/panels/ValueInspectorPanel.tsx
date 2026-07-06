@@ -11,6 +11,7 @@ import {
 import { frameLabel } from "../graph/callTree";
 import { useFullTrace } from "../graph/useFullTrace";
 import { useGraphStore } from "../graph/useGraphStore";
+import { useSeekablePrefixState } from "../graph/useSeekablePrefixState";
 
 const PANEL_STYLE: React.CSSProperties = {
   display: "flex",
@@ -255,23 +256,13 @@ export function ValueInspectorPanel(): JSX.Element | null {
     };
   }, [stacks]);
 
-  // Whether the run captured any values — a bounded prefix scan (values appear
-  // on the first sampled calls), so the "enable --capture-values" hint never
-  // false-fires on a lone value-less event (e.g. a module-level call) in a
-  // capture-ON run. Uses the loaded prefix, else the live store window.
-  const captureSeen = useMemo(() => {
-    const events = full.loaded ? full.events : traceEvents;
-    const limit = Math.min(events.length, 2000);
-    for (let i = 0; i < limit; i++) {
-      if (events[i]?.values !== undefined) return true;
-    }
-    return false;
-  }, [full.loaded, full.events, traceEvents]);
+  const prefixState = useSeekablePrefixState(full);
 
   // ── EARLY RETURN (after all hooks) ──────────────────────────────────────
   if (traceSessionId === null) return null;
 
   const { displayFrames, otherThreads } = view;
+  const { captureSeen } = prefixState;
 
   const currentArgs =
     currentEvent && currentEvent.event === "call"
@@ -375,33 +366,34 @@ export function ValueInspectorPanel(): JSX.Element | null {
   };
 
   const renderStack = (): JSX.Element => {
+    if (prefixState.status === "loading") {
+      return <div style={MUTED}>Reconstructing call stack…</div>;
+    }
+    if (prefixState.status === "error") {
+      return (
+        <div role="alert" style={{ color: "var(--color-error)" }}>
+          Failed to load the full trace.{" "}
+          <button type="button" onClick={prefixState.load} style={BUTTON_STYLE}>
+            Retry
+          </button>
+        </div>
+      );
+    }
+    if (prefixState.status === "unloaded") {
+      return (
+        <div style={SECTION_STYLE}>
+          <button type="button" onClick={prefixState.load} style={BUTTON_STYLE}>
+            Load call stack ({formatInt(traceTotal)} events)
+          </button>
+          <div style={MUTED}>
+            Pages the trace so the stack can be reconstructed. Current-event
+            values above update live as you scrub.
+          </div>
+        </div>
+      );
+    }
+
     if (traceSeekable) {
-      if (full.loading) {
-        return <div style={MUTED}>Reconstructing call stack…</div>;
-      }
-      if (full.error) {
-        return (
-          <div role="alert" style={{ color: "var(--color-error)" }}>
-            Failed to load the full trace.{" "}
-            <button type="button" onClick={full.load} style={BUTTON_STYLE}>
-              Retry
-            </button>
-          </div>
-        );
-      }
-      if (!full.loaded) {
-        return (
-          <div style={SECTION_STYLE}>
-            <button type="button" onClick={full.load} style={BUTTON_STYLE}>
-              Load call stack ({formatInt(traceTotal)} events)
-            </button>
-            <div style={MUTED}>
-              Pages the trace so the stack can be reconstructed. Current-event
-              values above update live as you scrub.
-            </div>
-          </div>
-        );
-      }
       // A partial (>50k) prefix can only reconstruct the stack for playheads it
       // actually contains — events [0, events.length). At playhead ===
       // events.length (and beyond) the next event was never paged, so the stack
