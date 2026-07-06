@@ -75,7 +75,8 @@ class _CallCollector:
     """
 
     def __init__(self) -> None:
-        self.calls: list[str] = []
+        # (callee name, 1-based source line of the call site)
+        self.calls: list[tuple[str, int]] = []
 
     def walk(self, node: Node) -> None:
         for child in node.named_children:
@@ -87,7 +88,7 @@ class _CallCollector:
                 if func is not None:
                     name = self._extract_name(func)
                     if name:
-                        self.calls.append(name)
+                        self.calls.append((name, child.start_point[0] + 1))
                 self.walk(child)
             else:
                 self.walk(child)
@@ -165,7 +166,7 @@ class GoFileVisitor:
             if raw_alias not in ("_", "."):
                 alias = raw_alias
 
-        meta: dict[str, Any] = {}
+        meta: dict[str, Any] = {"line": spec.start_point[0] + 1}
         if alias is not None:
             meta["alias"] = alias
 
@@ -336,7 +337,7 @@ class GoFileVisitor:
                             "source": struct_id,
                             "target": embedded_name,
                             "kind": "inherit",
-                            "metadata": {"resolved": False},
+                            "metadata": {"resolved": False, "line": type_field.start_point[0] + 1},
                         }
                     )
 
@@ -380,12 +381,12 @@ class GoFileVisitor:
     def _emit_calls(self, caller_id: str, body: Node) -> None:
         collector = _CallCollector()
         collector.walk(body)
-        for callee in collector.calls:
+        for callee, line in collector.calls:
             self._builder.add_edge(
                 {
                     "source": caller_id,
                     "target": callee,
                     "kind": "call",
-                    "metadata": {"resolved": False},
+                    "metadata": {"resolved": False, "line": line},
                 }
             )

@@ -20,6 +20,13 @@ export interface EdgeAttributes {
   label: string;
   color: string;
   size: number;
+  /**
+   * 1-based justifying source line of this edge (edge evidence, ADR-0026),
+   * carried from the wire edge's open ``metadata.line``.  Absent when the
+   * adapter emitted no line (cross-language on a stale cache, Go method-set
+   * synthesis).  Read on ``clickEdge`` to jump to the exact call/import site.
+   */
+  line?: number;
 }
 
 export type GrackleMultiGraph = MultiDirectedGraph<
@@ -59,11 +66,13 @@ export function buildGraphology(graph: Graph): GrackleMultiGraph {
   for (const edge of graph.edges) {
     // Guard against edges referencing nodes absent from the graph
     if (!g.hasNode(edge.source) || !g.hasNode(edge.target)) continue;
+    const line = edge.metadata?.line;
     g.addEdge(edge.source, edge.target, {
       kind: edge.kind,
       label: edge.kind,
       color: "#94a3b8",
       size: 1,
+      ...(typeof line === "number" ? { line } : {}),
     });
   }
 

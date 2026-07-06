@@ -70,15 +70,18 @@ def resolve_cross_language_edges(
         norm = normalize_http_path(path)
         target_id = server_map.get(norm)
         if target_id and hint["node_id"] != target_id:
+            metadata: dict[str, Any] = {"http_path": path, "resolved": True}
+            # Edge evidence (ADR-0026): the client call-site line, when the
+            # hint carries one (absent on stale-cache hints — degrades cleanly).
+            line = hint.get("payload", {}).get("line")
+            if isinstance(line, int):
+                metadata["line"] = line
             edges.append(
                 {
                     "source": hint["node_id"],
                     "target": target_id,
                     "kind": "cross_language_call",
-                    "metadata": {
-                        "http_path": path,
-                        "resolved": True,
-                    },
+                    "metadata": metadata,
                 }
             )
 
@@ -92,15 +95,18 @@ def resolve_cross_language_edges(
         for file_id in file_nodes:
             if file_id == cmd_norm or file_id.endswith("/" + cmd_norm):
                 if hint["node_id"] != file_id:
+                    spawn_metadata: dict[str, Any] = {"command": cmd, "resolved": True}
+                    # Edge evidence (ADR-0026): the spawn call-site line, when
+                    # present (absent on stale-cache hints — degrades cleanly).
+                    spawn_line = hint.get("payload", {}).get("line")
+                    if isinstance(spawn_line, int):
+                        spawn_metadata["line"] = spawn_line
                     edges.append(
                         {
                             "source": hint["node_id"],
                             "target": file_id,
                             "kind": "cross_language_spawn",
-                            "metadata": {
-                                "command": cmd,
-                                "resolved": True,
-                            },
+                            "metadata": spawn_metadata,
                         }
                     )
                 break

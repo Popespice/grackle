@@ -42,6 +42,7 @@ function Skeleton(): JSX.Element {
 export function SourceViewer(): JSX.Element | null {
   // All hooks must be at the top — no early returns before this block.
   const selectedNodeId = useGraphStore((s) => s.selectedNodeId);
+  const sourceViewerTarget = useGraphStore((s) => s.sourceViewerTarget);
   const graph = useGraphStore((s) => s.graph);
   const theme = useTheme((s) => s.theme);
 
@@ -53,9 +54,12 @@ export function SourceViewer(): JSX.Element | null {
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Derive path/line from store without conditioning on graph nullability.
+  // An explicit sourceViewerTarget (edge evidence, ADR-0026) wins over the
+  // selected node's definition — it can point at a call/import site in a
+  // DIFFERENT file (e.g. an incoming edge's source).
   const node = graph?.nodes.find((n) => n.id === selectedNodeId) ?? null;
-  const path = node?.path ?? null;
-  const targetLine = node?.line ?? null;
+  const path = sourceViewerTarget?.path ?? node?.path ?? null;
+  const targetLine = sourceViewerTarget?.line ?? node?.line ?? null;
 
   const sourceState = useSource(path);
 
@@ -84,7 +88,7 @@ export function SourceViewer(): JSX.Element | null {
   // Conditional returns come after all hooks.
   if (!graph) return null;
 
-  if (!selectedNodeId) {
+  if (!selectedNodeId && !sourceViewerTarget) {
     return (
       <div
         style={{

@@ -331,12 +331,16 @@ def resolve_graph(graph: StaticGraph) -> StaticGraph:
         )
 
         if resolution.source != "unresolved" and resolution.target_id is not None:
+            # Carry forward edge evidence (e.g. ``line``, ADR-0026) but drop the
+            # ``resolved`` marker so the now-resolved edge reflects its state
+            # and stays idempotent under a re-resolve pass.
+            evidence = {k: v for k, v in meta.items() if k != "resolved"}
             resolved_edges.append(
                 {
                     "source": e["source"],
                     "target": resolution.target_id,
                     "kind": e["kind"],
-                    "metadata": resolution.metadata,
+                    "metadata": {**evidence, **resolution.metadata},
                 }
             )
         else:

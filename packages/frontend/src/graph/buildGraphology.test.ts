@@ -131,4 +131,27 @@ describe("buildGraphology", () => {
     expect(g.order).toBe(0);
     expect(g.size).toBe(0);
   });
+
+  it("carries edge metadata.line onto the edge attribute (ADR-0026)", () => {
+    const graph = {
+      version: 1,
+      language: "python",
+      nodes: [
+        { id: "a", kind: "file", name: "a", path: "a.py" },
+        { id: "b", kind: "file", name: "b", path: "b.py" },
+      ],
+      edges: [
+        { source: "a", target: "b", kind: "call", metadata: { line: 3 } },
+        { source: "a", target: "b", kind: "call", metadata: { line: 7 } },
+        { source: "a", target: "b", kind: "import" },
+      ],
+    };
+    const g = buildGraphology(graph);
+    const lines = g
+      .edges("a", "b")
+      .map((e) => g.getEdgeAttribute(e, "line"))
+      .sort();
+    // Two call edges keep their distinct lines; the line-less import is undefined.
+    expect(lines).toEqual([3, 7, undefined]);
+  });
 });

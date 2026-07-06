@@ -61,7 +61,8 @@ class _CallCollector:
     """
 
     def __init__(self) -> None:
-        self.calls: list[str] = []
+        # (callee name, 1-based source line of the call site)
+        self.calls: list[tuple[str, int]] = []
 
     def walk(self, node: Node) -> None:
         for child in node.named_children:
@@ -78,14 +79,14 @@ class _CallCollector:
                     "property_identifier",
                     "type_identifier",
                 ):
-                    self.calls.append(_t(fn))
+                    self.calls.append((_t(fn), fn.start_point[0] + 1))
                 self.walk(child)
             elif t == "new_expression":
                 ctor = child.child_by_field_name("constructor")
                 if ctor is None and child.named_children:
                     ctor = child.named_children[0]
                 if ctor is not None and ctor.type in ("identifier", "type_identifier"):
-                    self.calls.append(_t(ctor))
+                    self.calls.append((_t(ctor), ctor.start_point[0] + 1))
                 self.walk(child)
             else:
                 self.walk(child)
@@ -151,7 +152,7 @@ class TSFileVisitor:
 
         type_only = any(not c.is_named and c.type == "type" for c in node.children)
 
-        meta: dict[str, Any] = {"type_only": type_only}
+        meta: dict[str, Any] = {"type_only": type_only, "line": node.start_point[0] + 1}
 
         clause = _find(node, "import_clause")
         if clause is not None:
@@ -211,14 +212,14 @@ class TSFileVisitor:
                 for c in extends.named_children:
                     base_name = self._type_name(c)
                     if base_name:
-                        self._emit_inherit(class_id, base_name)
+                        self._emit_inherit(class_id, base_name, c.start_point[0] + 1)
 
             implements = _find(heritage, "implements_clause")
             if implements is not None:
                 for c in implements.named_children:
                     iface_name = self._type_name(c)
                     if iface_name:
-                        self._emit_implements(class_id, iface_name)
+                        self._emit_implements(class_id, iface_name, c.start_point[0] + 1)
 
         body = node.child_by_field_name("body")
         if body is not None:
@@ -237,25 +238,25 @@ class TSFileVisitor:
             return _t(name_node) if name_node is not None else None
         return None
 
-    def _emit_inherit(self, class_id: str, base_name: str) -> None:
+    def _emit_inherit(self, class_id: str, base_name: str, line: int) -> None:
         local_id = self._find_local(base_name)
         self._builder.add_edge(
             {
                 "source": class_id,
                 "target": local_id if local_id else base_name,
                 "kind": "inherit",
-                "metadata": {} if local_id else {"resolved": False},
+                "metadata": {"line": line} if local_id else {"resolved": False, "line": line},
             }
         )
 
-    def _emit_implements(self, class_id: str, iface_name: str) -> None:
+    def _emit_implements(self, class_id: str, iface_name: str, line: int) -> None:
         local_id = self._find_local(iface_name)
         self._builder.add_edge(
             {
                 "source": class_id,
                 "target": local_id if local_id else iface_name,
                 "kind": "implements",
-                "metadata": {} if local_id else {"resolved": False},
+                "metadata": {"line": line} if local_id else {"resolved": False, "line": line},
             }
         )
 
@@ -398,12 +399,12 @@ class TSFileVisitor:
     def _emit_calls(self, caller_id: str, body: Node) -> None:
         collector = _CallCollector()
         collector.walk(body)
-        for callee in collector.calls:
+        for callee, line in collector.calls:
             self._builder.add_edge(
                 {
                     "source": caller_id,
                     "target": callee,
                     "kind": "call",
-                    "metadata": {"resolved": False},
+                    "metadata": {"resolved": False, "line": line},
                 }
             )

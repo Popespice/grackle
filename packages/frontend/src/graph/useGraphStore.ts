@@ -9,6 +9,20 @@ import type { DiffStatus } from "./diff";
 interface GraphStoreState {
   graph: Graph | null;
   selectedNodeId: string | null;
+  /**
+   * The edge the user picked in the graph (or is inspecting), identified by its
+   * endpoints.  Mutually exclusive with ``selectedNodeId`` for single-selection
+   * UX.  Drives the EdgeEvidencePanel (Phase 10.4, ADR-0026).
+   */
+  selectedEdge: { source: string; target: string } | null;
+  /**
+   * An explicit source-viewer jump target (path + 1-based line) that overrides
+   * the node-derived path/line.  Set by ``jumpToSourceLine`` when the user
+   * clicks edge evidence whose line is NOT a node definition line (e.g. a call
+   * site deep in a function body).  Cleared on ``selectNode`` so a plain node
+   * selection falls back to the node's definition line. (Phase 10.4.)
+   */
+  sourceViewerTarget: { path: string; line: number } | null;
   highlightedNodeIds: Set<string> | null;
   hiddenKinds: Set<string>;
   searchTerm: string;
@@ -56,6 +70,9 @@ interface GraphStoreState {
   // Graph actions
   setGraph: (graph: Graph) => void;
   selectNode: (nodeId: string | null) => void;
+  selectEdge: (edge: { source: string; target: string } | null) => void;
+  /** Set an explicit source-viewer jump target (path + 1-based line). */
+  jumpToSourceLine: (path: string, line: number) => void;
   setHighlightedNodes: (ids: string[] | null) => void;
   toggleKind: (kind: string) => void;
   showAllKinds: () => void;
@@ -101,6 +118,8 @@ interface GraphStoreState {
 export const useGraphStore = create<GraphStoreState>()((set) => ({
   graph: null,
   selectedNodeId: null,
+  selectedEdge: null,
+  sourceViewerTarget: null,
   highlightedNodeIds: null,
   hiddenKinds: new Set<string>(),
   searchTerm: "",
@@ -124,6 +143,8 @@ export const useGraphStore = create<GraphStoreState>()((set) => ({
     set({
       graph,
       selectedNodeId: null,
+      selectedEdge: null,
+      sourceViewerTarget: null,
       highlightedNodeIds: null,
       // Clear diff overlay AND baseline when the static graph changes — both
       // are keyed by node ID, which is graph-scoped. A baseline captured from a
@@ -133,7 +154,19 @@ export const useGraphStore = create<GraphStoreState>()((set) => ({
       diffOverlay: null,
       diffBaseline: null,
     }),
-  selectNode: (nodeId) => set({ selectedNodeId: nodeId }),
+  selectNode: (nodeId) =>
+    // A plain node selection clears any picked edge and any explicit source
+    // jump target, so the SourceViewer falls back to the node's definition.
+    set({
+      selectedNodeId: nodeId,
+      selectedEdge: null,
+      sourceViewerTarget: null,
+    }),
+  selectEdge: (edge) =>
+    // Picking an edge clears the node selection (single-selection UX). The
+    // source jump target is left to jumpToSourceLine, called alongside.
+    set({ selectedEdge: edge, selectedNodeId: null }),
+  jumpToSourceLine: (path, line) => set({ sourceViewerTarget: { path, line } }),
   setHighlightedNodes: (ids) =>
     set({ highlightedNodeIds: ids ? new Set(ids) : null }),
   toggleKind: (kind) =>

@@ -219,8 +219,16 @@ def resolve_graph(graph: StaticGraph) -> StaticGraph:
         node_id = _resolver(fid).resolve(e["target"])
 
         if node_id is not None:
+            # Carry forward edge evidence (e.g. ``line``, ADR-0026); drop the
+            # ``resolved`` marker on the now-resolved edge.
+            evidence = {k: v for k, v in meta.items() if k != "resolved"}
             resolved_edges.append(
-                {"source": e["source"], "target": node_id, "kind": e["kind"], "metadata": {}}
+                {
+                    "source": e["source"],
+                    "target": node_id,
+                    "kind": e["kind"],
+                    "metadata": evidence,
+                }
             )
         else:
             resolved_edges.append(
