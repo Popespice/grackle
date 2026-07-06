@@ -120,6 +120,8 @@ export function GraphCanvas(): JSX.Element {
   const traceSessionId = useGraphStore((s) => s.traceSessionId);
   const diffOverlay = useGraphStore((s) => s.diffOverlay);
   const selectNode = useGraphStore((s) => s.selectNode);
+  const selectEdge = useGraphStore((s) => s.selectEdge);
+  const jumpToSourceLine = useGraphStore((s) => s.jumpToSourceLine);
   const setHighlightedNodes = useGraphStore((s) => s.setHighlightedNodes);
 
   const { heat, maxHeat } = useHeatmap();
@@ -167,7 +169,23 @@ export function GraphCanvas(): JSX.Element {
     sigma.on("clickNode", ({ node }) => {
       selectNode(node);
     });
+    sigma.on("clickEdge", ({ edge }) => {
+      const g = graphologyRef.current;
+      if (!g) return;
+      const source = g.source(edge);
+      const target = g.target(edge);
+      selectEdge({ source, target });
+      // Jump to this edge's exact evidence line (ADR-0026), read off the
+      // clicked edge's own attribute so parallel edges disambiguate. The line
+      // lives in the SOURCE node's file. Absent line → no jump (degrades).
+      const line = g.getEdgeAttribute(edge, "line");
+      if (typeof line === "number") {
+        const path = graph.nodes.find((n) => n.id === source)?.path;
+        if (path) jumpToSourceLine(path, line);
+      }
+    });
     sigma.on("clickStage", () => {
+      // selectNode(null) also clears selectedEdge + sourceViewerTarget.
       selectNode(null);
       setHighlightedNodes(null);
     });

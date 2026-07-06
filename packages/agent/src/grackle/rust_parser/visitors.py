@@ -133,7 +133,8 @@ class _CallCollector:
     """
 
     def __init__(self) -> None:
-        self.calls: list[str] = []
+        # (callee name, 1-based source line of the call site)
+        self.calls: list[tuple[str, int]] = []
 
     def walk(self, node: Node) -> None:
         for child in node.named_children:
@@ -145,7 +146,7 @@ class _CallCollector:
                 if func is not None:
                     name = self._name_of(func)
                     if name:
-                        self.calls.append(name)
+                        self.calls.append((name, child.start_point[0] + 1))
                 self.walk(child)
             else:
                 self.walk(child)
@@ -324,14 +325,16 @@ class RustFileVisitor:
             }
         )
 
-        # Emit unresolved inherit edges for each supertrait
+        # Emit unresolved inherit edges for each supertrait. Supertraits are
+        # extracted as bare name strings (no per-name node), so the evidence
+        # line is the trait declaration line — a per-declaration approximation.
         for st in supertraits:
             self._builder.add_edge(
                 {
                     "source": trait_id,
                     "target": st,
                     "kind": "inherit",
-                    "metadata": {"resolved": False},
+                    "metadata": {"resolved": False, "line": line},
                 }
             )
 
@@ -362,7 +365,7 @@ class RustFileVisitor:
                         "source": f"{self._file_id}:{type_name}",
                         "target": trait_name,
                         "kind": "implements",
-                        "metadata": {"resolved": False},
+                        "metadata": {"resolved": False, "line": trait_node.start_point[0] + 1},
                     }
                 )
 
@@ -407,7 +410,7 @@ class RustFileVisitor:
         for path, alias in _extract_use_paths(clause):
             if not path:
                 continue
-            meta: dict[str, Any] = {}
+            meta: dict[str, Any] = {"line": node.start_point[0] + 1}
             if alias is not None:
                 meta["alias"] = alias
             self._builder.add_edge(
@@ -426,12 +429,12 @@ class RustFileVisitor:
     def _emit_calls(self, caller_id: str, body: Node) -> None:
         collector = _CallCollector()
         collector.walk(body)
-        for callee in collector.calls:
+        for callee, line in collector.calls:
             self._builder.add_edge(
                 {
                     "source": caller_id,
                     "target": callee,
                     "kind": "call",
-                    "metadata": {"resolved": False},
+                    "metadata": {"resolved": False, "line": line},
                 }
             )

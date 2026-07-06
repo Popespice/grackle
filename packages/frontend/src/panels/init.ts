@@ -1,6 +1,7 @@
 import { GraphCanvas } from "../graph/GraphCanvas";
 import { CyclesPanel } from "./CyclesPanel";
 import { DiffPanel } from "./DiffPanel";
+import { EdgeEvidencePanel } from "./EdgeEvidencePanel";
 import { FlameGraphPanel } from "./FlameGraphPanel";
 import { GraphLegendPanel } from "./GraphLegendPanel";
 import { HeaderChrome } from "./HeaderChrome";
@@ -54,6 +55,12 @@ panels.register({
   id: "graph-legend",
   component: GraphLegendPanel,
   order: 20,
+});
+panels.register({
+  slot: "right-sidebar",
+  id: "edge-evidence",
+  component: EdgeEvidencePanel,
+  order: 25,
 });
 panels.register({
   slot: "right-sidebar",

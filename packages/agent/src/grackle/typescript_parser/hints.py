@@ -25,8 +25,15 @@ _EXECA_RE = re.compile(r"\bexeca\s*\(\s*['\"]([^'\"]+)['\"]")
 
 
 def extract_hints(source: str, file_id: str) -> list[dict[str, Any]]:
-    """Return hint dicts extracted from *source* attributed to *file_id*."""
+    """Return hint dicts extracted from *source* attributed to *file_id*.
+
+    Each hint's ``payload`` carries the 1-based ``line`` of the matched
+    construct (edge evidence, ADR-0026), derived from the regex match offset.
+    """
     hints: list[dict[str, Any]] = []
+
+    def _line(m: re.Match[str]) -> int:
+        return source.count("\n", 0, m.start()) + 1
 
     for m in _FETCH_RE.finditer(source):
         hints.append(
@@ -34,7 +41,7 @@ def extract_hints(source: str, file_id: str) -> list[dict[str, Any]]:
                 "kind": "http_client",
                 "node_id": file_id,
                 "language": "typescript",
-                "payload": {"path": m.group(1)},
+                "payload": {"path": m.group(1), "line": _line(m)},
             }
         )
 
@@ -44,7 +51,7 @@ def extract_hints(source: str, file_id: str) -> list[dict[str, Any]]:
                 "kind": "http_client",
                 "node_id": file_id,
                 "language": "typescript",
-                "payload": {"path": m.group(1)},
+                "payload": {"path": m.group(1), "line": _line(m)},
             }
         )
 
@@ -54,7 +61,7 @@ def extract_hints(source: str, file_id: str) -> list[dict[str, Any]]:
                 "kind": "http_server",
                 "node_id": file_id,
                 "language": "typescript",
-                "payload": {"path": m.group(1)},
+                "payload": {"path": m.group(1), "line": _line(m)},
             }
         )
 
@@ -64,7 +71,7 @@ def extract_hints(source: str, file_id: str) -> list[dict[str, Any]]:
                 "kind": "subprocess",
                 "node_id": file_id,
                 "language": "typescript",
-                "payload": {"command": m.group(1)},
+                "payload": {"command": m.group(1), "line": _line(m)},
             }
         )
 
@@ -74,7 +81,7 @@ def extract_hints(source: str, file_id: str) -> list[dict[str, Any]]:
                 "kind": "subprocess",
                 "node_id": file_id,
                 "language": "typescript",
-                "payload": {"command": m.group(1)},
+                "payload": {"command": m.group(1), "line": _line(m)},
             }
         )
 

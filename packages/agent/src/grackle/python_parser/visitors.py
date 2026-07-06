@@ -227,14 +227,20 @@ class ImportVisitor(ast.NodeVisitor):
 
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
-            self._emit(target=alias.name, relative=False, alias=alias.asname, names=None)
+            self._emit(
+                target=alias.name,
+                relative=False,
+                alias=alias.asname,
+                names=None,
+                line=node.lineno,
+            )
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         level = node.level
         module = node.module or ""
         target = ("." * level + module) if level > 0 else module
         names = [a.name for a in node.names if a.name != "*"] or None
-        self._emit(target=target, relative=level > 0, alias=None, names=names)
+        self._emit(target=target, relative=level > 0, alias=None, names=names, line=node.lineno)
 
     def visit_If(self, node: ast.If) -> None:
         if _is_type_checking_guard(node.test):
@@ -270,8 +276,9 @@ class ImportVisitor(ast.NodeVisitor):
         relative: bool,
         alias: str | None,
         names: list[str] | None,
+        line: int,
     ) -> None:
-        metadata: dict[str, Any] = {"relative": relative}
+        metadata: dict[str, Any] = {"relative": relative, "line": line}
         if self._in_type_checking:
             metadata["type_checking"] = True
         if self._in_try:
@@ -328,7 +335,7 @@ class _CallVisitor(ast.NodeVisitor):
                     "source": self._caller_id,
                     "target": callee,
                     "kind": "call",
-                    "metadata": {"resolved": False},
+                    "metadata": {"resolved": False, "line": node.lineno},
                 }
             )
         self.generic_visit(node)
@@ -465,7 +472,12 @@ class ClassVisitor(ast.NodeVisitor):
             target_id = self._resolve_local(base_name)
             if target_id is not None:
                 self._builder.add_edge(
-                    {"source": actual_id, "target": target_id, "kind": "inherit", "metadata": {}}
+                    {
+                        "source": actual_id,
+                        "target": target_id,
+                        "kind": "inherit",
+                        "metadata": {"line": base.lineno},
+                    }
                 )
             else:
                 self._builder.add_edge(
@@ -473,7 +485,7 @@ class ClassVisitor(ast.NodeVisitor):
                         "source": actual_id,
                         "target": base_name,
                         "kind": "inherit",
-                        "metadata": {"resolved": False},
+                        "metadata": {"resolved": False, "line": base.lineno},
                     }
                 )
 
