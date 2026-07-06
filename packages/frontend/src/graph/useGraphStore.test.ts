@@ -472,8 +472,12 @@ describe("useGraphStore", () => {
   // Edge evidence (Phase 10.4)
   // -------------------------------------------------------------------------
 
-  it("selectEdge sets selectedEdge and clears selectedNodeId", () => {
+  it("selectEdge sets selectedEdge and clears selectedNodeId + sourceViewerTarget", () => {
     useGraphStore.getState().selectNode("a.py:App");
+    // A prior jump target (from a previously-picked line-bearing edge) must not
+    // survive picking a new edge — else clicking a line-less edge next leaves
+    // the SourceViewer pinned to the old file/line (regression guard).
+    useGraphStore.getState().jumpToSourceLine("a.py", 42);
     useGraphStore
       .getState()
       .selectEdge({ source: "a.py:App", target: "b.py:main" });
@@ -483,6 +487,7 @@ describe("useGraphStore", () => {
       target: "b.py:main",
     });
     expect(state.selectedNodeId).toBeNull();
+    expect(state.sourceViewerTarget).toBeNull();
   });
 
   it("jumpToSourceLine sets an explicit source-viewer target", () => {

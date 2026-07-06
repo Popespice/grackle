@@ -163,9 +163,13 @@ export const useGraphStore = create<GraphStoreState>()((set) => ({
       sourceViewerTarget: null,
     }),
   selectEdge: (edge) =>
-    // Picking an edge clears the node selection (single-selection UX). The
-    // source jump target is left to jumpToSourceLine, called alongside.
-    set({ selectedEdge: edge, selectedNodeId: null }),
+    // Picking an edge clears the node selection (single-selection UX) AND any
+    // prior source-jump target. A line-bearing edge immediately re-sets the
+    // target via jumpToSourceLine (called alongside in GraphCanvas.clickEdge);
+    // a line-less edge (Go method-set, stale-cache cross-language) leaves it
+    // cleared so the SourceViewer shows its placeholder instead of a stale
+    // file/line from the previously-picked edge.
+    set({ selectedEdge: edge, selectedNodeId: null, sourceViewerTarget: null }),
   jumpToSourceLine: (path, line) => set({ sourceViewerTarget: { path, line } }),
   setHighlightedNodes: (ids) =>
     set({ highlightedNodeIds: ids ? new Set(ids) : null }),

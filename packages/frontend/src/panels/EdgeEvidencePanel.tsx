@@ -234,9 +234,7 @@ export function EdgeEvidencePanel(): JSX.Element | null {
                     }}
                   >
                     <span style={MUTED}>{arrow}</span>
-                    <span style={{ ...MUTED }}>
-                      {verbForKind(row.edge.kind)}
-                    </span>
+                    <span style={MUTED}>{verbForKind(row.edge.kind)}</span>
                     <span
                       style={{
                         color: "var(--color-text)",
