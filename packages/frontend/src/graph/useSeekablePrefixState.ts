@@ -1,4 +1,4 @@
-import { useMemo, useRef } from "react";
+import { useMemo } from "react";
 import type { UseFullTraceResult } from "./useFullTrace";
 import { useGraphStore } from "./useGraphStore";
 
@@ -48,23 +48,17 @@ export function useSeekablePrefixState(
 ): UseSeekablePrefixStateResult {
   const traceSeekable = useGraphStore((s) => s.traceSeekable);
   const traceEvents = useGraphStore((s) => s.traceEvents);
-  const traceSessionId = useGraphStore((s) => s.traceSessionId);
 
-  // Once a captured value has been observed, the fact can never become false
-  // again for the rest of THIS session — latch it so a live-streaming session
-  // (whose traceEvents/full.events array identity changes on every rAF batch)
-  // doesn't re-scan up to 2000 events on every tick after the answer is
-  // already known. Reset the latch on a session change (a new session may not
-  // have captured anything, even if a prior one did).
-  const latchedRef = useRef(false);
-  const sessionRef = useRef(traceSessionId);
-  if (sessionRef.current !== traceSessionId) {
-    sessionRef.current = traceSessionId;
-    latchedRef.current = false;
-  }
-
-  const scanned = useMemo(() => {
-    if (latchedRef.current) return true;
+  // A plain, per-render-inputs scan — deliberately NOT latched. A ref-latch
+  // ("once true, stay true this session") looks like a cheap win but cannot be
+  // made correct here: `useFullTrace` clears the prior prefix in a post-commit
+  // effect (so a session change leaves the OLD, possibly-captured prefix
+  // visible for one render) and some producers reuse a fixed session id
+  // ("imported"), so no session-id-keyed reset can prevent a stale latch from
+  // leaking a captured session's `true` into an uncaptured one. The scan is a
+  // bounded ≤2000-element pass; recomputing it per live batch is negligible
+  // and provably correct.
+  const captureSeen = useMemo(() => {
     const events = full.loaded ? full.events : traceEvents;
     const limit = Math.min(events.length, 2000);
     for (let i = 0; i < limit; i++) {
@@ -72,8 +66,6 @@ export function useSeekablePrefixState(
     }
     return false;
   }, [full.loaded, full.events, traceEvents]);
-  if (scanned) latchedRef.current = true;
-  const captureSeen = latchedRef.current;
 
   let status: SeekablePrefixStatus;
   if (!traceSeekable) {

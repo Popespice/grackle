@@ -160,23 +160,30 @@ export function CausalPathPanel(): JSX.Element | null {
     [graph]
   );
 
-  // O(1)-lookup index of call-site lines, built once per `graph` change
-  // instead of scanning graph.edges per hop per render (mirrors
-  // EdgeEvidencePanel's memoized-lookup idiom). Only "call"/"cross_language_call"
-  // edges represent an invocation — an import/inherit/implements edge sharing
-  // the same (source, target) pair must never stand in as a call site. The
-  // first line-bearing match per (source, target) wins, matching the prior
-  // per-hop scan's behavior (documented parallel-edge approximation, ADR-0026 §8).
+  // O(1)-lookup index of call-site lines (source → target → line), built once
+  // per `graph` change instead of scanning graph.edges per hop per render
+  // (mirrors EdgeEvidencePanel's memoized-lookup idiom). Nested maps keep
+  // source/target as separate keys — a single concatenated `${source}->${target}`
+  // key could alias two edges if a node id contained the "->" substring.
+  // Only "call"/"cross_language_call" edges represent an invocation — an
+  // import/inherit/implements edge sharing the same (source, target) pair must
+  // never stand in as a call site. The first line-bearing match per
+  // (source, target) wins, matching the prior per-hop scan's behavior
+  // (documented parallel-edge approximation, ADR-0026 §8).
   const callEdgeLineIndex = useMemo(() => {
-    const m = new Map<string, number>();
+    const bySource = new Map<string, Map<string, number>>();
     for (const e of graph?.edges ?? []) {
       if (e.kind !== "call" && e.kind !== "cross_language_call") continue;
       const line = edgeLine(e.metadata);
       if (line === null) continue;
-      const key = `${e.source}->${e.target}`;
-      if (!m.has(key)) m.set(key, line);
+      let byTarget = bySource.get(e.source);
+      if (!byTarget) {
+        byTarget = new Map<string, number>();
+        bySource.set(e.source, byTarget);
+      }
+      if (!byTarget.has(e.target)) byTarget.set(e.target, line);
     }
-    return m;
+    return bySource;
   }, [graph]);
 
   const { firings, capped } = useMemo(
@@ -188,12 +195,14 @@ export function CausalPathPanel(): JSX.Element | null {
   );
 
   // Sticky firing selection: re-derive the nearest-to-playhead default when
-  // the SELECTION changes, or when firings first become available (e.g.
-  // after a lazy "Load call stack"). Otherwise the index is fully
+  // the SELECTION or SESSION changes, or when firings first become available
+  // (e.g. after a lazy "Load call stack"). Otherwise the index is fully
   // user-controlled by the stepper — immune to playhead moves triggered by a
   // hop's own "time-travel" action, which must not silently swap which
-  // firing this panel is showing.
-  const derivationKey = `${selectedNodeId ?? ""}:${firings.length > 0}`;
+  // firing this panel is showing. `traceSessionId` is part of the key so a
+  // new session (same node still selected) re-defaults rather than carrying
+  // the previous session's stepper index.
+  const derivationKey = `${traceSessionId ?? ""}:${selectedNodeId ?? ""}:${firings.length > 0}`;
   const [prevDerivationKey, setPrevDerivationKey] = useState("");
   const [firingIndex, setFiringIndex] = useState(0);
   if (derivationKey !== prevDerivationKey) {
@@ -208,19 +217,6 @@ export function CausalPathPanel(): JSX.Element | null {
       : Math.min(Math.max(firingIndex, 0), firings.length - 1);
   const firing: Firing | undefined =
     clampedIndex >= 0 ? firings[clampedIndex] : undefined;
-
-  // firingsOf stops enumerating at MAX_FIRINGS: once capped, a firing that
-  // truly is nearest to the playhead may sit beyond the collected list, in
-  // which case nearestFiring's default (the last COLLECTED firing) is only a
-  // lower bound, not necessarily the actual nearest one. This only matters
-  // when the displayed firing IS that last collected one and the playhead is
-  // at/past it — anywhere else in the collected range, a nearer collected
-  // firing genuinely exists and the default is correct.
-  const defaultMayBeStale =
-    capped &&
-    firing !== undefined &&
-    clampedIndex === firings.length - 1 &&
-    tracePlayhead >= firing.callIndex;
 
   const path = useMemo(
     () =>
@@ -257,7 +253,7 @@ export function CausalPathPanel(): JSX.Element | null {
     ): { path: string; line: number } | null => {
       const parentNode = nodeById.get(parentId);
       if (!parentNode) return null;
-      const line = callEdgeLineIndex.get(`${parentId}->${childId}`);
+      const line = callEdgeLineIndex.get(parentId)?.get(childId);
       return line !== undefined ? { path: parentNode.path, line } : null;
     },
     [callEdgeLineIndex, nodeById]
@@ -291,6 +287,17 @@ export function CausalPathPanel(): JSX.Element | null {
     }
 
     if (firings.length === 0) {
+      // A truncated seekable prefix may simply not reach this node's firings —
+      // "did not fire" would be misleading. Distinguish the two.
+      if (traceSeekable && full.truncated) {
+        return (
+          <div style={MUTED}>
+            This node did not fire within the first{" "}
+            {formatInt(full.events.length)} events — later events are not
+            loaded.
+          </div>
+        );
+      }
       return (
         <div style={MUTED}>This node did not fire in the loaded trace.</div>
       );
@@ -334,14 +341,10 @@ export function CausalPathPanel(): JSX.Element | null {
         </div>
 
         {capped && (
-          <div style={MUTED}>
-            Showing the first {MAX_FIRINGS} firings for this node.
-          </div>
-        )}
-        {defaultMayBeStale && (
           <div style={{ color: "var(--color-warning)" }}>
-            More firings may exist beyond the first {MAX_FIRINGS} collected —
-            this may not be the true nearest firing to the current playhead.
+            Showing the first {MAX_FIRINGS} firings for this node — later
+            firings are not collected, and one nearer the current playhead may
+            exist beyond them.
           </div>
         )}
         {traceSeekable && full.truncated && (

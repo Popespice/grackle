@@ -104,7 +104,12 @@ describe("useSeekablePrefixState", () => {
     expect(result.current.captureSeen).toBe(true);
   });
 
-  it("latches captureSeen true and never rescans once observed", () => {
+  it("recomputes captureSeen from the current session's events, not a stale latch", () => {
+    // A captured session followed by an uncaptured one must report false for
+    // the second — the scan is deliberately unlatched so a prior session's
+    // capture can never leak its "--capture-values is on" hint-suppression
+    // into a session that captured nothing (a fixed-session-id re-import or a
+    // seekable→seekable switch would otherwise strand a stale latch).
     useGraphStore.setState({
       traceSeekable: false,
       traceSessionId: "s1",
@@ -118,39 +123,21 @@ describe("useSeekablePrefixState", () => {
     );
     expect(result.current.captureSeen).toBe(true);
 
-    // A fresh events array with NO captured values would scan false on its
-    // own — the latch must keep reporting true regardless (append-only trace
-    // events never actually un-capture, but this proves the ref-latch itself,
-    // not just "the data happens to still contain a capture").
-    useGraphStore.setState({
-      traceEvents: [call("a.py:h")],
-    });
-    rerender(full({ events: [call("a.py:h")] }));
-    expect(result.current.captureSeen).toBe(true);
-  });
-
-  it("resets the captureSeen latch when the trace session changes", () => {
-    useGraphStore.setState({
-      traceSeekable: false,
-      traceSessionId: "s1",
-      traceEvents: [
-        { ...call("a.py:g"), values: { args: [{ name: "x", repr: "1" }] } },
-      ],
-    });
-    const { result, rerender } = renderHook(
-      (f: UseFullTraceResult) => useSeekablePrefixState(f),
-      { initialProps: full() }
-    );
-    expect(result.current.captureSeen).toBe(true);
-
-    // A new session starts with no captured values yet — the stale latch
-    // from the previous session must not leak the "--capture-values is on"
-    // hint-suppression into a session that hasn't captured anything.
+    // New session, no captures — must recompute false even though a prior
+    // session captured. Also covers a fixed session id reused across imports
+    // (the id staying "s1" would strand a session-id-keyed latch).
     useGraphStore.setState({
       traceSessionId: "s2",
       traceEvents: [call("a.py:h")],
     });
     rerender(full({ events: [call("a.py:h")] }));
+    expect(result.current.captureSeen).toBe(false);
+
+    // Same-id reuse (e.g. two back-to-back FlameGraph imports under the fixed
+    // "imported" session id): swapping in an uncaptured prefix without changing
+    // the id must still recompute false — no latch to strand.
+    useGraphStore.setState({ traceEvents: [call("a.py:i")] });
+    rerender(full({ events: [call("a.py:i")] }));
     expect(result.current.captureSeen).toBe(false);
   });
 });

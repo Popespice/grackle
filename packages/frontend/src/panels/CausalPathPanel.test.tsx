@@ -334,7 +334,7 @@ describe("CausalPathPanel", () => {
     expect(screen.queryByText("↳ call site a.py:1")).not.toBeInTheDocument();
   });
 
-  it("warns when the default firing may not be the true nearest once the list is capped", () => {
+  it("shows the capped caveat regardless of playhead position (no spurious playhead-dependent warning)", () => {
     const events: TraceEvent[] = [];
     for (let i = 0; i < MAX_FIRINGS + 5; i++) {
       events.push(call("a.py:hot", 0, undefined, i));
@@ -344,41 +344,26 @@ describe("CausalPathPanel", () => {
       graph: GRAPH,
       selectedNodeId: "a.py:hot",
       traceSessionId: "s1",
-      // At/past the last COLLECTED firing's callIndex (MAX_FIRINGS - 1) —
-      // a truer nearest firing may exist beyond the cap.
+      // At the last COLLECTED firing's callIndex — the old buggy warning fired
+      // spuriously here; the single capped caveat now conveys the bound
+      // playhead-independently.
       tracePlayhead: MAX_FIRINGS - 1,
     });
     render(<CausalPathPanel />);
 
+    // Exactly ONE capped caveat, not a second playhead-relative warning.
     expect(
-      screen.getByText(`${MAX_FIRINGS} / ${MAX_FIRINGS}`)
-    ).toBeInTheDocument();
+      screen.getAllByText(/later\s+firings are not collected/)
+    ).toHaveLength(1);
     expect(
-      screen.getByText(/may not be the true nearest firing/)
+      screen.getByText(/one nearer the current playhead may exist beyond them/)
     ).toBeInTheDocument();
   });
 
-  it("does not warn about staleness when viewing an earlier collected firing while capped", () => {
-    const events: TraceEvent[] = [];
-    for (let i = 0; i < MAX_FIRINGS + 5; i++) {
-      events.push(call("a.py:hot", 0, undefined, i));
-    }
-    mockUseFullTrace.mockReturnValue(fullTrace({ events, loaded: true }));
-    useGraphStore.setState({
-      graph: GRAPH,
-      selectedNodeId: "a.py:hot",
-      traceSessionId: "s1",
-      tracePlayhead: 0, // default lands on the first collected firing, well within range
-    });
-    render(<CausalPathPanel />);
-
-    expect(screen.getByText(`1 / ${MAX_FIRINGS}`)).toBeInTheDocument();
-    expect(
-      screen.queryByText(/may not be the true nearest firing/)
-    ).not.toBeInTheDocument();
-  });
-
-  it("shows a capped notice when firings exceed MAX_FIRINGS", () => {
+  it("steps to the last collected firing while capped without adding a warning", () => {
+    // Regression: defaultMayBeStale used to fire only for the LAST collected
+    // firing at/past the playhead, so stepping onto it spuriously toggled a
+    // warning even though the user chose it. The caveat is now stable.
     const events: TraceEvent[] = [];
     for (let i = 0; i < MAX_FIRINGS + 5; i++) {
       events.push(call("a.py:hot", 0, undefined, i));
@@ -392,12 +377,20 @@ describe("CausalPathPanel", () => {
     });
     render(<CausalPathPanel />);
 
+    const before = screen.getAllByText(
+      /later\s+firings are not collected/
+    ).length;
+    // Step all the way to the last firing.
+    for (let i = 0; i < MAX_FIRINGS - 1; i++) {
+      fireEvent.click(screen.getByRole("button", { name: "firing ▶" }));
+    }
     expect(
-      screen.getByText(
-        `Showing the first ${MAX_FIRINGS} firings for this node.`
-      )
+      screen.getByText(`${MAX_FIRINGS} / ${MAX_FIRINGS}`)
     ).toBeInTheDocument();
-    expect(screen.getByText(`1 / ${MAX_FIRINGS}`)).toBeInTheDocument();
+    // No extra warning appeared from stepping onto the last firing.
+    expect(
+      screen.getAllByText(/later\s+firings are not collected/)
+    ).toHaveLength(before);
   });
 
   it("shows a completeness banner (not a hard gate) when the prefix is truncated", () => {
@@ -424,6 +417,67 @@ describe("CausalPathPanel", () => {
       screen.getAllByRole("button", { name: "select" }).length
     ).toBeGreaterThan(0);
     expect(screen.queryByText(/unavailable/)).not.toBeInTheDocument();
+  });
+
+  it("distinguishes 'did not fire' from 'not within the loaded prefix' when truncated", () => {
+    // A node with zero firings in a TRUNCATED seekable prefix might simply
+    // fire past the 50k cliff — "did not fire" would be misleading.
+    const events: TraceEvent[] = [call("a.py:main", 0)];
+    mockUseFullTrace.mockReturnValue(
+      fullTrace({ events, loaded: true, truncated: true })
+    );
+    useGraphStore.setState({
+      graph: GRAPH,
+      selectedNodeId: "a.py:unused",
+      traceSessionId: "s1",
+      traceSeekable: true,
+    });
+    render(<CausalPathPanel />);
+
+    expect(
+      screen.getByText(/did not fire within the first 1 events/)
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("This node did not fire in the loaded trace.")
+    ).not.toBeInTheDocument();
+  });
+
+  it("re-defaults the firing stepper to nearest-to-playhead on a new session with the same node selected", () => {
+    const sessionAEvents: TraceEvent[] = [
+      call("a.py:helper", 0, undefined, 10),
+      call("a.py:helper", 0, undefined, 20),
+    ];
+    mockUseFullTrace.mockReturnValue(
+      fullTrace({ events: sessionAEvents, loaded: true })
+    );
+    useGraphStore.setState({
+      graph: GRAPH,
+      selectedNodeId: "a.py:helper",
+      traceSessionId: "sA",
+      tracePlayhead: 0, // nearest is firing 0 → "1 / 2"
+    });
+    const { rerender } = render(<CausalPathPanel />);
+    expect(screen.getByText("1 / 2")).toBeInTheDocument();
+
+    // Step to firing 2/2 so the sticky index is non-default.
+    fireEvent.click(screen.getByRole("button", { name: "firing ▶" }));
+    expect(screen.getByText("2 / 2")).toBeInTheDocument();
+
+    // A brand-new session (same node selected) with the playhead near the
+    // second firing must RE-DEFAULT via nearestFiring, not carry index 1
+    // blindly. Here both firings are <= playhead so nearest is the 2nd — but
+    // the key point is the re-derivation fires; make session B's playhead land
+    // on firing 1 (index 0) to prove it re-defaults rather than sticking.
+    const sessionBEvents: TraceEvent[] = [
+      call("a.py:helper", 0, undefined, 100),
+      call("a.py:helper", 0, undefined, 200),
+    ];
+    mockUseFullTrace.mockReturnValue(
+      fullTrace({ events: sessionBEvents, loaded: true })
+    );
+    useGraphStore.setState({ traceSessionId: "sB", tracePlayhead: 0 });
+    rerender(<CausalPathPanel />);
+    expect(screen.getByText("1 / 2")).toBeInTheDocument();
   });
 
   it("shows a loading state while paging a seekable session", () => {
