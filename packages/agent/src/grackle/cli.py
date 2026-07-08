@@ -500,6 +500,33 @@ def trace(
         "via the SessionLibraryPanel. Created if it does not exist."
     ),
 )
+@click.option(
+    "--watch",
+    is_flag=True,
+    default=False,
+    help=(
+        "Watch --root for source-file changes and re-broadcast a fresh "
+        "static_graph to every connected client on a real content change "
+        "(ADR-0027). Uses the optional watchfiles package if installed "
+        "(pip install grackle[watch]), else a stdlib mtime-poller."
+    ),
+)
+@click.option(
+    "--watch-interval",
+    default=0.3,
+    show_default=True,
+    type=click.FloatRange(min=0.05),
+    help=(
+        "Poll cadence in seconds for the stdlib watcher, and the debounce "
+        "window for the optional watchfiles backend. Ignored without --watch."
+    ),
+)
+@click.option(
+    "--watch-poll",
+    is_flag=True,
+    default=False,
+    help="Force the stdlib mtime-poller even if watchfiles is installed. Ignored without --watch.",
+)
 def serve(
     host: str,
     port: int,
@@ -507,6 +534,9 @@ def serve(
     trace_source: Path | None,
     no_pace: bool,
     store: Path | None,
+    watch: bool,
+    watch_interval: float,
+    watch_poll: bool,
 ) -> None:
     """Start the grackle agent WebSocket server."""
     configure_logging()
@@ -517,6 +547,7 @@ def serve(
         python=sys.version.split()[0],
         root=str(root),
         trace_source=str(trace_source) if trace_source else None,
+        watch=watch,
     )
     session_store = None
     if store is not None:
@@ -531,6 +562,9 @@ def serve(
             trace_source=trace_source,
             pace=not no_pace,
             store=session_store,
+            watch=watch,
+            watch_interval=watch_interval,
+            watch_poll=watch_poll,
         )
     )
 

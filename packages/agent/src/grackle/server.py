@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import concurrent.futures
 import contextlib
 import os
 import time
@@ -110,23 +111,24 @@ def _graph_signature(graph: StaticGraph) -> tuple[int, int, int]:
     return (len(graph["nodes"]), len(graph["edges"]), checksum)
 
 
-async def _push_static_graph(
-    ws: ServerConnection,
+def _build_static_graph(
     root: Path,
     meta_cache: dict[tuple[int, int, int], dict[str, Any]],
-) -> None:
-    """Detect language(s), parse the project, and push static_graph if supported.
+) -> StaticGraph | None:
+    """Detect language(s), parse the project, and return the enriched graph.
 
     Agent-side analysis (hub-score + cycles) is injected into ``graph.metadata``
     via :func:`enrich_metadata`, memoized by ``meta_cache`` so identical graphs
-    across connects do not recompute Tarjan SCC.
+    across connects (or watch-mode rebuilds, ADR-0027) do not recompute Tarjan
+    SCC. Returns ``None`` if no language is detected or parsing fails — callers
+    must treat that as "nothing to push", not an error.
     """
     from grackle.adapters import registry
     from grackle.adapters.base import ParseOptions
 
     detected = registry.detect(root)
     if not detected:
-        return
+        return None
 
     try:
         if len(detected) > 1:
@@ -134,11 +136,11 @@ async def _push_static_graph(
         else:
             adapter = registry.get_static(detected[0])
             if adapter is None:
-                return
+                return None
             graph = adapter.parse(root, ParseOptions())
     except Exception as exc:
         log.warning("static graph parse failed", error=str(exc), root=str(root))
-        return
+        return None
 
     sig = _graph_signature(graph)
     cached = meta_cache.get(sig)
@@ -153,6 +155,19 @@ async def _push_static_graph(
             "cycles": graph["metadata"]["cycles"],
         }
 
+    return graph
+
+
+async def _push_static_graph(
+    ws: ServerConnection,
+    root: Path,
+    meta_cache: dict[tuple[int, int, int], dict[str, Any]],
+) -> None:
+    """Build the static graph (if supported) and push it to one connection."""
+    graph = _build_static_graph(root, meta_cache)
+    if graph is None:
+        return
+
     log.info(
         "static graph pushed",
         nodes=len(graph["nodes"]),
@@ -160,6 +175,89 @@ async def _push_static_graph(
         root=str(root),
     )
     await ws.send(protocol.make_static_graph(graph))
+
+
+async def _watch_loop(
+    root: Path,
+    connections: set[ServerConnection],
+    meta_cache: dict[tuple[int, int, int], dict[str, Any]],
+    interval: float,
+    *,
+    executor: concurrent.futures.ThreadPoolExecutor,
+    force_poll: bool = False,
+) -> None:
+    """Re-parse and re-broadcast the static graph when a source file changes (ADR-0027).
+
+    Runs for the server's lifetime; cancelled in ``serve()``'s ``finally``.
+    Skips the rebuild entirely when no client is connected — the next
+    connect already gets a fresh parse via :func:`_push_static_graph`, so
+    there is nothing to broadcast to yet. Cache eviction ahead of the
+    rebuild is hygiene, not correctness (the per-file cache already
+    re-parses on a content-hash miss), but is delete-critical: a deleted
+    file's manifest entry + sidecar would otherwise never be reclaimed.
+
+    The rebuild itself runs on ``executor`` (a dedicated single-worker
+    thread pool owned by ``serve()``), **not** inline on the event loop —
+    unlike the connect-time parse in :func:`_push_static_graph`, which stays
+    inline. This is a deliberate asymmetry, added after review found the
+    inline-everywhere design (ADR-0027's original §5) empirically starves
+    every other connected client's keepalive/message handling for the
+    rebuild's full duration, and delays ``watch_task`` cancellation by the
+    same amount. ``CacheManager`` and ``meta_cache`` both tolerate this: the
+    former is explicitly documented thread/process-safe, and the latter's
+    only race is two threads redundantly recomputing the same
+    (deterministic) value for an identical topology signature. Not audited:
+    the tree-sitter walkers' module-level cached ``Parser`` singleton
+    (``tree_sitter_runtime.get_parser``), which TS/Go/Rust projects now
+    reach from two real OS threads for the first time (this executor thread
+    and the still-inline connect-time parse) — upstream tree-sitter does not
+    document concurrent multi-threaded ``.parse()`` calls on one ``Parser``
+    instance as safe. No crash reproduced in review; see ADR-0027's Known
+    limitations. A pathologically slow rebuild can also still delay full
+    process exit at interpreter shutdown (Python cannot forcibly interrupt a
+    running thread) — see ADR-0027's Known limitations.
+
+    A single unexpected failure logs and stops the loop rather than
+    crashing the server — watch mode degrading to "no live updates" should
+    never take down an otherwise-healthy connection.
+    """
+    from grackle.cache import CacheManager
+    from grackle.watcher import watch_changes
+
+    loop = asyncio.get_running_loop()
+    try:
+        cache = CacheManager(root)
+        async for changed_paths in watch_changes(root, interval, force_poll=force_poll):
+            for changed_path in changed_paths:
+                try:
+                    cache.evict(changed_path)
+                except Exception as exc:
+                    log.warning(
+                        "watch-mode cache eviction failed",
+                        path=str(changed_path),
+                        error=str(exc),
+                    )
+
+            if not connections:
+                continue
+
+            graph = await loop.run_in_executor(executor, _build_static_graph, root, meta_cache)
+            if graph is None:
+                continue
+
+            log.info(
+                "static graph re-broadcast",
+                nodes=len(graph["nodes"]),
+                edges=len(graph["edges"]),
+                root=str(root),
+                clients=len(connections),
+                changed=len(changed_paths),
+            )
+            await broadcast(protocol.make_static_graph(graph), connections)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        log.warning("watch loop stopped unexpectedly", error=str(exc), root=str(root))
 
 
 async def _receive_loop(
@@ -447,25 +545,37 @@ async def serve(
     trace_source: Path | None = None,
     pace: bool = True,
     store: SessionStore | None = None,
+    watch: bool = False,
+    watch_interval: float = 0.3,
+    watch_poll: bool = False,
 ) -> None:
     """Start the WebSocket server and run until cancelled.
 
     Args:
-        host:         Bind address (must be loopback in production).
-        port:         WebSocket port.
-        root:         Project root — parsed on each client connect for the
-                      static_graph push.
-        trace_source: If set, replay this JSONL trace file to every new
-                      client after the static_graph push.  Each connection
-                      gets its own replay from the start of the file.
-        pace:         When True (default) replay is deadline-scheduled to
-                      reproduce original inter-event timing (gap clamped to
-                      ``file_replay._MAX_GAP_S``).  When False events are pushed
-                      as fast as the socket allows — useful for tests and CI.
-        store:        Optional session library.  When set, the ``--trace-source``
-                      file (if any) is indexed into it and ``session_list`` /
-                      ``session_load`` requests are served from it.  Closed when
-                      ``serve`` exits.
+        host:           Bind address (must be loopback in production).
+        port:           WebSocket port.
+        root:           Project root — parsed on each client connect for the
+                        static_graph push.
+        trace_source:   If set, replay this JSONL trace file to every new
+                        client after the static_graph push.  Each connection
+                        gets its own replay from the start of the file.
+        pace:           When True (default) replay is deadline-scheduled to
+                        reproduce original inter-event timing (gap clamped to
+                        ``file_replay._MAX_GAP_S``).  When False events are pushed
+                        as fast as the socket allows — useful for tests and CI.
+        store:          Optional session library.  When set, the ``--trace-source``
+                        file (if any) is indexed into it and ``session_list`` /
+                        ``session_load`` requests are served from it.  Closed when
+                        ``serve`` exits.
+        watch:          When True, watch ``root`` for source-file changes and
+                        re-broadcast a fresh ``static_graph`` to every connected
+                        client on a real content change (ADR-0027). Off by
+                        default.
+        watch_interval: Poll cadence in seconds for the stdlib watcher, and the
+                        debounce window (converted to ms) for the optional
+                        ``watchfiles`` backend. Ignored when ``watch`` is False.
+        watch_poll:     Force the stdlib mtime-poller even when ``watchfiles``
+                        is installed. Ignored when ``watch`` is False.
     """
     root_real = root.resolve()
 
@@ -591,10 +701,51 @@ async def serve(
 
     if host not in ("127.0.0.1", "localhost", "::1"):
         log.warning("binding to non-loopback address — agent reachable from network", host=host)
+    watch_task: asyncio.Task[None] | None = None
+    # A dedicated single-worker executor for watch-mode rebuilds — deliberately
+    # NOT loop.run_in_executor(None, ...) (the loop's shared default executor),
+    # because asyncio.run()'s shutdown sequence calls
+    # shutdown_default_executor(), which BLOCKS waiting for every submitted
+    # work item to finish. Owning our own executor lets the finally block
+    # below shut it down with wait=False so a slow/stuck rebuild cannot delay
+    # the rest of shutdown (see ADR-0027 Known limitations for the residual
+    # caveat: CPython's concurrent.futures.thread atexit hook still joins
+    # worker threads at interpreter exit, so a pathologically slow parse can
+    # still delay final process exit — a fundamental limitation of
+    # non-preemptible Python threads, not something this fix can fully close).
+    watch_executor: concurrent.futures.ThreadPoolExecutor | None = None
     try:
         async with _ws_serve(_handler, host, port):
             log.info("agent listening", host=host, port=port, root=str(root_real))
+            if watch:
+                watch_executor = concurrent.futures.ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix="grackle-watch-rebuild"
+                )
+                watch_task = asyncio.create_task(
+                    _watch_loop(
+                        root_real,
+                        connections,
+                        meta_cache,
+                        watch_interval,
+                        executor=watch_executor,
+                        force_poll=watch_poll,
+                    )
+                )
             await asyncio.Future()  # run until cancelled
     finally:
+        # Cancel the watch task before closing the store — mirrors the
+        # per-connection task-reaping pattern in `_handler`'s finally
+        # (cancel, then gather with return_exceptions=True) so neither a
+        # CancelledError nor an unexpected bug in the watch loop can prevent
+        # `store.close()` from running, and `asyncio.run` never hangs on
+        # shutdown waiting for a watch task that outlived `asyncio.Future()`.
+        if watch_task is not None:
+            watch_task.cancel()
+            await asyncio.gather(watch_task, return_exceptions=True)
+        if watch_executor is not None:
+            # wait=False: don't block shutdown on an in-flight rebuild. This
+            # is deliberately our OWN executor (not the loop's default one) —
+            # see the comment where it's created.
+            watch_executor.shutdown(wait=False, cancel_futures=True)
         if store is not None:
             store.close()

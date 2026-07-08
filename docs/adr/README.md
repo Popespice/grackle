@@ -47,3 +47,5 @@ NNNN-short-title.md
 | [0023](0023-go-runtime-coverage.md) | Go runtime adapter via coverage instrumentation: go build -cover, covdata textfmt, decl-line bisect | accepted |
 | [0024](0024-rust-runtime-coverage.md) | Rust runtime adapter via LLVM coverage instrumentation: -Cinstrument-coverage, llvm-profdata, llvm-cov export, monomorphisation folding | accepted |
 | [0025](0025-value-capture.md) | Value capture: verified-frame arg reads, safe-repr (10.1) wiring, first-class typed `values` wire field, opt-in sampled/bounded/Python-only capture | accepted |
+| [0026](0026-explanation-layer-edge-evidence.md) | Explanation layer: edge evidence (`metadata.line`, no wire-schema change) and the causal "why did this fire" path | accepted |
+| [0027](0027-watch-mode.md) | Watch mode: full `static_graph` re-push, polling default + optional watchfiles backend, hash-gated rebuild | accepted |
