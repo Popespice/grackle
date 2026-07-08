@@ -42,6 +42,37 @@ ghost duplicates.
 **Long paths on Windows**: run `git config --system core.longpaths true` once
 after installing Git. Noted in README.
 
+## File watcher (`--watch`, ADR-0027)
+
+`grackle/watcher.py` powers `grackle serve --watch` (live-growing graph, Phase 10.6). Two rules
+distinguish it from a naive "re-parse on any FS event" watcher:
+
+- **Hash-gate on content, not on the mtime/FS-event alone.** Every candidate change is
+  confirmed by re-hashing the file's **bytes** (SHA-256, matching `cache.py`'s own hashing)
+  before it counts as a real change. This is what makes an atomic-save (write-temp-then-rename)
+  or a bare `touch` a no-op instead of a spurious rebuild+broadcast — and, because the hash is
+  over bytes rather than decoded text, a checkout that only flips line endings is a no-op too.
+- **Coarse mtime is a fast-path hint, not a guaranteed-correct gate.** A `(mtime, size)` pair
+  that hasn't moved skips re-hashing (cheap on a quiet tree); whenever it *has* moved, the byte
+  hash is authoritative. On filesystems whose mtime resolution is coarser than the edit cadence
+  (FAT32/exFAT ~2s, older HFS+ ~1s, some network/virtualized mounts), a same-size content edit
+  that lands within one mtime bucket can be missed by the stdlib poller — not just delayed, but
+  missed until some *later*, distinguishable edit touches the same file again (see ADR-0027's
+  Known limitations). The optional `watchfiles` backend does not share *this specific*
+  mechanism (no mtime-based fast-path skip against a full-tree baseline) — but it has its own,
+  differently-shaped permanent-miss gap: a transient stat/read failure racing a path's one and
+  only reported FS event leaves that file's hash frozen at its pre-edit value for the rest of
+  the session, since this backend never re-examines a path it wasn't just told changed (see
+  ADR-0027's Known limitations).
+
+**The optional `watchfiles` backend never becomes a required dependency for the *distributed
+package*.** An end user's `pip install grackle` (or `grackle[watch]`) is unaffected either way.
+A **contributor** following this repo's documented bootstrap (`uv sync`, no extras) *does* get
+`watchfiles` installed, because it's also listed in the `dev` dependency-group so CI exercises
+and type-checks the optional backend by default — pass `--watch-poll` to exercise the stdlib
+fallback locally regardless of what's installed. `pip install grackle[watch]` is how an end
+user opts into the event-driven backend for lower latency.
+
 ## Subprocess design
 
 - Asyncio event loop: use `asyncio.run()`, not `loop.run_until_complete()`.

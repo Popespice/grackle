@@ -20,6 +20,12 @@ dependencies = [
     "tree-sitter-rust>=0.23,<0.24",
 ]
 
+[project.optional-dependencies]
+# --watch's event-driven backend (grackle/watcher.py). Never required: when
+# absent, `grackle serve --watch` transparently falls back to a stdlib
+# mtime-poller. `pip install grackle[watch]` / `uv sync --extra watch`.
+watch = ["watchfiles>=0.24,<2"]
+
 [project.scripts]
 grackle = "grackle.cli:main"
 
@@ -33,6 +39,9 @@ dev = [
     "ruff>=0.4",
     "mypy>=1.10",
     "types-jsonschema",
+    # Present in dev so CI exercises + type-checks the optional watchfiles
+    # backend; the *product* dependency stays opt-in via [watch] above.
+    "watchfiles>=0.24,<2",
 ]
 
 [tool.ruff]
@@ -45,6 +54,13 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM", "TCH", "PTH"]
 [tool.mypy]
 strict = true
 exclude = ["src/grackle/_generated/"]
+
+[[tool.mypy.overrides]]
+# Defense-in-depth for anyone running mypy without the dev group synced
+# (e.g. a trimmed environment) — the dev-group install above normally gives
+# mypy real stubs, so this override is a no-op most of the time.
+module = "watchfiles"
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
