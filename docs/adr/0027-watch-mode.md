@@ -189,22 +189,26 @@ broadcast to, and the next connect gets a fresh parse via `_push_static_graph` r
   (`to_posix`), matching node-ID normalization exactly; a native path is only ever
   reconstructed as `root / posix_key` for the caller (`CacheManager.evict`), which itself
   normalizes internally.
-- **Coarse Windows/FAT mtime — a real, undismissable gap, not just a delay.** The `(mtime,
-  size)` pre-filter is a *fast path*, not the correctness gate; the byte hash is authoritative
-  whenever the pre-filter can't rule a file out. But if a filesystem's mtime resolution is
+- **Coarse Windows/FAT mtime — a real, undismissable gap, not just a delay, and shared by BOTH
+  backends.** The `(mtime, size)` fast path lives in the single `_stat_and_hash` helper shared
+  by `_snapshot` (used by `_watch_poll`) and `_watch_watchfiles`'s per-key resolution — a
+  consolidation made during review to stop the two backends' OSError-fallback logic from
+  independently drifting (§4). One consequence: the fast path, and its coarse-mtime blind spot,
+  is **not** `_watch_poll`-only, contradicting an earlier draft of this ADR (and of
+  `docs/cross-platform.md`) that claimed `_watch_watchfiles` "does not share this exposure" —
+  demonstrated false in CI (a same-byte-length edit landing in one mtime bucket was missed by a
+  test exercising the shared helper on a Windows runner). If a filesystem's mtime resolution is
   coarser than the edit cadence (FAT32/exFAT ~2s, older HFS+ ~1s, some network/virtualized
-  mounts), a same-size content edit that lands within one coarse mtime bucket is **not
-  detected at all** by `_watch_poll` — not merely delayed to "the next distinguishable tick", as
-  an earlier draft of this ADR claimed. If no *later*, distinguishable edit ever touches that
-  same file again, the live graph silently stays wrong for the rest of the session. This is an
-  accepted limitation of a polling design on such filesystems, not a correctness bug in the
-  traditional sense (no crash, no wrong node IDs) — but it is a real, permanent-until-a-later-
-  edit gap, and `docs/cross-platform.md` is worded to match this precisely rather than overstate
-  the guarantee. `_watch_watchfiles` does **not** share *this specific* mechanism (it has no
-  mtime/size fast-path skip against a full-tree baseline) — **but it has its own, differently-
-  shaped version of the same class of gap**, corrected below and in `_stat_and_hash`'s
-  docstring: an earlier draft of this ADR claimed `_watch_watchfiles` "does not share this
-  exposure" at all, which a second review round showed to be false.
+  mounts, or apparently some Windows CI runners for two back-to-back same-size writes), a
+  same-size content edit that lands within one coarse mtime bucket is **not detected at all** by
+  either backend — not merely delayed to "the next distinguishable tick". The one remaining
+  asymmetry between the backends: `_watch_poll` re-examines *every* tracked file on *every*
+  tick, giving a later, unrelated edit many chances to land on a distinguishable mtime and
+  self-correct; `_watch_watchfiles` only re-examines a path when a *new* FS event names it
+  again, so it gets fewer chances. If no later, distinguishable edit ever touches the file
+  again, the live graph silently stays wrong for the rest of the session on either backend. This
+  is an accepted limitation of the design, not a correctness bug in the traditional sense (no
+  crash, no wrong node IDs); not engineered around in this chunk.
 - **Mid-write tolerance, and its backend asymmetry.** A `stat`/`read` that raises `OSError`
   falls back to the file's last known-good hash with its `(mtime, size)` poisoned to a sentinel
   (`_stat_and_hash`), so the fallback is trusted for at most one tick, never indefinitely. This
@@ -336,13 +340,13 @@ broadcast to, and the next connect gets a fresh parse via `_push_static_graph` r
   still walked and watched.
 - **A fifth static-parser language's extensions must be added to `_PARSEABLE_EXTS` by hand** —
   silently excluded from watch triggering (not from parsing) until then.
-- **Coarse-mtime same-size same-content-bucket edits on `_watch_poll` can be missed
-  permanently, not just delayed** (see §7) — an accepted limitation of a polling design on
-  filesystems with mtime resolution coarser than the edit cadence; there is no guarantee a
-  "later distinguishable tick" ever arrives if the file is never touched again.
-  `_watch_watchfiles` has its own differently-shaped version of this same class of gap — see
-  the next item; a second review round showed an earlier draft's claim that it "does not share
-  this exposure" was false.
+- **Coarse-mtime same-size same-content-bucket edits can be missed permanently, not just
+  delayed, on BOTH backends** (see §7) — the fast path lives in the shared `_stat_and_hash`
+  helper, so this is not `_watch_poll`-only, contradicting an earlier draft of this ADR that
+  claimed `_watch_watchfiles` "does not share this exposure" (demonstrated false: a test
+  exercising this exact scenario failed in CI on a Windows runner). There is no guarantee a
+  "later distinguishable tick/event" ever arrives if the file is never touched again; accepted
+  limitation of the design.
 - **`_watch_watchfiles` can also permanently miss a change**, via a different mechanism: a
   transient stat/read failure racing a path's one-and-only reported FS event leaves that
   file's hash frozen at its pre-edit value for the rest of the session, because this backend

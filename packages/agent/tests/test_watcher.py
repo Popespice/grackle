@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from grackle import watcher
+from grackle.paths import to_posix
 from grackle.watcher import _diff, _snapshot, watch_changes
 
 if TYPE_CHECKING:
@@ -19,6 +20,23 @@ if TYPE_CHECKING:
 
 def _write(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
+
+
+def _bump_mtime_forward(path: Path, seconds: float = 5.0) -> None:
+    """Force ``path``'s mtime forward by ``seconds``, guaranteeing it differs
+    from whatever it was before this call — even on a filesystem/CI runner
+    whose mtime resolution is too coarse to distinguish two back-to-back
+    writes (observed in CI: a same-byte-length edit written immediately
+    after priming a snapshot can land in the same mtime bucket on at least
+    one Windows runner, which would otherwise make a "detect this edit"
+    test flaky for an environment reason unrelated to the code under test —
+    exactly the coarse-mtime gap ADR-0027 documents as an accepted
+    limitation for real users, but not one this test suite should trip over
+    by accident).
+    """
+    current_ns = path.stat().st_mtime_ns
+    new_ns = current_ns + int(seconds * 1_000_000_000)
+    os.utime(path, ns=(new_ns, new_ns))
 
 
 def _to_agen(it: AsyncIterator[set[Path]]) -> AsyncGenerator[set[Path], None]:
@@ -56,7 +74,12 @@ def test_detect_modify(tmp_path: Path) -> None:
     _write(f, "x = 1\n")
     snap1 = _snapshot(tmp_path)
 
+    # Same byte length as the original ("x = 1\n" -> "x = 2\n") -- force the
+    # mtime apart so this doesn't depend on the filesystem's mtime
+    # resolution being fine enough to distinguish two back-to-back writes
+    # (observed flaky on at least one Windows CI runner otherwise).
     _write(f, "x = 2\n")
+    _bump_mtime_forward(f)
     snap2 = _snapshot(tmp_path, snap1)
 
     assert _diff(snap1, snap2) == {"a.py"}
@@ -122,11 +145,26 @@ def test_safe_posix_key_outside_root_returns_none(
     assert watcher._safe_posix_key(target, tmp_path) is None
 
 
-def test_safe_posix_key_symlink_loop_returns_none(tmp_path: Path) -> None:
-    loop_link = tmp_path / "loop.py"
-    loop_link.symlink_to(loop_link)
+def test_safe_posix_key_symlink_loop_returns_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RuntimeError (e.g. Path.resolve()'s "Symlink loop from ...") must be caught,
+    not just ValueError.
 
-    assert watcher._safe_posix_key(loop_link, tmp_path) is None
+    Whether a *constructed* self-referential symlink actually raises RuntimeError
+    on Path.resolve() is itself platform/Python-version-dependent (observed:
+    it does on macOS + Python 3.12, but NOT on Ubuntu + Python 3.13 nor on
+    Windows + Python 3.12/3.13 in CI) -- so this test drives the exact
+    exception path directly via a mock rather than relying on a real symlink
+    loop reproducing it on every supported platform.
+    """
+
+    def _raise_runtime_error(*args: object, **kwargs: object) -> str:
+        raise RuntimeError("Symlink loop from '...'")
+
+    monkeypatch.setattr(watcher, "to_posix", _raise_runtime_error)
+
+    assert watcher._safe_posix_key(tmp_path / "loop.py", tmp_path) is None
 
 
 def test_snapshot_skips_symlink_outside_root_without_crashing(
@@ -148,14 +186,26 @@ def test_snapshot_skips_symlink_outside_root_without_crashing(
     assert "linked.py" not in snap
 
 
-def test_snapshot_skips_symlink_loop_without_crashing(tmp_path: Path) -> None:
-    """Regression: a self-referential symlink used to raise an uncaught RuntimeError
-    ("Symlink loop from ...") from _snapshot, distinct from (and not caught by) the
-    ValueError-only guard the ancestor-path fix added to _watch_filter alone.
+def test_snapshot_skips_symlink_loop_without_crashing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: an earlier version had no try/except around to_posix() in
+    _snapshot at all, so ANY RuntimeError (e.g. a real symlink loop's
+    "Symlink loop from ...") would propagate out and kill the whole watch
+    loop for the rest of the server session. Drives the exact RuntimeError
+    path via a mock — see test_safe_posix_key_symlink_loop_returns_none for
+    why a real symlink loop isn't a reliable way to trigger this on every
+    platform/Python version this project's CI matrix covers.
     """
     _write(tmp_path / "a.py", "y = 2\n")
-    loop_link = tmp_path / "loop.py"
-    loop_link.symlink_to(loop_link)
+    _write(tmp_path / "loop.py", "z = 3\n")
+
+    def _flaky_to_posix(path: Path, root: Path) -> str:
+        if path.name == "loop.py":
+            raise RuntimeError("Symlink loop from '...'")
+        return to_posix(path, root)
+
+    monkeypatch.setattr(watcher, "to_posix", _flaky_to_posix)
 
     snap = _snapshot(tmp_path)  # must not raise
 
@@ -266,7 +316,9 @@ async def test_watch_poll_yields_a_batch_on_real_change(tmp_path: Path) -> None:
     gen = _to_agen(watcher._watch_poll(tmp_path, interval=0.1))
     task = asyncio.create_task(gen.__anext__())
     await asyncio.sleep(0.03)  # let the initial snapshot prime before editing
+    # Same byte length as the original -- see _bump_mtime_forward's docstring.
     _write(f, "x = 2\n")
+    _bump_mtime_forward(f)
 
     try:
         batch = await asyncio.wait_for(task, timeout=5.0)
@@ -320,7 +372,9 @@ async def test_watch_changes_falls_back_to_poll_when_watchfiles_unavailable(
     gen = _to_agen(watch_changes(tmp_path, interval=0.1))
     task = asyncio.create_task(gen.__anext__())
     await asyncio.sleep(0.03)
+    # Same byte length as the original -- see _bump_mtime_forward's docstring.
     _write(f, "x = 2\n")
+    _bump_mtime_forward(f)
 
     try:
         batch = await asyncio.wait_for(task, timeout=5.0)
@@ -362,7 +416,9 @@ async def test_watch_watchfiles_detects_change(tmp_path: Path) -> None:
     gen = _to_agen(watcher._watch_watchfiles(tmp_path, interval=0.1))
     task = asyncio.create_task(gen.__anext__())
     await asyncio.sleep(0.3)  # give the OS-level watcher time to start
+    # Same byte length as the original -- see _bump_mtime_forward's docstring.
     _write(f, "x = 2\n")
+    _bump_mtime_forward(f)
 
     try:
         batch = await asyncio.wait_for(task, timeout=10.0)
@@ -417,7 +473,9 @@ async def test_watch_watchfiles_root_under_excluded_ancestor_name(tmp_path: Path
     gen = _to_agen(watcher._watch_watchfiles(root, interval=0.1))
     task = asyncio.create_task(gen.__anext__())
     await asyncio.sleep(0.3)  # give the OS-level watcher time to start
+    # Same byte length as the original -- see _bump_mtime_forward's docstring.
     _write(f, "x = 2\n")
+    _bump_mtime_forward(f)
 
     try:
         batch = await asyncio.wait_for(task, timeout=10.0)
