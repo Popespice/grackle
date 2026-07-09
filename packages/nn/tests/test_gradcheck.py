@@ -4,8 +4,10 @@ import numpy as np
 from numpy.testing import assert_allclose
 
 from grackle_nn._types import Array
+from grackle_nn.data import make_spirals
 from grackle_nn.layers import Linear, ReLU, Tanh
 from grackle_nn.losses import MSE, SoftmaxCrossEntropy
+from grackle_nn.model import Sequential
 
 
 def numeric_grad(
@@ -127,3 +129,29 @@ def test_mse_gradcheck() -> None:
         assert_allclose(
             grad_analytic[idx], numeric_grad(objective, pred, idx), rtol=1e-4, atol=1e-6
         )
+
+
+def test_end_to_end_mlp_gradcheck() -> None:
+    x, y = make_spirals(n_per_class=5, classes=3, noise=0.15, rng=np.random.default_rng(300))
+    model = Sequential(
+        Linear(2, 8, rng=np.random.default_rng(301)),
+        ReLU(),
+        Linear(8, 8, rng=np.random.default_rng(302)),
+        ReLU(),
+        Linear(8, 3, rng=np.random.default_rng(303)),
+    )
+    loss_fn = SoftmaxCrossEntropy()
+
+    def objective() -> float:
+        return loss_fn.forward(model.forward(x), y)
+
+    model.zero_grad()
+    logits = model.forward(x)
+    loss_fn.forward(logits, y)
+    model.backward(loss_fn.backward())
+
+    idx_rng = np.random.default_rng(304)
+    for p, g in zip(model.parameters(), model.gradients(), strict=True):
+        for _ in range(8):
+            idx = tuple(int(idx_rng.integers(0, s)) for s in p.shape)
+            assert_allclose(g[idx], numeric_grad(objective, p, idx), rtol=1e-4, atol=1e-6)
