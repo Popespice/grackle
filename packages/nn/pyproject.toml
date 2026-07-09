@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "grackle-nn"
+version = "0.10.0"
+description = "From-scratch numpy MLP, designed to be legible to grackle's own tracer"
+license = { text = "MIT" }
+authors = [{ name = "Connor Allen", email = "connor.allen9@icloud.com" }]
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2,<3",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/grackle_nn"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "ruff>=0.4",
+    "mypy>=1.10",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "TCH", "PTH"]
+
+[tool.mypy]
+strict = true
