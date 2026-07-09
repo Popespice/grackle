@@ -56,3 +56,4 @@ packages/agent/src/grackle/_generated/*
 
 # Claude Code local state (launch configs, MCP state)
 .claude/
+.claire/

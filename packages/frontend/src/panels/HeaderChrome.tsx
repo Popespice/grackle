@@ -2,6 +2,7 @@ import type { JSX } from "react";
 import { BrandMark } from "../components/BrandMark";
 import { ConnectionBadge } from "../components/ConnectionBadge";
 import { ThemeToggle } from "../components/ThemeToggle";
+import { FixtureSwitcher } from "../graph/FixtureSwitcher";
 
 export function HeaderChrome(): JSX.Element {
   return (
@@ -25,7 +26,17 @@ export function HeaderChrome(): JSX.Element {
         <BrandMark />
         <ConnectionBadge />
       </div>
-      <ThemeToggle />
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "var(--space-4)",
+        }}
+      >
+        {/* Demo-only: renders null outside the demo agent (no fixtures). */}
+        <FixtureSwitcher />
+        <ThemeToggle />
+      </div>
     </header>
   );
 }
