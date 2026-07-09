@@ -13,8 +13,8 @@ grackle parses your codebase and renders a live, interactive graph showing files
 - **Static graph** across four languages — Python (`ast`), TypeScript, Go, and Rust (Tree-sitter) — with cross-language edges (HTTP routes, subprocess spawns) and cycle detection, no instrumentation needed
 - **Runtime overlay** — call events stream over a local WebSocket from a runtime adapter per language: Python via `sys.monitoring` (near-zero overhead), TypeScript/Node via the V8 Inspector, Go and Rust via compiler coverage instrumentation
 - **Time-travel debugging** — scrub a trace to inspect a function's captured arguments and return value at that instant, with name-based redaction of sensitive values (opt-in, Python-only today)
-- **Explanation layer** — click any edge to see the exact source line that justifies it; pick a node and firing to read the causal call chain that led to it
-- **Analysis platform** — flame graphs, coverage/heat aggregation, a session library for saved traces, and differential analysis (`grackle diff`, CI-usable) between two traces or a trace and the static graph
+- **Explanation layer** — click most edges to see the exact source line that justifies it (a few synthesized edges, like Go interface implementations, have no single source line); pick a node and firing to read the causal call chain that led to it
+- **Analysis platform** — flame graphs, coverage/heat aggregation, a session library for saved traces, and differential analysis: `grackle diff` compares two trace files (CI-usable, exits 1 on regression), or compare a trace against the static graph interactively in the UI
 - **Watch mode** — `grackle serve --watch` re-parses on file changes and animates the diff into the live graph, preserving layout and camera instead of a jarring rebuild
 - Pluggable adapter architecture (`docs/adr/0003-adapter-design.md`) — new languages register a static parser and/or runtime adapter without touching the wire protocol
 
@@ -29,7 +29,7 @@ grackle parses your codebase and renders a live, interactive graph showing files
 Optional, only needed to trace a project in that language (each adapter is capability-gated — grackle gives a clean error, not a crash, when a toolchain is missing):
 
 - **Go 1.20+** — for the Go runtime adapter (`go build -cover`)
-- **Rust + `llvm-tools-preview`** — for the Rust runtime adapter (`rustup component add llvm-tools-preview`)
+- **Rust 1.60+ + `llvm-tools-preview`** — for the Rust runtime adapter (`rustup component add llvm-tools-preview`)
 
 ---
 
@@ -61,6 +61,22 @@ pnpm dev
 
 > **Windows note**: if you encounter path-length errors when cloning, run:
 > `git config --system core.longpaths true`
+
+`pnpm dev` alone only renders the static graph. To see the runtime features:
+
+```bash
+# Record a trace and stream it to the running agent
+uv run --project packages/agent grackle trace path/to/script.py --root path/to/project --connect ws://127.0.0.1:7878
+
+# Same, with captured argument/return values (Python only)
+uv run --project packages/agent grackle trace path/to/script.py --root path/to/project --capture-values -o trace.jsonl
+
+# Compare two trace files for regressions (exits 1 on a hotter node — CI-usable)
+uv run --project packages/agent grackle diff baseline.jsonl latest.jsonl
+
+# Re-parse and animate the graph live as files change
+uv run --project packages/agent grackle serve --root path/to/project --watch
+```
 
 ---
 
