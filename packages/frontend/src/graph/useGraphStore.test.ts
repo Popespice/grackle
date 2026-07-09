@@ -54,6 +54,66 @@ describe("useGraphStore", () => {
     expect(state.selectedNodeId).toBeNull();
   });
 
+  it("setGraph preserves selectedNodeId across a re-push when the node survives", () => {
+    useGraphStore.getState().setGraph(MOCK_GRAPH);
+    useGraphStore.getState().selectNode("a.py:App");
+
+    const rePush = {
+      ...MOCK_GRAPH,
+      nodes: [
+        ...MOCK_GRAPH.nodes,
+        { id: "c.py:C", kind: "function", name: "C", path: "c.py" },
+      ],
+    };
+    useGraphStore.getState().setGraph(rePush);
+
+    expect(useGraphStore.getState().selectedNodeId).toBe("a.py:App");
+  });
+
+  it("setGraph clears selectedNodeId on a re-push when the node no longer exists", () => {
+    useGraphStore.getState().setGraph(MOCK_GRAPH);
+    useGraphStore.getState().selectNode("a.py:App");
+
+    const rePush = {
+      ...MOCK_GRAPH,
+      nodes: MOCK_GRAPH.nodes.filter((n) => n.id !== "a.py:App"),
+    };
+    useGraphStore.getState().setGraph(rePush);
+
+    expect(useGraphStore.getState().selectedNodeId).toBeNull();
+  });
+
+  it("setGraph clears selectedNodeId on the FIRST load even if the id exists in the new graph", () => {
+    // Guards the `state.graph !== null` first-load condition specifically:
+    // preservation must NOT fire when there was no prior graph, even if the
+    // selected id happens to be present in the incoming one. (beforeEach
+    // resets graph to null, so this is a genuine first load.)
+    useGraphStore.getState().selectNode("a.py:App");
+    expect(useGraphStore.getState().graph).toBeNull();
+
+    useGraphStore.getState().setGraph(MOCK_GRAPH); // a.py:App IS in MOCK_GRAPH
+
+    expect(useGraphStore.getState().selectedNodeId).toBeNull();
+  });
+
+  it("setGraph still clears selectedEdge/highlights/diff state on a re-push even when selectedNodeId survives", () => {
+    useGraphStore.getState().setGraph(MOCK_GRAPH);
+    useGraphStore.getState().selectNode("a.py:App");
+    useGraphStore.getState().setHighlightedNodes(["b.py:main"]);
+    useGraphStore.getState().setDiffOverlay(new Map([["a.py:App", "new"]]));
+    useGraphStore.getState().setDiffBaseline({ "a.py:App": 3 });
+
+    useGraphStore.getState().setGraph({ ...MOCK_GRAPH });
+
+    const state = useGraphStore.getState();
+    expect(state.selectedNodeId).toBe("a.py:App"); // survives
+    expect(state.selectedEdge).toBeNull();
+    expect(state.sourceViewerTarget).toBeNull();
+    expect(state.highlightedNodeIds).toBeNull();
+    expect(state.diffOverlay).toBeNull();
+    expect(state.diffBaseline).toBeNull();
+  });
+
   it("selectNode updates selectedNodeId", () => {
     useGraphStore.getState().selectNode("a.py:App");
     expect(useGraphStore.getState().selectedNodeId).toBe("a.py:App");
