@@ -1,0 +1,56 @@
+{"event": "call", "node_id": "main.py", "ts_ns": 211867677169958, "thread_id": 8286903936, "frame_depth": 0, "metadata": {}}
+{"event": "call", "node_id": "main.py", "ts_ns": 211867677178083, "thread_id": 8286903936, "frame_depth": 1, "metadata": {}}
+{"event": "return", "node_id": "main.py", "ts_ns": 211867677201875, "thread_id": 8286903936, "frame_depth": 1, "metadata": {}, "values": {"ret": "None"}}
+{"event": "call", "node_id": "main.py:main", "ts_ns": 211867677212500, "thread_id": 8286903936, "frame_depth": 1, "metadata": {}}
+{"event": "call", "node_id": "main.py:add", "ts_ns": 211867677230458, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"args": [{"name": "a", "repr": "1"}, {"name": "b", "repr": "2"}]}}
+{"event": "return", "node_id": "main.py:add", "ts_ns": 211867677234250, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"ret": "3"}}
+{"event": "call", "node_id": "main.py:greet", "ts_ns": 211867677244833, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"args": [{"name": "name", "repr": "'Ada'"}, {"name": "greeting", "repr": "'hello'"}]}}
+{"event": "return", "node_id": "main.py:greet", "ts_ns": 211867677247375, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"ret": "'hello, Ada!'"}}
+{"event": "call", "node_id": "main.py:greet", "ts_ns": 211867677253083, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"args": [{"name": "name", "repr": "'Grace'"}, {"name": "greeting", "repr": "'hi'"}]}}
+{"event": "return", "node_id": "main.py:greet", "ts_ns": 211867677255041, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"ret": "'hi, Grace!'"}}
+{"event": "call", "node_id": "main.py:scale", "ts_ns": 211867677263208, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"args": [{"name": "value", "repr": "3.0"}, {"name": "factor", "repr": "2.0"}]}}
+{"event": "return", "node_id": "main.py:scale", "ts_ns": 211867677265166, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"ret": "6.0"}}
+{"event": "call", "node_id": "main.py:scale", "ts_ns": 211867677269958, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"args": [{"name": "value", "repr": "3.0"}, {"name": "factor", "repr": "1.5"}]}}
+{"event": "return", "node_id": "main.py:scale", "ts_ns": 211867677271750, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"ret": "4.5"}}
+{"event": "call", "node_id": "main.py:total", "ts_ns": 211867677280666, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"args": [{"name": "numbers", "repr": "(1, 2, 3)"}]}}
+{"event": "return", "node_id": "main.py:total", "ts_ns": 211867677283041, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"ret": "6"}}
+{"event": "call", "node_id": "main.py:describe", "ts_ns": 211867677295208, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"args": [{"name": "fields", "repr": "{'role': 'admin', 'active': True}"}]}}
+{"event": "call", "node_id": "main.py", "ts_ns": 211867677297458, "thread_id": 8286903936, "frame_depth": 3, "metadata": {}}
+{"event": "return", "node_id": "main.py", "ts_ns": 211867677300708, "thread_id": 8286903936, "frame_depth": 3, "metadata": {}, "values": {"ret": "None"}}
+{"event": "return", "node_id": "main.py:describe", "ts_ns": 211867677303000, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"ret": "'role=admin, active=True'"}}
+{"event": "call", "node_id": "main.py:mixed", "ts_ns": 211867677317458, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"args": [{"name": "a", "repr": "1"}, {"name": "b", "repr": "2"}, {"name": "tag", "repr": "'y'"}, {"name": "rest", "repr": "(3, 4)"}, {"name": "extra", "repr": "{'extra_field': 'z'}"}]}}
+{"event": "return", "node_id": "main.py:mixed", "ts_ns": 211867677320958, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"ret": "\"1-2-(3, 4)-y-{'extra_field': 'z'}\""}}
+{"event": "call", "node_id": "main.py:factorial", "ts_ns": 211867677324041, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"args": [{"name": "n", "repr": "5"}]}}
+{"event": "call", "node_id": "main.py:factorial", "ts_ns": 211867677326583, "thread_id": 8286903936, "frame_depth": 3, "metadata": {}, "values": {"args": [{"name": "n", "repr": "4"}]}}
+{"event": "call", "node_id": "main.py:factorial", "ts_ns": 211867677328958, "thread_id": 8286903936, "frame_depth": 4, "metadata": {}, "values": {"args": [{"name": "n", "repr": "3"}]}}
+{"event": "call", "node_id": "main.py:factorial", "ts_ns": 211867677331416, "thread_id": 8286903936, "frame_depth": 5, "metadata": {}, "values": {"args": [{"name": "n", "repr": "2"}]}}
+{"event": "call", "node_id": "main.py:factorial", "ts_ns": 211867677333625, "thread_id": 8286903936, "frame_depth": 6, "metadata": {}, "values": {"args": [{"name": "n", "repr": "1"}]}}
+{"event": "return", "node_id": "main.py:factorial", "ts_ns": 211867677335041, "thread_id": 8286903936, "frame_depth": 6, "metadata": {}, "values": {"ret": "1"}}
+{"event": "return", "node_id": "main.py:factorial", "ts_ns": 211867677336708, "thread_id": 8286903936, "frame_depth": 5, "metadata": {}, "values": {"ret": "2"}}
+{"event": "return", "node_id": "main.py:factorial", "ts_ns": 211867677338166, "thread_id": 8286903936, "frame_depth": 4, "metadata": {}, "values": {"ret": "6"}}
+{"event": "return", "node_id": "main.py:factorial", "ts_ns": 211867677339625, "thread_id": 8286903936, "frame_depth": 3, "metadata": {}, "values": {"ret": "24"}}
+{"event": "return", "node_id": "main.py:factorial", "ts_ns": 211867677341041, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"ret": "120"}}
+{"event": "call", "node_id": "main.py:login", "ts_ns": 211867677345083, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"args": [{"name": "username", "repr": "'ada'"}, {"name": "password", "repr": "<redacted>", "redacted": true}]}}
+{"event": "return", "node_id": "main.py:login", "ts_ns": 211867677346791, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"ret": "'login as ada'"}}
+{"event": "call", "node_id": "main.py:call_api", "ts_ns": 211867677350416, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"args": [{"name": "endpoint", "repr": "'/v1/widgets'"}, {"name": "api_key", "repr": "<redacted>", "redacted": true}]}}
+{"event": "return", "node_id": "main.py:call_api", "ts_ns": 211867677352208, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"ret": "'GET /v1/widgets'"}}
+{"event": "call", "node_id": "main.py:Widget.__init__", "ts_ns": 211867677361916, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"args": [{"name": "self", "repr": "<Widget object>"}, {"name": "name", "repr": "'gadget'"}]}}
+{"event": "return", "node_id": "main.py:Widget.__init__", "ts_ns": 211867677363875, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"ret": "None"}}
+{"event": "call", "node_id": "main.py:Widget.rename", "ts_ns": 211867677369583, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"args": [{"name": "self", "repr": "<Widget object>"}, {"name": "new_name", "repr": "'gizmo'"}]}}
+{"event": "return", "node_id": "main.py:Widget.rename", "ts_ns": 211867677371208, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"ret": "'gizmo'"}}
+{"event": "call", "node_id": "main.py:Widget.describe_kind", "ts_ns": 211867677372875, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}}
+{"event": "return", "node_id": "main.py:Widget.describe_kind", "ts_ns": 211867677374666, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"ret": "'widget'"}}
+{"event": "call", "node_id": "main.py:Widget.from_default", "ts_ns": 211867677380250, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"args": [{"name": "cls", "repr": "<type object>"}]}}
+{"event": "call", "node_id": "main.py:Widget.__init__", "ts_ns": 211867677387125, "thread_id": 8286903936, "frame_depth": 3, "metadata": {}, "values": {"args": [{"name": "self", "repr": "<Widget object>"}, {"name": "name", "repr": "'default'"}]}}
+{"event": "return", "node_id": "main.py:Widget.__init__", "ts_ns": 211867677388875, "thread_id": 8286903936, "frame_depth": 3, "metadata": {}, "values": {"ret": "None"}}
+{"event": "return", "node_id": "main.py:Widget.from_default", "ts_ns": 211867677390833, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"ret": "<Widget object>"}}
+{"event": "call", "node_id": "main.py:sum_of_squares", "ts_ns": 211867677394541, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"args": [{"name": "n", "repr": "5"}]}}
+{"event": "call", "node_id": "main.py", "ts_ns": 211867677396333, "thread_id": 8286903936, "frame_depth": 3, "metadata": {}}
+{"event": "return", "node_id": "main.py", "ts_ns": 211867677398250, "thread_id": 8286903936, "frame_depth": 3, "metadata": {}, "values": {"ret": "None"}}
+{"event": "call", "node_id": "main.py:squares", "ts_ns": 211867677401583, "thread_id": 8286903936, "frame_depth": 3, "metadata": {}, "values": {"args": [{"name": "n", "repr": "5"}]}}
+{"event": "return", "node_id": "main.py:squares", "ts_ns": 211867677403625, "thread_id": 8286903936, "frame_depth": 3, "metadata": {}, "values": {"ret": "None"}}
+{"event": "return", "node_id": "main.py:sum_of_squares", "ts_ns": 211867677405333, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"ret": "60"}}
+{"event": "call", "node_id": "main.py:fetch_value", "ts_ns": 211867678428416, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"args": [{"name": "x", "repr": "21"}]}}
+{"event": "return", "node_id": "main.py:fetch_value", "ts_ns": 211867678432291, "thread_id": 8286903936, "frame_depth": 2, "metadata": {}, "values": {"ret": "42"}}
+{"event": "return", "node_id": "main.py:main", "ts_ns": 211867678795041, "thread_id": 8286903936, "frame_depth": 1, "metadata": {}, "values": {"ret": "None"}}
+{"event": "return", "node_id": "main.py", "ts_ns": 211867678798375, "thread_id": 8286903936, "frame_depth": 0, "metadata": {}, "values": {"ret": "None"}}

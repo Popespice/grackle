@@ -1,3 +1,3 @@
 module example.com/tinyapp
 
-go 1.21
+go 1.20

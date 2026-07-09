@@ -1,0 +1,7 @@
+{"event": "call", "node_id": "crates/app/src/main.rs:main", "ts_ns": 211907427451291, "thread_id": 8286903936, "frame_depth": 0, "metadata": {"count": 1}}
+{"event": "call", "node_id": "crates/api/src/lib.rs:UserRepository.find_by_id", "ts_ns": 211907427451291, "thread_id": 8286903936, "frame_depth": 0, "metadata": {"count": 2}}
+{"event": "call", "node_id": "crates/api/src/lib.rs:create_user_in_repo", "ts_ns": 211907427451291, "thread_id": 8286903936, "frame_depth": 0, "metadata": {"count": 1}}
+{"event": "call", "node_id": "crates/api/src/lib.rs:UserRepository.add", "ts_ns": 211907427451291, "thread_id": 8286903936, "frame_depth": 0, "metadata": {"count": 1}}
+{"event": "call", "node_id": "crates/api/src/lib.rs:UserRepository.new", "ts_ns": 211907427451291, "thread_id": 8286903936, "frame_depth": 0, "metadata": {"count": 1}}
+{"event": "call", "node_id": "crates/api/src/lib.rs:UserRepository.create", "ts_ns": 211907427451291, "thread_id": 8286903936, "frame_depth": 0, "metadata": {"count": 1}}
+{"event": "call", "node_id": "crates/models/src/lib.rs:User.new", "ts_ns": 211907427451291, "thread_id": 8286903936, "frame_depth": 0, "metadata": {"count": 1}}
