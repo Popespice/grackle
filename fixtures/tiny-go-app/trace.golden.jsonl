@@ -1,0 +1,5 @@
+{"event": "call", "node_id": "main.go:main", "ts_ns": 211893750875666, "thread_id": 8286903936, "frame_depth": 0, "metadata": {"count": 1}}
+{"event": "call", "node_id": "models/user.go:NewUser", "ts_ns": 211893750875666, "thread_id": 8286903936, "frame_depth": 0, "metadata": {"count": 1}}
+{"event": "call", "node_id": "models/user.go:User.Print", "ts_ns": 211893750875666, "thread_id": 8286903936, "frame_depth": 0, "metadata": {"count": 1}}
+{"event": "call", "node_id": "services/service.go:NewUserService", "ts_ns": 211893750875666, "thread_id": 8286903936, "frame_depth": 0, "metadata": {"count": 1}}
+{"event": "call", "node_id": "services/service.go:UserService.AddUser", "ts_ns": 211893750875666, "thread_id": 8286903936, "frame_depth": 0, "metadata": {"count": 1}}
