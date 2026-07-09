@@ -140,19 +140,32 @@ export const useGraphStore = create<GraphStoreState>()((set) => ({
   diffBaseline: null,
   diffOverlay: null,
   setGraph: (graph) =>
-    set({
-      graph,
-      selectedNodeId: null,
-      selectedEdge: null,
-      sourceViewerTarget: null,
-      highlightedNodeIds: null,
-      // Clear diff overlay AND baseline when the static graph changes — both
-      // are keyed by node ID, which is graph-scoped. A baseline captured from a
-      // different graph would classify its (now-absent) nodes as phantom "gone"
-      // entries. (The baseline is deliberately PRESERVED across trace sessions
-      // on the same graph — that is the trace-vs-trace compare feature.)
-      diffOverlay: null,
-      diffBaseline: null,
+    set((state) => {
+      // Preserve the selected node across a watch-mode re-push (10.6/10.7)
+      // when it survives the diff — otherwise every save while watching
+      // would deselect whatever the user is looking at. Only on a re-push
+      // (prior graph non-null), never a first load, and only when the id
+      // still exists in the new graph.
+      const selectedNodeId =
+        state.graph !== null &&
+        state.selectedNodeId !== null &&
+        graph.nodes.some((n) => n.id === state.selectedNodeId)
+          ? state.selectedNodeId
+          : null;
+      return {
+        graph,
+        selectedNodeId,
+        selectedEdge: null,
+        sourceViewerTarget: null,
+        highlightedNodeIds: null,
+        // Clear diff overlay AND baseline when the static graph changes — both
+        // are keyed by node ID, which is graph-scoped. A baseline captured from a
+        // different graph would classify its (now-absent) nodes as phantom "gone"
+        // entries. (The baseline is deliberately PRESERVED across trace sessions
+        // on the same graph — that is the trace-vs-trace compare feature.)
+        diffOverlay: null,
+        diffBaseline: null,
+      };
     }),
   selectNode: (nodeId) =>
     // A plain node selection clears any picked edge and any explicit source
