@@ -4,6 +4,7 @@ import type { JSX } from "react";
 import { type RefObject, useEffect, useRef } from "react";
 import Sigma from "sigma";
 import type { EdgeDisplayData, NodeDisplayData } from "sigma/types";
+import { useTheme } from "../theme/useTheme";
 import {
   type ApplyGraphDiffResult,
   applyGraphDiff,
@@ -54,6 +55,15 @@ const EDGE_PULSE_PEAK_SIZE = 3;
 // only the new/changed neighborhood — short relative to the 5s initial-load
 // settle, since only a handful of nodes typically need to find a spot.
 const REHEAT_DURATION_MS = 1500;
+
+// Sigma can't parse the oklch `--color-text` token (ADR-0015) and its default
+// label color is black — invisible on the dark canvas. Drive it from the theme.
+const LABEL_COLOR_DARK = "#ffffff";
+const LABEL_COLOR_LIGHT = "#0f172a";
+
+function labelColorForTheme(theme: string): string {
+  return theme === "dark" ? LABEL_COLOR_DARK : LABEL_COLOR_LIGHT;
+}
 
 function cssVar(el: HTMLElement, name: string): string {
   return getComputedStyle(el).getPropertyValue(name).trim();
@@ -229,6 +239,8 @@ export function GraphCanvas(): JSX.Element {
   const jumpToSourceLine = useGraphStore((s) => s.jumpToSourceLine);
   const setHighlightedNodes = useGraphStore((s) => s.setHighlightedNodes);
 
+  const theme = useTheme((s) => s.theme);
+
   const { heat, maxHeat } = useHeatmap();
   const heatActive = traceSessionId !== null;
 
@@ -278,6 +290,12 @@ export function GraphCanvas(): JSX.Element {
       graphology,
       container,
       {
+        // The container is an absolutely-positioned fill that may not have
+        // been measured yet on the first commit (fast WS → graph arrives the
+        // same frame the canvas mounts). Sigma's ResizeObserver corrects the
+        // dimensions once layout settles; without this it throws on init.
+        allowInvalidContainer: true,
+        labelColor: { color: labelColorForTheme(theme) },
         nodeReducer: makeNodeReducer(
           graphology,
           hiddenKinds,
@@ -472,6 +490,8 @@ export function GraphCanvas(): JSX.Element {
         animRef
       )
     );
+    // Labels follow the theme: white on the dark canvas, slate on light.
+    sigma.setSetting("labelColor", { color: labelColorForTheme(theme) });
     sigma.refresh();
   }, [
     hiddenKinds,
@@ -483,6 +503,7 @@ export function GraphCanvas(): JSX.Element {
     maxHeat,
     heatActive,
     diffOverlay,
+    theme,
   ]);
 
   return (
