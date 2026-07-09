@@ -1,7 +1,7 @@
 # Project-wide Acceptance Criteria
 
-> Last updated during the Phase 9.H close.
-> Five grids: whole-product definition-of-done + Phase 6 + Phase 7 + Phase 8 + Phase 9 acceptance.
+> Last updated during the Phase 10.H close.
+> Six grids: whole-product definition-of-done + Phase 6 + Phase 7 + Phase 8 + Phase 9 + Phase 10 acceptance.
 > Each item is marked **automated** (CI / per-chunk gate / bench) or **manual** (recorded in the phase `*_SUMMARY.md`).
 
 ---
@@ -19,7 +19,7 @@
 | 7 | **Performance.** Tracer overhead ≤10% on a 5s workload (including with the real-time `--stream` sink active); UI stays interactive during a real-time stream and a 50k-event replay (batched rAF ingest avoids quadratic accumulation). | bench (manual timing) + automated |
 | 8 | **Determinism.** `grackle parse` and `grackle trace` (with `PYTHONHASHSEED=0`) are reproducible; golden fixtures stable across runs. | automated (golden fixture tests) |
 | 9 | **Quality gates.** `pytest` + `mypy --strict` + `tsc` + `biome` + frontend tests + `check-parity` all green on the CI matrix; no skipped or disabled guards. | automated (CI + pre-push hooks) |
-| 10 | **Documented architecture.** Every cross-cutting decision has an accepted ADR (24 total); each phase has a `*_SUMMARY.md` card; `CLAUDE.md` current. | manual |
+| 10 | **Documented architecture.** Every cross-cutting decision has an accepted ADR (27 total); each phase has a `*_SUMMARY.md` card; `CLAUDE.md` current. | manual |
 | 11 | **Stable contracts.** JSON Schema is the single source of truth; generated TS/Py match (`check-parity`); message `type`, node/edge `kind`, trace `event` are open strings — unknown values ignored, never errors (ADR-0004). | automated (`check-parity`) |
 | 12 | **Robustness.** Malformed input (bad source, missing/garbled trace, non-3.12 interpreter, script outside `--root`, oversized source) yields a clear error or graceful skip — never a crash or hang. | automated (server + CLI error tests) |
 
@@ -100,6 +100,30 @@
 | 12 | **ADR discipline.** ADR-0023 (Go) + ADR-0024 (Rust) accepted; ADR-0020 + ADR-0021 amended (recording sink; baseline persistence) — no new ADRs in 9.3, count stays 24. | **9.1 / 9.2 / 9.3 ✓** manual |
 | 13 | **No wire-schema change; cross-OS.** `KNOWN_MESSAGE_TYPES` unchanged all phase, `check-parity` a no-op for every chunk; all green on the Ubuntu + Windows CI matrix (Go/Rust e2e capability-gated). | **9.1 / 9.2 / 9.3 / CI ✓** automated |
 | 14 | **Ship.** ADRs 0023–0024 accepted (0020 + 0021 amended); `PHASE_9_SUMMARY.md`; `PROJECT_ACCEPTANCE.md` §E grid (24 ADRs); `CLAUDE.md` (Phase 9 shipped, Phase 10 planned); version 0.9.0; tag `v0.9.0-phase-9`. | **9.H ✓** |
+
+---
+
+## F. Phase 10 (live growing graph + time-travel debugger + explanation layer) acceptance grid
+
+| # | Criterion | Status |
+|---|---|---|
+| 1 | **Safe-repr module.** `value_repr.py` never invokes an arbitrary `__repr__`, never consumes a lazy iterator/generator, redacts sensitive names before repr, bounds output by length/items/depth/character-budget, and never raises. 66 tests, each mutation-verified. | **10.1 ✓** automated |
+| 2 | **Value capture wire + CLI.** `grackle trace fixture.py --capture-values -o t.jsonl` emits a typed `values` field on call/return events; redaction, per-node budget, and size caps hold; a default run stays byte-identical (no `values` key). | **10.2 ✓** automated |
+| 3 | **Frame-capture correctness.** The verified-frame technique (`sys._getframe(1)` + `frame.f_code is code`) degrades args, never events, on any mismatch; a dedicated Python 3.13 CI leg stresses positional/kw-only/`*args`/`**kwargs`/generator/comprehension/async/method/recursive fixtures. | **10.2 ✓** automated |
+| 4 | **`messages.ts` / TypedDict hand-sync.** The schema, `messages.ts`'s canonical `TraceEvent`, and the Python `TraceEvent` TypedDict all carry the new `values` field in agreement; `check-parity` passes and reflects the field in `src/generated/`. | **10.2 ✓** automated + manual |
+| 5 | **Data-at-rest privacy documented.** ADR-0025 explicitly records that captured values, even redacted, persist to on-disk recordings and the session store — not treated as "no change." | **10.2 ✓** manual |
+| 6 | **Time-travel value inspector.** `ValueInspectorPanel` shows per-arg + return values and the live call stack at `tracePlayhead`; prev/next stepping lands on call/return boundaries; prefix memoized per session. | **10.3 ✓** automated + manual |
+| 7 | **50k-cliff gating (inspector).** A partial-prefix stack reconstruction is structurally impossible — `truncated && playhead >= events.length` shows an explicit unavailable state rather than a plausible-but-wrong stack. | **10.3 ✓** automated |
+| 8 | **Edge evidence.** Every edge kind (import/call/inherit/route/subprocess/cross-language) carries `metadata.line`; clicking an edge or a node's in/out edges shows the justifying source line and jumps to it; unresolved edges degrade cleanly. | **10.4 ✓** automated (pytest) + manual |
+| 9 | **Causal path.** Selecting a firing renders the ancestor call-path chain with per-hop argument values; hops navigate independently (time-travel / select / call-site); disambiguates which invocation when a node fired many times. | **10.5 ✓** automated + manual |
+| 10 | **Causal-path truncation correctness.** Every rendered path is correct even from a >50k-truncated prefix — only firing *enumeration* is bounded, never path reconstruction itself. | **10.5 ✓** design + automated |
+| 11 | **Watch mode server.** `grackle serve --watch` + edit/add/delete a `.py`/`.ts`/`.go`/`.rs` file pushes an updated graph to connected browsers within the debounce window; atomic-save with no content change triggers no re-push (hash-gated). | **10.6 ✓** automated + manual |
+| 12 | **Watch mode perf ceiling documented.** Warm-cache rebuild ≈55ms measured on `fixtures/stress-2k` (209 files); no required new dependency (`watchfiles` optional-only). | **10.6 ✓** bench (manual) |
+| 13 | **Graph-diff animation.** A watch-triggered re-push grows the graph in place — existing node positions and camera survive; new nodes/edges animate in; removed nodes fade out; suppressed under `prefers-reduced-motion`. | **10.7 ✓** automated + manual |
+| 14 | **Wire-schema discipline.** `KNOWN_MESSAGE_TYPES` and the schema change exactly once, in 10.2; `check-parity` is a no-op for 10.1 and 10.3–10.7. | **10.1–10.7 ✓** automated |
+| 15 | **ADR discipline.** ADR-0025 (value capture), ADR-0026 (edge evidence + causal path), ADR-0027 (watch mode) accepted; ADR count 24 → 27. | **10.2 / 10.4 / 10.5 / 10.6 ✓** manual |
+| 16 | **Cross-OS.** All chunks green on the Ubuntu + Windows CI matrix; 10.2's frame-capture fixtures additionally cross Python 3.12 × 3.13 (4 legs total). | **CI ✓** automated |
+| 17 | **Ship.** ADRs 0025–0027 accepted; `PHASE_10_SUMMARY.md`; `PROJECT_ACCEPTANCE.md` §F grid (27 ADRs); `CLAUDE.md` (Phase 10 shipped, Phase 11 candidate pool); version 0.10.0; tag `v0.10.0-phase-10`. | **10.H ✓** |
 
 ---
 
