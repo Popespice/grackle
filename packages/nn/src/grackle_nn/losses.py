@@ -2,7 +2,7 @@ from typing import Protocol
 
 import numpy as np
 
-from ._types import Array, IntArray
+from grackle_nn._types import Array, IntArray
 
 
 class ClassificationLoss(Protocol):
@@ -21,14 +21,16 @@ class SoftmaxCrossEntropy:
         # becomes exactly 0, so exp(shifted) is always in (0, 1] and never
         # overflows, even at |logits| ~ 1e4.
         shifted = logits - logits.max(axis=1, keepdims=True)
-        log_probs = shifted - np.log(np.exp(shifted).sum(axis=1, keepdims=True))
-        self._probs = np.exp(log_probs)
+        exp_shifted = np.exp(shifted)
+        sum_exp = exp_shifted.sum(axis=1, keepdims=True)
+        self._probs = exp_shifted / sum_exp
         self._labels = labels
+        log_probs = shifted - np.log(sum_exp)
         return float((-log_probs[np.arange(B), labels]).mean())
 
     def backward(self) -> Array:
-        assert self._probs is not None
-        assert self._labels is not None
+        if self._probs is None or self._labels is None:
+            raise RuntimeError("backward called before forward")
         B: int = self._probs.shape[0]
         # .copy(): mutating grad below must not corrupt the cached probs, which
         # could conceptually still be read again.
@@ -46,7 +48,8 @@ class MSE:
         return float(np.mean(self._diff**2))
 
     def backward(self) -> Array:
-        assert self._diff is not None
+        if self._diff is None:
+            raise RuntimeError("backward called before forward")
         # Normalize by total element count (.size), not batch size: this makes
         # the analytic gradient exactly match the central-difference numerical
         # gradient of the scalar mean returned by forward().

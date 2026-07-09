@@ -48,12 +48,9 @@ class Sequential:
             for key in keys:
                 if key not in npz:
                     raise ValueError(f"checkpoint missing key {key!r}")
-            for key, p in zip(keys, params, strict=True):
-                loaded: Array = npz[key]
-                if loaded.shape != p.shape:
-                    raise ValueError(
-                        f"shape mismatch for {key!r}: expected {p.shape}, got {loaded.shape}"
-                    )
-            for key, p in zip(keys, params, strict=True):
-                arr: Array = npz[key]
-                p[...] = arr
+            loaded = [(p, npz[key]) for key, p in zip(keys, params, strict=True)]
+        for key, (p, arr) in zip(keys, loaded, strict=True):
+            if arr.shape != p.shape:
+                raise ValueError(f"shape mismatch for {key!r}: expected {p.shape}, got {arr.shape}")
+        for p, arr in loaded:
+            p[...] = arr
