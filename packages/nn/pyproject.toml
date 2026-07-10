@@ -21,7 +21,11 @@ dev = [
     "pytest>=9.0.3",
     "ruff>=0.4",
     "mypy>=1.10",
+    "grackle",
 ]
+
+[tool.uv.sources]
+grackle = { path = "../agent", editable = true }
 
 [tool.ruff]
 line-length = 100
