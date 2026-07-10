@@ -86,3 +86,19 @@ jobs:
       - name: Pytest
         working-directory: packages/agent
         run: uv run pytest -q
+
+      - name: Install Python dependencies (nn)
+        working-directory: packages/nn
+        run: uv sync --frozen
+
+      - name: Ruff (nn)
+        working-directory: packages/nn
+        run: uv run ruff check .
+
+      - name: Mypy (nn)
+        working-directory: packages/nn
+        run: uv run mypy --strict src tests
+
+      - name: Pytest (nn)
+        working-directory: packages/nn
+        run: uv run pytest -q

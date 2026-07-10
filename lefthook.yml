@@ -9,6 +9,11 @@ pre-commit:
       root: "packages/agent/"
       stage_fixed: true
       run: uv run ruff format {staged_files} && uv run ruff check --fix {staged_files}
+    ruff-format-nn:
+      glob: "*.py"
+      root: "packages/nn/"
+      stage_fixed: true
+      run: uv run ruff format {staged_files} && uv run ruff check --fix {staged_files}
     schema-parity:
       glob: "packages/shared-types/schema/*.json"
       run: pnpm --filter @grackle/shared-types codegen
@@ -32,6 +37,15 @@ pre-push:
       run: uv run mypy --strict src tests
     test-agent:
       root: "packages/agent/"
+      run: uv run pytest -q
+    ruff-nn:
+      root: "packages/nn/"
+      run: uv run ruff check .
+    mypy-nn:
+      root: "packages/nn/"
+      run: uv run mypy --strict src tests
+    test-nn:
+      root: "packages/nn/"
       run: uv run pytest -q
 
 commit-msg:

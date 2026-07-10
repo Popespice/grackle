@@ -4,7 +4,16 @@ module.exports = {
     "scope-enum": [
       2,
       "always",
-      ["agent", "frontend", "shared-types", "docs", "ci", "tooling", "release"],
+      [
+        "agent",
+        "frontend",
+        "shared-types",
+        "nn",
+        "docs",
+        "ci",
+        "tooling",
+        "release",
+      ],
     ],
     "scope-empty": [2, "never"],
   },
