@@ -8,6 +8,10 @@ from grackle_nn.layers import Layer
 
 class Sequential:
     def __init__(self, *layers: Layer) -> None:
+        if len({id(layer) for layer in layers}) != len(layers):
+            raise ValueError(
+                "each layer instance may appear only once (layers cache forward state)"
+            )
         self.layers: list[Layer] = list(layers)
 
     def forward(self, x: Array) -> Array:
@@ -35,10 +39,10 @@ class Sequential:
         tmp = path.with_suffix(path.suffix + ".tmp")
         params = {f"p{i}": p for i, p in enumerate(self.parameters())}
         with tmp.open("wb") as fh:
-            # allow_pickle is savez's own default; pinned explicitly so mypy resolves
-            # the **params splat against **kwds: ArrayLike instead of the allow_pickle:
-            # bool keyword it would otherwise (incorrectly) also check the splat against.
-            np.savez(fh, allow_pickle=True, **params)
+            # allow_pickle only became a real savez keyword in numpy 2.2; pyproject
+            # allows numpy>=2,<3, so passing it explicitly would silently write a
+            # stray "allow_pickle" array into the checkpoint on numpy 2.0/2.1.
+            np.savez(fh, **params)  # type: ignore[arg-type]
         tmp.replace(path)
 
     def load(self, path: Path) -> None:
