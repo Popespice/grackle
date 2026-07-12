@@ -165,6 +165,46 @@ across add/edit-line/delete/atomic-no-op-save cycles.
 
 ---
 
+### 10.D — Demo branch forward-sync (PRs #63–64, one sub-chunk pending)
+
+`demo/end-product-preview` (the visitor-facing, CI-exempt, never-merged-to-main preview branch)
+had gone stale at the Phase 6 line since a 2026-06-10 fixture-switcher patch — 30 commits / phases
+7–10 behind. 10.D brings it up to v0.10.0.
+
+**10.D.1** (PR #63) — theme-aware `labelColor` + `allowInvalidContainer` in `GraphCanvas.tsx`,
+porting a fix the demo branch already carried locally, so demo graph labels are no longer
+invisible on the dark canvas.
+
+**10.D.2+3** (PR #64) — rewrote `README.md`'s "What it does" for the 4-language static+runtime
+matrix and Phase 8–10 features (was still Python-only framing); captured `trace.golden.jsonl` for
+all four runtimes (`fixtures/value-capture` with `--capture-values`, `fixtures/tiny-node-app`,
+`fixtures/tiny-go-app`, `fixtures/tiny-rust-app`). An xhigh multi-agent `/code-review` pass found
+and fixed 4 real issues before merge: the README's `grackle diff` bullet overstated the CLI (it's
+trace-vs-trace only; trace-vs-static is UI-only, `DiffPanel`); no invocation path was given for any
+headlined runtime feature (fixed with a "try it" command block); `fixtures/tiny-go-app/go.mod`
+required Go 1.21 while the README/adapter floor is 1.20 (lowered, golden trace re-verified
+unaffected); `fixtures/tiny-rust-app/Cargo.lock` was left untracked and ungitignored (committed
+it). Also documented (inherent to CPU-sampling profilers, not a bug) that the Node golden's
+`add()` — called 2,000,000× — has zero trace events since it completes faster than the ~250µs
+sampler interval.
+
+**10.D.4** (the demo-branch sync itself) — **staged, not yet applied.** `demo.py` modernized to
+delegate to `python_runtime.file_replay.replay_trace` and `server._build_static_graph` instead of
+hand-rolled copies (demo graphs now carry hub-score + cycle metadata too); new fixtures
+`values`/`node`/`watch`; `go`/`rust` gained real golden-trace replay; the session library (Phase
+8.3) backed by a real seeded `SessionStore` through the production
+`session_list_request`/`session_load_request`/`trace_seek_request` path (a missing
+`trace_seek_request` handler — sessions loaded but could never actually serve their events — was
+found via a raw-protocol test bypassing the browser, then fixed and re-verified); `FixtureSwitcher.tsx`
+(new) + `HeaderChrome`/`client.ts`/`main.tsx` re-layered — all verified live end-to-end (12
+fixtures, value redaction, edge evidence, causal path, session load, watch-mode diff animation) and
+full-gate green, but **staged on branch `demo-sync/phase-10.D`, not pushed to
+`demo/end-product-preview`** — that push needs explicit approval per `DEMO_BRANCH.md`'s
+force-push playbook (on the demo branch) and is withheld pending it. See `DEMO_BRANCH.md` on the
+demo branch for the full sync changelog once applied.
+
+---
+
 ## Code-review fixes (per chunk, highlights)
 
 Every chunk went through at least one xhigh multi-agent `/code-review` pass before merge, several
