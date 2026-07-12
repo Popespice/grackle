@@ -1,7 +1,7 @@
 # Project-wide Acceptance Criteria
 
-> Last updated during the Phase 10.H close.
-> Six grids: whole-product definition-of-done + Phase 6 + Phase 7 + Phase 8 + Phase 9 + Phase 10 acceptance.
+> Last updated during the Phase 11.H close.
+> Seven grids: whole-product definition-of-done + Phase 6 + Phase 7 + Phase 8 + Phase 9 + Phase 10 + Phase 11 acceptance.
 > Each item is marked **automated** (CI / per-chunk gate / bench) or **manual** (recorded in the phase `*_SUMMARY.md`).
 
 ---
@@ -19,7 +19,7 @@
 | 7 | **Performance.** Tracer overhead ≤10% on a 5s workload (including with the real-time `--stream` sink active); UI stays interactive during a real-time stream and a 50k-event replay (batched rAF ingest avoids quadratic accumulation). | bench (manual timing) + automated |
 | 8 | **Determinism.** `grackle parse` and `grackle trace` (with `PYTHONHASHSEED=0`) are reproducible; golden fixtures stable across runs. | automated (golden fixture tests) |
 | 9 | **Quality gates.** `pytest` + `mypy --strict` + `tsc` + `biome` + frontend tests + `check-parity` all green on the CI matrix; no skipped or disabled guards. | automated (CI + pre-push hooks) |
-| 10 | **Documented architecture.** Every cross-cutting decision has an accepted ADR (27 total); each phase has a `*_SUMMARY.md` card; `CLAUDE.md` current. | manual |
+| 10 | **Documented architecture.** Every cross-cutting decision has an accepted ADR (28 total); each phase has a `*_SUMMARY.md` card; `CLAUDE.md` current. | manual |
 | 11 | **Stable contracts.** JSON Schema is the single source of truth; generated TS/Py match (`check-parity`); message `type`, node/edge `kind`, trace `event` are open strings — unknown values ignored, never errors (ADR-0004). | automated (`check-parity`) |
 | 12 | **Robustness.** Malformed input (bad source, missing/garbled trace, non-3.12 interpreter, script outside `--root`, oversized source) yields a clear error or graceful skip — never a crash or hang. | automated (server + CLI error tests) |
 
@@ -124,6 +124,25 @@
 | 15 | **ADR discipline.** ADR-0025 (value capture), ADR-0026 (edge evidence + causal path), ADR-0027 (watch mode) accepted; ADR count 24 → 27. | **10.2 / 10.4 / 10.5 / 10.6 ✓** manual |
 | 16 | **Cross-OS.** All chunks green on the Ubuntu + Windows CI matrix; 10.2's frame-capture fixtures additionally cross Python 3.12 × 3.13 (4 legs total). | **CI ✓** automated |
 | 17 | **Ship.** ADRs 0025–0027 accepted; `PHASE_10_SUMMARY.md`; `PROJECT_ACCEPTANCE.md` §F grid (27 ADRs); `CLAUDE.md` (Phase 10 shipped, Phase 11 candidate pool); version 0.10.0; tag `v0.10.0-phase-10`. | **10.H ✓** |
+
+---
+
+## G. Phase 11 (watch it learn) acceptance grid
+
+| # | Criterion | Status |
+|---|---|---|
+| 1 | **Standalone package.** `grackle-nn` is a `uv`-managed hatchling package with a numpy-only runtime dependency; `grackle` is an editable **dev-only** dep, consumed only by the traceability test; the agent stays numpy-free. | **11.1 ✓** automated |
+| 2 | **MLP from scratch, correct.** `Linear`/`ReLU`/`Tanh`, `SoftmaxCrossEntropy`/`MSE`, `SGD`/`Adam`, `Sequential` (+ atomic `save`/`load`); every analytic backward matches a central-difference gradient check; the seeded spiral demo trains to ≥0.95 accuracy. | **11.1 ✓** automated |
+| 3 | **Layer-granularity golden + sizing formula.** One `train_step` traces as exactly the 34-event `_GOLDEN_34` sequence; `total ≈ E×(S×34+22)+C` (C=30) pinned at E=3 → 1,320 ± 50 and drift-guarded at E=60 (25,830 warm). | **11.2 / 11.H ✓** automated |
+| 4 | **Builtin-float metric boundary.** Every loss/accuracy/RMS crossing a beacon is a builtin `float` (never `np.float64`, the exact-type `safe_repr` dispatch gap); the `numpy\.\w+ object>` fallback appears in no captured value. | **11.2 / 11.H ✓** automated |
+| 5 | **Three beacons as parse contracts.** `record_epoch`, `record_layer_stats`, `record_architecture` are identity passthroughs whose captured return reprs are flat, builtin-typed, 3-sig-fig, and untruncated under default limits; each fires the expected count with values under `--capture-first-n 200`; none ever fires inside a `train_step` slice (golden untouched; RMS math adds zero events). | **11.2 / 11.H ✓** automated |
+| 6 | **Capture-budget accounting.** The per-`node_id`, per-event budget is pinned (`capture_first_n=4` → `[True, True, False]` on both call and return); requiring all 60 epochs' values discriminates the 200 recipe from the default 100. | **11.2 / 11.H ✓** automated |
+| 7 | **Trace-root discipline.** `--root src` keeps `.venv`/numpy/`tests/` out of the graph — no `<unresolved>` frames and traced `node_id`s ⊆ static-graph ids. | **11.2 ✓** automated |
+| 8 | **Determinism.** One seeded `Generator`; no genexps/`yield` in traced code; no data-dependent branching — structural goldens stable across runs and OSes. | **11.1 / 11.2 ✓** automated |
+| 9 | **Watch-it-learn walkthrough.** `README.md` documents trace → serve → scrub → diff, the beacon family, and the `--capture-first-n 200` / `--root src` rationale; verified live (heat, flame, timeline, ValueInspector). | **11.2 ✓** manual |
+| 10 | **Zero agent/frontend/wire change.** `KNOWN_MESSAGE_TYPES` and every generated artifact untouched all phase; `check-parity` a no-op for 11.1, 11.2, 11.H. | **11.1–11.H ✓** automated |
+| 11 | **Cross-OS.** The nn CI leg (`ruff` + `mypy --strict` + `pytest`, `uv sync --frozen`) green on the Ubuntu + Windows matrix. | **CI ✓** automated |
+| 12 | **Ship.** ADR-0028 accepted; `PHASE_11_SUMMARY.md`; `PROJECT_ACCEPTANCE.md` §G grid (28 ADRs); `CLAUDE.md` (Phase 11 shipped, Phase 12 next); version 0.11.0; tag `v0.11.0-phase-11`. | **11.H ✓** |
 
 ---
 

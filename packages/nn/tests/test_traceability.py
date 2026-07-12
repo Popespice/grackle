@@ -12,6 +12,7 @@ rather than silently degrading the watch-it-learn experience.
 from __future__ import annotations
 
 import ast
+import math
 import re
 from pathlib import Path
 
@@ -35,6 +36,8 @@ _DEMO = _SRC / "grackle_nn" / "demo.py"
 _ENV_VARS = ("NN_DEMO_LR", "NN_DEMO_EPOCHS", "NN_DEMO_SEED")
 
 _RECORD_EPOCH = "grackle_nn/metrics.py:record_epoch"
+_RECORD_LAYER_STATS = "grackle_nn/metrics.py:record_layer_stats"
+_RECORD_ARCHITECTURE = "grackle_nn/metrics.py:record_architecture"
 _TRAIN_STEP = "grackle_nn/train.py:train_step"
 
 # Matches a bare numpy-scalar fallback repr (e.g. "<numpy.float64 object>") --
@@ -211,6 +214,80 @@ def test_step1_call_sequence_matches_golden(traced: tuple[StaticGraph, list[Trac
     assert sequence == _GOLDEN_34
 
 
+def test_record_layer_stats_captured_every_epoch(
+    traced: tuple[StaticGraph, list[TraceEvent]],
+) -> None:
+    _, events = traced
+    returns = [e for e in events if e["node_id"] == _RECORD_LAYER_STATS and e["event"] == "return"]
+    # The discriminating bar: every one of the 60 epochs must carry captured
+    # values. At capture_first_n=100 this node's per-node budget (2 events/epoch)
+    # exhausts after 50 epochs, so the last 10 returns lose their values and this
+    # fails -- it passes only under the documented --capture-first-n 200 recipe.
+    assert len(returns) == 60
+    for e in returns:
+        assert "values" in e
+        assert e["values"].get("ret_truncated") is not True
+        parsed = ast.literal_eval(e["values"]["ret"])
+        assert isinstance(parsed, tuple)
+        # epoch + 3 Linear layers x (w_rms, dw_rms)
+        assert len(parsed) == 7
+        epoch = parsed[0]
+        rms_values = parsed[1:]
+        assert type(epoch) is int
+        assert all(type(v) is float for v in rms_values)
+        assert all(math.isfinite(v) for v in rms_values)
+    # Epoch 0's weight-change RMS (the odd stat positions) must be strictly
+    # positive: the weights moved that epoch relative to their pre-training
+    # snapshot. This is the discriminating check for fit's prev_weights
+    # lifecycle -- if the snapshot were a live reference rather than a copy, or
+    # were taken after (not before) training, every delta would be exactly zero
+    # and this would fail while the isfinite checks above still passed.
+    epoch0 = ast.literal_eval(returns[0]["values"]["ret"])
+    dw_rms_epoch0 = epoch0[2::2]  # positions 2, 4, 6 -> dw for each layer
+    assert len(dw_rms_epoch0) == 3
+    assert all(v > 0.0 for v in dw_rms_epoch0)
+
+
+def test_record_architecture_captured_once_with_exact_repr(
+    traced: tuple[StaticGraph, list[TraceEvent]],
+) -> None:
+    _, events = traced
+    returns = [e for e in events if e["node_id"] == _RECORD_ARCHITECTURE and e["event"] == "return"]
+    # Fires exactly once, before the training loop; the str repr keeps its quotes.
+    assert len(returns) == 1
+    assert returns[0]["values"]["ret"] == "'linear:2:32 relu linear:32:32 relu linear:32:3'"
+
+
+def test_beacons_never_fire_inside_a_train_step(
+    traced: tuple[StaticGraph, list[TraceEvent]],
+) -> None:
+    _, events = traced
+    beacon_ids = {_RECORD_LAYER_STATS, _RECORD_ARCHITECTURE}
+    # Executable proof that adding the two beacons left the golden 34-event
+    # train_step shape untouched: walk every train_step call -> depth-matched
+    # return slice and assert no beacon event appears within it.
+    slices_checked = 0
+    i = 0
+    n = len(events)
+    while i < n:
+        e = events[i]
+        if e["node_id"] == _TRAIN_STEP and e["event"] == "call":
+            depth = e["frame_depth"]
+            end = next(
+                k
+                for k in range(i + 1, n)
+                if events[k]["node_id"] == _TRAIN_STEP
+                and events[k]["event"] == "return"
+                and events[k]["frame_depth"] == depth
+            )
+            assert not any(events[k]["node_id"] in beacon_ids for k in range(i, end + 1))
+            slices_checked += 1
+            i = end + 1
+        else:
+            i += 1
+    assert slices_checked == 720  # 60 epochs x 12 batches/epoch
+
+
 def test_ndarray_args_summarized(traced: tuple[StaticGraph, list[TraceEvent]]) -> None:
     _, events = traced
     call = next(
@@ -236,14 +313,15 @@ def test_small_run_env_override_under_tracer() -> None:
     _, events = _run(epochs=3, capture_first_n=200)
     returns = [e for e in events if e["node_id"] == _RECORD_EPOCH and e["event"] == "return"]
     assert len(returns) == 3
-    # Sizing formula for this net/dataset: E x (S x 34 + 20) + C, with S=12
-    # batches/epoch and C=28 one-time (import + init) events -- empirically
-    # 28 + 3x428 = 1312. Slack tolerates one-time-constant (C) drift and a
-    # per-step insertion (golden-34 above catches that class precisely
-    # regardless); a per-epoch insertion outside train_step/evaluate/
-    # record_epoch is small enough (+/-6 at E=3) to hide inside this slack.
-    # Pins the sizing formula against API drift.
-    assert abs(len(events) - 1312) <= 50
+    # Sizing formula for this net/dataset: E x (S x 34 + 22) + C, with S=12
+    # batches/epoch, a 22-event per-epoch tail (evaluate chain 9 + record_epoch 1
+    # + record_layer_stats 1, x2 events each), and C=30 one-time (import + init +
+    # record_architecture) events -- empirically 30 + 3x430 = 1320. Slack
+    # tolerates one-time-constant (C) drift and a per-step insertion (golden-34
+    # above catches that class precisely regardless); a per-epoch insertion
+    # outside the tail is small enough (x3 over the 22-event tail) to hide inside
+    # this slack. Pins the sizing formula against API drift.
+    assert abs(len(events) - 1320) <= 50
 
 
 def test_capture_budget_semantics_pinned() -> None:

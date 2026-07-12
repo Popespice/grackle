@@ -79,7 +79,7 @@ wheels = [
 
 [[package]]
 name = "grackle"
-version = "0.10.0"
+version = "0.11.0"
 source = { editable = "../agent" }
 dependencies = [
     { name = "click" },
@@ -118,7 +118,7 @@ dev = [
 
 [[package]]
 name = "grackle-nn"
-version = "0.10.0"
+version = "0.11.0"
 source = { editable = "." }
 dependencies = [
     { name = "numpy" },
