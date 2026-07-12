@@ -12,7 +12,7 @@ losses, `SGD` / `Adam` optimizers, and a `Sequential` model container.
 
 ## Watch it learn
 
-`src/grackle_nn/demo.py` trains the MLP on synthetic two-moon spirals for 60 epochs.
+`src/grackle_nn/demo.py` trains the MLP on a synthetic three-class spiral dataset for 60 epochs.
 Every epoch's `(epoch, loss, accuracy)` is returned from a dedicated beacon function,
 `grackle_nn/metrics.py:record_epoch` — a deliberate identity passthrough that exists
 solely so grackle's tracer has a stable, per-epoch place to capture values. Trace the
@@ -103,7 +103,8 @@ Re-trace with a different learning rate:
 NN_DEMO_LR=0.05 uv run grackle trace src/grackle_nn/demo.py --root src --capture-values --capture-first-n 200 -o run-c.jsonl
 ```
 
-Load `run-c.jsonl` into `grackle serve --trace-source` and compare its
-`record_epoch` trajectory in the value inspector against `run-a.jsonl`'s — same
-call shape (`grackle diff` would report "same" for every node), different learning
-dynamics.
+`--trace-source` replays one file per server, so compare sequentially: load
+`run-a.jsonl` and note the `record_epoch` trajectory in the value inspector, then
+restart `grackle serve` with `--trace-source run-c.jsonl` (or run a second server on
+a different `--port`) and compare — same call shape (`grackle diff` would report
+"same" for every node), different learning dynamics.
