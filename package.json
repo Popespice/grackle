@@ -12,7 +12,8 @@
     "test": "pnpm -r --parallel test --run",
     "codegen": "pnpm --filter @grackle/shared-types codegen",
     "check-parity": "node tools/check-parity.mjs",
-    "prepare": "lefthook install && pnpm codegen"
+    "prepare": "lefthook install && pnpm codegen",
+    "nn:trace": "cd packages/nn && uv run grackle trace src/grackle_nn/demo.py --root src --capture-values --capture-first-n 200 -o run-a.jsonl"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.0.0",
