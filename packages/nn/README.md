@@ -13,11 +13,20 @@ losses, `SGD` / `Adam` optimizers, and a `Sequential` model container.
 ## Watch it learn
 
 `src/grackle_nn/demo.py` trains the MLP on a synthetic three-class spiral dataset for 60 epochs.
-Every epoch's `(epoch, loss, accuracy)` is returned from a dedicated beacon function,
-`grackle_nn/metrics.py:record_epoch` — a deliberate identity passthrough that exists
-solely so grackle's tracer has a stable, per-epoch place to capture values. Trace the
-demo with `--capture-values` and you can scrub through an entire training run in
-grackle's frontend, exactly like debugging any other traced program.
+Training routes its telemetry through a small family of **beacon functions** in
+`grackle_nn/metrics.py` — deliberate identity passthroughs that exist solely so grackle's tracer
+has a stable place to capture values:
+
+- `record_epoch(epoch, loss, accuracy)` — once per epoch, the loss-curve metrics.
+- `record_layer_stats(epoch, stats)` — once per epoch, each layer's weight RMS and per-epoch
+  weight-change RMS, as a flat pre-rounded tuple.
+- `record_architecture(model)` — once per run, the layer stack as a token string
+  (`"linear:2:32 relu linear:32:32 relu linear:32:3"`).
+
+Trace the demo with `--capture-values` and you can scrub through an entire training run in
+grackle's frontend, exactly like debugging any other traced program. Each beacon's captured
+return repr is a small, versioned parse contract — flat, builtin-typed, and short enough to stay
+untruncated under the default capture limits.
 
 ### 1. Install
 
@@ -34,11 +43,13 @@ uv run grackle trace src/grackle_nn/demo.py --root src --capture-values --captur
 
 Or, from the repo root: `pnpm nn:trace`.
 
-**Why `--capture-first-n 200`?** Capture budget is spent per *event*, not per epoch —
-one epoch's `record_epoch` call and return together cost 2. The default budget (100)
-covers only 50 of this demo's 60 epochs before capture silently stops (call/return
-events themselves are still emitted; only the *values* start getting dropped). 200
-gives 60 epochs × 2 = 120 needed, with 40% headroom.
+**Why `--capture-first-n 200`?** The capture budget is spent per *event* and counted
+**per node** — one epoch's `record_epoch` call and return together cost 2 against
+`record_epoch`'s own budget, and `record_layer_stats` has its own separate budget. Each
+per-epoch beacon fires 60 times (120 events); the default budget (100) captures only the first
+50 epochs before values silently stop (the call/return events themselves are still emitted —
+only the *values* drop). `200` gives each beacon node room for 100 full invocations,
+comfortably covering this demo's 60 epochs with headroom.
 
 **Why `--root src`, not `--root .`?** `uv sync` creates `packages/nn/.venv`. grackle's
 walker has no default excludes and `trace` has no `--exclude` flag, so rooting at
@@ -46,7 +57,7 @@ walker has no default excludes and `trace` has no `--exclude` flag, so rooting a
 `packages/nn/src` contains only `grackle_nn/`, so the venv and `tests/` sit outside the
 traced root and are skipped entirely.
 
-A 60-epoch run produces roughly 25,700 events in well under a second.
+A 60-epoch run produces roughly 25,900 events in well under a second.
 
 ### 3. Browse it live
 
@@ -69,7 +80,9 @@ Open the printed frontend URL. You'll see:
   frame per batch.
 - **Timeline** scrub + the **value inspector** on `record_epoch` — step through
   training and watch loss fall and accuracy climb, epoch by epoch, straight from
-  captured values (no separate logging).
+  captured values (no separate logging). Scrub to any epoch and inspect
+  `record_layer_stats` the same way to read each layer's weight magnitude and how much it
+  moved that epoch.
 
 Scrubbing the timeline is a better way to explore a run than 1× playback — jump
 straight to the epochs you care about.

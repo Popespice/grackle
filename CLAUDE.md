@@ -62,7 +62,7 @@ Auto-fix on dirty repos: `pnpm format` (biome write) and `uv run ruff format` in
 
 ## Architecture seams (read these to be productive)
 
-- **`docs/adr/`** — 27 ADRs: monorepo structure (0001), WebSocket transport (0002), adapter design (0003), open-string extension surface (0004), kind registry (0005), Python ast vs Tree-sitter (0006), panel/slot system (0007), analysis registry (0008), Tree-sitter integration (0009), Rust adapter (0010), cycle detection (0011), cross-language edges (0012), runtime trace event schema (0013), trace transport (0014), runtime overlay UI (0015), real-time trace streaming (0016), server-side trace seek (0017), server-side aggregation engine (0018), call-tree + flame graph (0019), trace persistence + session store (0020), differential analysis (0021), polyglot runtime via V8 Inspector (0022), Go runtime coverage (0023), Rust runtime coverage (0024), value capture (0025), explanation layer: edge evidence + causal path (0026), watch mode (0027). When designing new code, check whether an ADR already constrains the decision.
+- **`docs/adr/`** — 28 ADRs: monorepo structure (0001), WebSocket transport (0002), adapter design (0003), open-string extension surface (0004), kind registry (0005), Python ast vs Tree-sitter (0006), panel/slot system (0007), analysis registry (0008), Tree-sitter integration (0009), Rust adapter (0010), cycle detection (0011), cross-language edges (0012), runtime trace event schema (0013), trace transport (0014), runtime overlay UI (0015), real-time trace streaming (0016), server-side trace seek (0017), server-side aggregation engine (0018), call-tree + flame graph (0019), trace persistence + session store (0020), differential analysis (0021), polyglot runtime via V8 Inspector (0022), Go runtime coverage (0023), Rust runtime coverage (0024), value capture (0025), explanation layer: edge evidence + causal path (0026), watch mode (0027), the NN as a traceable subject (0028). When designing new code, check whether an ADR already constrains the decision.
 - **`docs/cross-platform.md`** — the cross-platform contract (path handling, `spawn` semantics, line endings, CI matrix). Non-negotiable; CI runs Ubuntu + Windows on every PR, all three OSes on push to main.
 - **`packages/agent/src/grackle/adapters/`** — `StaticParserAdapter` and `RuntimeAdapter` are `@runtime_checkable` `typing.Protocol`s (not ABCs — see ADR-0003). `AdapterRegistry` is a thread-safe module singleton; adapters register themselves and the CLI/UI look them up by language string.
 
@@ -95,15 +95,21 @@ modernization + session-library wiring + `FixtureSwitcher.tsx`) — staged on lo
 approval per `DEMO_BRANCH.md`'s force-push playbook (on the demo branch) and is withheld pending
 it. See `PHASE_10_SUMMARY.md` for detail on 10.D.1–3.
 
-**Phase 11 ("watch it learn") in progress, targeting tag `v0.11.0-phase-11`.** A new
+**Phase 11 ("watch it learn") is shipped at tag `v0.11.0-phase-11`.** A new
 `packages/nn/` standalone uv package (`grackle-nn`): a from-scratch, layer-granularity numpy MLP
 (Linear/ReLU/Tanh, SoftmaxCE+MSE, SGD+Adam, seeded 3-class spiral demo) traced end-to-end by
 grackle's own existing tracer/`ValueInspectorPanel`/heat-map/diff tooling — **zero agent/frontend/
-wire-schema changes all phase**. **11.1** — package + tooling wiring — **SHIPPED PR #66,
-main=`92f1125`**. **11.2** — traceability contract (10 tests proving the demo is legible to
-grackle's tracer: capture-budget accounting, the golden 34-event `train_step` call shape, no
-numpy-dtype leakage) + watch-it-learn README walkthrough — **SHIPPED PR #67, main=`0ecf736`**.
-**11.H** (ADR-0028, `PHASE_11_SUMMARY.md`, version bump to `0.11.0`, tag) remains. **Phase 12
+wire-schema changes all phase** (`check-parity` a no-op every chunk). **11.1** — package + tooling
+wiring — **SHIPPED PR #66, main=`92f1125`**. **11.2** — traceability contract + watch-it-learn
+README walkthrough — **SHIPPED PR #67, main=`0ecf736`**. **11.H** — network-view beacons +
+ship (**this PR**): folds in the "network as a network" amendment's Phase-11 deltas — two new
+`metrics.py` beacons `record_architecture` (once/run, the layer stack as a token string) and
+`record_layer_stats` (once/epoch, per-layer weight RMS + weight-change RMS, wired inline in
+`train.fit` with zero added trace events), tests T1–T3, sizing re-derivation (34-event golden
+unchanged; per-epoch tail 20→22, C 28→30, 60-epoch total ≈25,830) — plus ADR-0028 ("The NN as a
+traceable subject", ADR count 27→28), `PHASE_11_SUMMARY.md`, `PROJECT_ACCEPTANCE.md` §G, version
+`0.11.0`, tag (post-merge). The three beacons are identity passthroughs whose captured return reprs
+are a versioned frontend parse contract (Phase 12.4 renders the latter two). **Phase 12
 ("grackle learns as it analyzes") queued after 11.H** — `nn/ml/`: a self-supervised
 hotspot-prediction engine trained from the session-store corpus via `grackle learn`, surfaced as a
 capability-gated `predicted_heat` `AnalysisRegistry` entry with **no wire-schema change**, plus a
@@ -115,4 +121,4 @@ of this file — it's already fully preserved in `PHASE_8_SUMMARY.md`, `PHASE_9_
 `PHASE_10_SUMMARY.md` below. Read the relevant summary file when you need that level of detail
 (e.g. exact mechanism notes, review-finding history, ADR cross-references for a specific chunk).
 
-`PHASE_0_SUMMARY.md` through `PHASE_10_SUMMARY.md` at the repo root are the per-phase "what shipped + acceptance grid" reference cards. `PROJECT_ACCEPTANCE.md` at the repo root contains the whole-product definition-of-done grid.
+`PHASE_0_SUMMARY.md` through `PHASE_11_SUMMARY.md` at the repo root are the per-phase "what shipped + acceptance grid" reference cards. `PROJECT_ACCEPTANCE.md` at the repo root contains the whole-product definition-of-done grid.

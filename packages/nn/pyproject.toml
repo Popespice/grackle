@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "grackle-nn"
-version = "0.10.0"
+version = "0.11.0"
 description = "From-scratch numpy MLP, designed to be legible to grackle's own tracer"
 license = { text = "MIT" }
 authors = [{ name = "Connor Allen", email = "connor.allen9@icloud.com" }]

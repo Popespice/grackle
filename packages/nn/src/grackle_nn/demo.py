@@ -5,6 +5,7 @@ import numpy as np
 from grackle_nn.data import make_spirals
 from grackle_nn.layers import Linear, ReLU
 from grackle_nn.losses import SoftmaxCrossEntropy
+from grackle_nn.metrics import record_architecture
 from grackle_nn.model import Sequential
 from grackle_nn.optim import SGD
 from grackle_nn.train import EpochStats, fit
@@ -24,6 +25,11 @@ def main() -> list[EpochStats]:
         ReLU(),
         Linear(32, 3, rng=rng),
     )
+    # One-time trace beacon: captures the model's layer stack as a token string
+    # so a run's trace records what was trained. Placed here, before the
+    # optimizer, so it fires once outside every train_step extent (never inside
+    # the golden 34-event step shape).
+    record_architecture(model)
     loss_fn = SoftmaxCrossEntropy()
     # momentum=0.9 at the default lr=0.3 diverges after ~epoch 40 (verified empirically:
     # final accuracy ~0.6, not the >=0.95 this demo targets) -- effective step size

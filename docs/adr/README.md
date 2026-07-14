@@ -49,3 +49,4 @@ NNNN-short-title.md
 | [0025](0025-value-capture.md) | Value capture: verified-frame arg reads, safe-repr (10.1) wiring, first-class typed `values` wire field, opt-in sampled/bounded/Python-only capture | accepted |
 | [0026](0026-explanation-layer-edge-evidence.md) | Explanation layer: edge evidence (`metadata.line`, no wire-schema change) and the causal "why did this fire" path | accepted |
 | [0027](0027-watch-mode.md) | Watch mode: full `static_graph` re-push, polling default + optional watchfiles backend, hash-gated rebuild | accepted |
+| [0028](0028-nn-traceable-subject.md) | The NN as a traceable subject: layer-granularity call shape, builtin-float metric boundary, the beacon parse-contract convention, trace-root discipline, structural-golden determinism, dev-only grackle dep | accepted |
