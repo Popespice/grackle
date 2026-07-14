@@ -37,7 +37,7 @@ dev = [
     "pytest>=9.0.3",
     "pytest-asyncio>=1.3.0",
     "ruff>=0.4",
-    "mypy>=1.10",
+    "mypy>=2.1.0",
     "types-jsonschema",
     # Present in dev so CI exercises + type-checks the optional watchfiles
     # backend; the *product* dependency stays opt-in via [watch] above.
