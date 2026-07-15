@@ -67,6 +67,19 @@ def _trace_path_for(root: Path) -> Path | None:
     return candidate if candidate.exists() else None
 
 
+def _resolve_trace(name: str, root: Path, trace_overrides: dict[str, Path]) -> Path | None:
+    """Golden trace for fixture *name* — a registered override if present, else co-located.
+
+    An override takes precedence even if missing (does not fall back to a
+    co-located trace under *root*) — the single resolution rule shared by
+    both session seeding and replay, so the two can't silently diverge.
+    """
+    override = trace_overrides.get(name)
+    if override is not None:
+        return override if override.exists() else None
+    return _trace_path_for(root)
+
+
 # Cosmetic label overrides for fixtures whose name.capitalize() reads oddly
 # (e.g. "nn" -> "Nn").
 _LABEL_OVERRIDES: dict[str, str] = {"nn": "NN"}
@@ -119,32 +132,43 @@ def _seed_session_store(
     nothing here should touch the repo tree). Lets the demo exercise the real
     Session Library panel (Phase 8.3: list + seekable load_stored_session)
     against real data instead of a hand-rolled canned response.
+
+    Builds a byte-offset ``JsonlIndex`` (Phase 7.3) rather than
+    ``read_jsonl``-ing the whole file: only the first and last event's
+    ``ts_ns`` and the total count are needed here, and for a multi-MB trace
+    (e.g. the nn fixture's ~25k-event run) that avoids holding every
+    captured value in memory just to seed metadata.
     """
     from grackle.python_runtime.file_replay import detect_language
-    from grackle.python_runtime.writer import read_jsonl
+    from grackle.python_runtime.jsonl_index import JsonlIndex
     from grackle.session_store import SessionMeta, SessionStore
 
     db_path = Path(tempfile.mkdtemp(prefix="grackle-demo-")) / "sessions.db"
     store = SessionStore.open(db_path)
     for name, root in fixture_roots.items():
-        trace_path = trace_overrides.get(name) or _trace_path_for(root)
-        if trace_path is None or not trace_path.exists():
+        trace_path = _resolve_trace(name, root, trace_overrides)
+        if trace_path is None:
             continue
         try:
-            events = read_jsonl(trace_path)
+            index = JsonlIndex.build(trace_path)
+            total = len(index)
+            if total == 0:
+                continue
+            first = index.read_window(0, 1)
+            last = index.read_window(total - 1, 1)
         except Exception as exc:
             log.warning("demo: session seed skipped", name=name, error=str(exc))
             continue
-        if not events:
+        if not first or not last:
             continue
         store.save_session(
             SessionMeta(
                 id=str(uuid4()),
                 label=_label_for(name),
-                started_ns=events[0]["ts_ns"],
-                ended_ns=events[-1]["ts_ns"],
+                started_ns=first[0]["ts_ns"],
+                ended_ns=last[0]["ts_ns"],
                 source_path=str(trace_path.resolve()),
-                event_count=len(events),
+                event_count=total,
                 language=detect_language(root),
             )
         )
@@ -198,10 +222,7 @@ class _DemoServer:
 
     def _trace_for(self, name: str) -> Path | None:
         """Golden trace for fixture *name* — an override if registered, else co-located."""
-        override = self._trace_overrides.get(name)
-        if override is not None:
-            return override if override.exists() else None
-        return _trace_path_for(self._fixture_roots[name])
+        return _resolve_trace(name, self._fixture_roots[name], self._trace_overrides)
 
     def _parse(self, name: str) -> dict[str, Any]:
         if name not in self._cache:
@@ -230,13 +251,18 @@ class _DemoServer:
             self._cache[name] = result
         return self._cache[name]
 
-    def _fixture_summary(self) -> list[dict[str, Any]]:
+    async def _fixture_summary(self) -> list[dict[str, Any]]:
+        # Parse/load eagerly so the switcher dropdown can show real node and
+        # edge counts up front (the whole point of the size-tier presets).
+        # Results are cached, so this is a one-time cost per fixture. Each
+        # parse runs in the default executor so the first client's connect
+        # doesn't stall the event loop for the duration of parsing every
+        # fixture (AST-parsing packages/nn/src, loading the ~2.7 MB huge.json
+        # preset, etc.) — other connections stay responsive meanwhile.
+        loop = asyncio.get_running_loop()
         out: list[dict[str, Any]] = []
         for name in self._fixture_roots:
-            # Parse/load eagerly so the switcher dropdown can show real node and
-            # edge counts up front (the whole point of the size-tier presets).
-            # Results are cached, so this is a one-time cost per fixture.
-            graph = self._parse(name)
+            graph = await loop.run_in_executor(None, self._parse, name)
             trace_path = self._trace_for(name)
             out.append(
                 {
@@ -524,13 +550,14 @@ class _DemoServer:
         try:
             # ADR-0014 race guarantee: static_graph must arrive before trace_session_start.
             await self._send_active_graph(ws)
+            fixtures_summary = await self._fixture_summary()
             await self._send(
                 ws,
                 {
                     "id": "agent-hello-1",
                     "type": "agent_hello",
                     "payload": {
-                        "fixtures": self._fixture_summary(),
+                        "fixtures": fixtures_summary,
                         "active": self._active,
                     },
                 },

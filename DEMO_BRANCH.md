@@ -128,12 +128,14 @@ grackle demo
   --port INTEGER              WebSocket port (default 7878)
   --fixture-root NAME=PATH    Named project root, or a pre-built *.json graph. Repeatable.
                               (defaults: python/values/node/go/rust/poly/watch + size tiers — see below)
+  --fixture-trace NAME=PATH   Golden trace override for a fixture whose source root and trace
+                              live in different places. Repeatable. (default: nn — see below)
   --default TEXT              Fixture name pushed on connect (default: python)
   --loop / --no-loop          Repeat trace replay after it ends (default --no-loop)
   --no-pace                   Push trace events immediately, no inter-event delay
 ```
 
-Default fixtures (used when no `--fixture-root` flags are passed):
+Default fixtures (used when no `--fixture-root`/`--fixture-trace` flags are passed):
 
 ```bash
 uv run --project packages/agent grackle demo
@@ -151,13 +153,14 @@ uv run --project packages/agent grackle demo \
   --fixture-root medium=fixtures/demo-graph/medium.json \
   --fixture-root large=fixtures/demo-graph/large.json \
   --fixture-root huge=fixtures/demo-graph/huge.json \
-  --fixture-root nn=packages/nn/src
+  --fixture-root nn=packages/nn/src \
+  --fixture-trace nn=fixtures/nn-training/trace.golden.jsonl
 ```
 
 The `nn` fixture's golden trace is *not* co-located with its source root like every other fixture —
-it's registered via `demo.py`'s `_trace_for`/`trace_overrides` at
-`fixtures/nn-training/trace.golden.jsonl`, since the source root (`packages/nn/src`) is shared
-production code and shouldn't carry a demo-only trace file.
+its source root (`packages/nn/src`) is shared production code and shouldn't carry a demo-only trace
+file, so it's registered separately via `--fixture-trace` (resolved by `demo.py`'s `_resolve_trace`,
+the single formulation shared by both session seeding and replay so the two can't diverge).
 
 ## What's mocked (the demo surface)
 

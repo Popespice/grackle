@@ -583,6 +583,18 @@ def serve(
     ),
 )
 @click.option(
+    "--fixture-trace",
+    "fixture_traces_raw",
+    multiple=True,
+    metavar="NAME=PATH",
+    help=(
+        "Golden trace override for a fixture whose source root and trace live "
+        "in different places (e.g. a shared production package's root can't "
+        "carry a demo-only trace file). Repeatable. Default: "
+        "nn=fixtures/nn-training/trace.golden.jsonl."
+    ),
+)
+@click.option(
     "--default",
     "default_fixture",
     default="python",
@@ -604,6 +616,7 @@ def demo(
     host: str,
     port: int,
     fixture_roots_raw: tuple[str, ...],
+    fixture_traces_raw: tuple[str, ...],
     default_fixture: str,
     loop: bool,
     no_pace: bool,
@@ -634,6 +647,10 @@ def demo(
         large  = fixtures/demo-graph/large.json    (1,120 nodes)
         huge   = fixtures/demo-graph/huge.json     (4,950 nodes)
         nn     = packages/nn/src              (watch it learn — Phase 11 MLP trace overlay)
+
+    The nn fixture's trace is registered via --fixture-trace (default
+    nn=fixtures/nn-training/trace.golden.jsonl), not co-located under its
+    source root, since packages/nn/src is shared production code.
     """
     from grackle import demo as demo_module  # lazy: throwaway module
 
@@ -668,16 +685,24 @@ def demo(
             raise click.UsageError(f"fixture must be a directory or a .json graph: {p}")
         fixture_roots[name] = p
 
-    # The nn fixture's source root (packages/nn/src) and its committed golden
-    # trace (fixtures/nn-training/) live in different places — see
-    # demo._trace_for.
-    trace_overrides = {"nn": Path("fixtures/nn-training/trace.golden.jsonl")}
+    traces_raw = fixture_traces_raw or ("nn=fixtures/nn-training/trace.golden.jsonl",)
+    trace_overrides: dict[str, Path] = {}
+    for raw in traces_raw:
+        if "=" not in raw:
+            raise click.UsageError(f"--fixture-trace must be NAME=PATH, got: {raw!r}")
+        name, _, path_str = raw.partition("=")
+        name = name.strip()
+        tp = Path(path_str.strip())
+        if not tp.exists():
+            raise click.UsageError(f"fixture trace override not found: {tp}")
+        trace_overrides[name] = tp
 
     log.info(
         "grackle demo starting",
         platform=platform.platform(),
         python=sys.version.split()[0],
         fixture_roots={k: str(v) for k, v in fixture_roots.items()},
+        trace_overrides={k: str(v) for k, v in trace_overrides.items()},
         default=default_fixture,
         loop=loop,
         pace=not no_pace,
