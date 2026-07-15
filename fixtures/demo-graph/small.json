@@ -1,0 +1,426 @@
+{
+  "version": 1,
+  "language": "python",
+  "name": "small",
+  "label": "Small",
+  "description": "hand-crafted Python service (~33 nodes)",
+  "nodes": [
+    { "id": "main.py", "kind": "file", "name": "main.py", "path": "main.py" },
+    {
+      "id": "models/__init__.py",
+      "kind": "file",
+      "name": "__init__.py",
+      "path": "models/__init__.py"
+    },
+    {
+      "id": "models/user.py",
+      "kind": "file",
+      "name": "user.py",
+      "path": "models/user.py"
+    },
+    {
+      "id": "services/__init__.py",
+      "kind": "file",
+      "name": "__init__.py",
+      "path": "services/__init__.py"
+    },
+    {
+      "id": "services/auth.py",
+      "kind": "file",
+      "name": "auth.py",
+      "path": "services/auth.py"
+    },
+    {
+      "id": "services/db.py",
+      "kind": "file",
+      "name": "db.py",
+      "path": "services/db.py"
+    },
+    {
+      "id": "utils/__init__.py",
+      "kind": "file",
+      "name": "__init__.py",
+      "path": "utils/__init__.py"
+    },
+    {
+      "id": "utils/hash.py",
+      "kind": "file",
+      "name": "hash.py",
+      "path": "utils/hash.py"
+    },
+    {
+      "id": "utils/log.py",
+      "kind": "file",
+      "name": "log.py",
+      "path": "utils/log.py"
+    },
+    {
+      "id": "api/__init__.py",
+      "kind": "file",
+      "name": "__init__.py",
+      "path": "api/__init__.py"
+    },
+    {
+      "id": "api/routes.py",
+      "kind": "file",
+      "name": "routes.py",
+      "path": "api/routes.py"
+    },
+    {
+      "id": "api/middleware.py",
+      "kind": "file",
+      "name": "middleware.py",
+      "path": "api/middleware.py"
+    },
+
+    {
+      "id": "models/user.py:User",
+      "kind": "class",
+      "name": "User",
+      "path": "models/user.py",
+      "line": 8
+    },
+    {
+      "id": "models/user.py:Admin",
+      "kind": "class",
+      "name": "Admin",
+      "path": "models/user.py",
+      "line": 24
+    },
+    {
+      "id": "services/auth.py:AuthService",
+      "kind": "class",
+      "name": "AuthService",
+      "path": "services/auth.py",
+      "line": 12
+    },
+    {
+      "id": "services/db.py:DatabaseService",
+      "kind": "class",
+      "name": "DatabaseService",
+      "path": "services/db.py",
+      "line": 9
+    },
+    {
+      "id": "api/routes.py:RouteHandler",
+      "kind": "class",
+      "name": "RouteHandler",
+      "path": "api/routes.py",
+      "line": 14
+    },
+
+    {
+      "id": "main.py:main",
+      "kind": "function",
+      "name": "main",
+      "path": "main.py",
+      "line": 6
+    },
+    {
+      "id": "utils/hash.py:hash_password",
+      "kind": "function",
+      "name": "hash_password",
+      "path": "utils/hash.py",
+      "line": 4
+    },
+    {
+      "id": "utils/log.py:log_event",
+      "kind": "function",
+      "name": "log_event",
+      "path": "utils/log.py",
+      "line": 3
+    },
+    {
+      "id": "api/middleware.py:auth_middleware",
+      "kind": "function",
+      "name": "auth_middleware",
+      "path": "api/middleware.py",
+      "line": 5
+    },
+
+    {
+      "id": "models/user.py:User.__init__",
+      "kind": "method",
+      "name": "__init__",
+      "path": "models/user.py",
+      "line": 12,
+      "metadata": { "parent": "models/user.py:User" }
+    },
+    {
+      "id": "models/user.py:Admin.__init__",
+      "kind": "method",
+      "name": "__init__",
+      "path": "models/user.py",
+      "line": 27,
+      "metadata": { "parent": "models/user.py:Admin" }
+    },
+    {
+      "id": "models/user.py:Admin.is_admin",
+      "kind": "method",
+      "name": "is_admin",
+      "path": "models/user.py",
+      "line": 32,
+      "metadata": {
+        "parent": "models/user.py:Admin",
+        "decorators": ["property"]
+      }
+    },
+    {
+      "id": "services/auth.py:AuthService.__init__",
+      "kind": "method",
+      "name": "__init__",
+      "path": "services/auth.py",
+      "line": 14,
+      "metadata": { "parent": "services/auth.py:AuthService" }
+    },
+    {
+      "id": "services/auth.py:AuthService.login",
+      "kind": "method",
+      "name": "login",
+      "path": "services/auth.py",
+      "line": 18,
+      "metadata": { "parent": "services/auth.py:AuthService" }
+    },
+    {
+      "id": "services/auth.py:AuthService.signup",
+      "kind": "method",
+      "name": "signup",
+      "path": "services/auth.py",
+      "line": 31,
+      "metadata": { "parent": "services/auth.py:AuthService" }
+    },
+    {
+      "id": "services/db.py:DatabaseService.__init__",
+      "kind": "method",
+      "name": "__init__",
+      "path": "services/db.py",
+      "line": 11,
+      "metadata": { "parent": "services/db.py:DatabaseService" }
+    },
+    {
+      "id": "services/db.py:DatabaseService.connect",
+      "kind": "method",
+      "name": "connect",
+      "path": "services/db.py",
+      "line": 16,
+      "metadata": { "parent": "services/db.py:DatabaseService" }
+    },
+    {
+      "id": "services/db.py:DatabaseService.query",
+      "kind": "method",
+      "name": "query",
+      "path": "services/db.py",
+      "line": 22,
+      "metadata": {
+        "parent": "services/db.py:DatabaseService",
+        "decorators": ["asynccontextmanager"]
+      }
+    },
+    {
+      "id": "api/routes.py:RouteHandler.__init__",
+      "kind": "method",
+      "name": "__init__",
+      "path": "api/routes.py",
+      "line": 17,
+      "metadata": { "parent": "api/routes.py:RouteHandler" }
+    },
+    {
+      "id": "api/routes.py:RouteHandler.handle_login",
+      "kind": "method",
+      "name": "handle_login",
+      "path": "api/routes.py",
+      "line": 22,
+      "metadata": { "parent": "api/routes.py:RouteHandler" }
+    },
+    {
+      "id": "api/routes.py:RouteHandler.handle_signup",
+      "kind": "method",
+      "name": "handle_signup",
+      "path": "api/routes.py",
+      "line": 29,
+      "metadata": { "parent": "api/routes.py:RouteHandler" }
+    }
+  ],
+  "edges": [
+    {
+      "source": "main.py",
+      "target": "services/auth.py",
+      "kind": "import",
+      "metadata": {}
+    },
+    {
+      "source": "main.py",
+      "target": "api/routes.py",
+      "kind": "import",
+      "metadata": {}
+    },
+    {
+      "source": "main.py",
+      "target": "utils/log.py",
+      "kind": "import",
+      "metadata": {}
+    },
+    {
+      "source": "models/user.py",
+      "target": "utils/hash.py",
+      "kind": "import",
+      "metadata": {}
+    },
+    {
+      "source": "services/auth.py",
+      "target": "models/user.py",
+      "kind": "import",
+      "metadata": {}
+    },
+    {
+      "source": "services/auth.py",
+      "target": "services/db.py",
+      "kind": "import",
+      "metadata": {}
+    },
+    {
+      "source": "services/auth.py",
+      "target": "utils/hash.py",
+      "kind": "import",
+      "metadata": {}
+    },
+    {
+      "source": "services/auth.py",
+      "target": "utils/log.py",
+      "kind": "import",
+      "metadata": {}
+    },
+    {
+      "source": "api/routes.py",
+      "target": "services/auth.py",
+      "kind": "import",
+      "metadata": {}
+    },
+    {
+      "source": "api/routes.py",
+      "target": "api/middleware.py",
+      "kind": "import",
+      "metadata": {}
+    },
+    {
+      "source": "api/middleware.py",
+      "target": "services/auth.py",
+      "kind": "import",
+      "metadata": { "type_checking": true }
+    },
+
+    {
+      "source": "models/user.py:Admin",
+      "target": "models/user.py:User",
+      "kind": "inherit",
+      "metadata": {}
+    },
+
+    {
+      "source": "main.py:main",
+      "target": "services/auth.py:AuthService.__init__",
+      "kind": "call",
+      "metadata": { "resolved": true }
+    },
+    {
+      "source": "main.py:main",
+      "target": "api/routes.py:RouteHandler.__init__",
+      "kind": "call",
+      "metadata": { "resolved": true }
+    },
+    {
+      "source": "main.py:main",
+      "target": "utils/log.py:log_event",
+      "kind": "call",
+      "metadata": { "resolved": true }
+    },
+    {
+      "source": "models/user.py:User.__init__",
+      "target": "utils/hash.py:hash_password",
+      "kind": "call",
+      "metadata": { "resolved": true }
+    },
+    {
+      "source": "services/auth.py:AuthService.login",
+      "target": "models/user.py:User.__init__",
+      "kind": "call",
+      "metadata": { "resolved": true }
+    },
+    {
+      "source": "services/auth.py:AuthService.login",
+      "target": "services/db.py:DatabaseService.query",
+      "kind": "call",
+      "metadata": { "resolved": true }
+    },
+    {
+      "source": "services/auth.py:AuthService.login",
+      "target": "utils/hash.py:hash_password",
+      "kind": "call",
+      "metadata": { "resolved": true }
+    },
+    {
+      "source": "services/auth.py:AuthService.login",
+      "target": "utils/log.py:log_event",
+      "kind": "call",
+      "metadata": { "resolved": true }
+    },
+    {
+      "source": "services/auth.py:AuthService.signup",
+      "target": "models/user.py:User.__init__",
+      "kind": "call",
+      "metadata": { "resolved": true }
+    },
+    {
+      "source": "services/auth.py:AuthService.signup",
+      "target": "services/db.py:DatabaseService.query",
+      "kind": "call",
+      "metadata": { "resolved": true }
+    },
+    {
+      "source": "services/auth.py:AuthService.signup",
+      "target": "utils/hash.py:hash_password",
+      "kind": "call",
+      "metadata": { "resolved": true }
+    },
+    {
+      "source": "services/db.py:DatabaseService.query",
+      "target": "utils/log.py:log_event",
+      "kind": "call",
+      "metadata": { "resolved": true }
+    },
+    {
+      "source": "api/routes.py:RouteHandler.handle_login",
+      "target": "services/auth.py:AuthService.login",
+      "kind": "call",
+      "metadata": { "resolved": true }
+    },
+    {
+      "source": "api/routes.py:RouteHandler.handle_signup",
+      "target": "services/auth.py:AuthService.signup",
+      "kind": "call",
+      "metadata": { "resolved": true }
+    },
+    {
+      "source": "api/middleware.py:auth_middleware",
+      "target": "services/auth.py:AuthService.login",
+      "kind": "call",
+      "metadata": { "resolved": true }
+    },
+    {
+      "source": "main.py:main",
+      "target": "<builtin>:json.loads",
+      "kind": "call",
+      "metadata": { "resolved": false, "reason": "builtin" }
+    },
+    {
+      "source": "api/middleware.py:auth_middleware",
+      "target": "<dynamic>:request.headers.get",
+      "kind": "call",
+      "metadata": { "resolved": false, "reason": "dynamic_attribute" }
+    }
+  ],
+  "manifest": {
+    "demo": true,
+    "note": "Hand-authored fixture for the v0.1.0-phase-1 demo branch. Replaced by real PythonStaticParser output in phase 2."
+  }
+}

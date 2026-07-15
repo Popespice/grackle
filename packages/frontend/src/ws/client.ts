@@ -22,9 +22,32 @@ export type ConnectionStatus = "disconnected" | "connecting" | "connected";
 type SourceReply = ReadSourceResponse | ReadSourceError;
 type SeekReply = TraceWindowMessage | TraceSeekError;
 
+/**
+ * One entry in the demo agent's `agent_hello` fixture list.
+ *
+ * Demo-only (`grackle demo`, not production `grackle serve`) — a production
+ * agent never sends `agent_hello`, so `availableFixtures` stays empty and
+ * `FixtureSwitcher` renders null outside the demo.
+ */
+export interface FixtureInfo {
+  name: string;
+  label: string;
+  nodeCount: number;
+  edgeCount: number;
+  hasTrace?: boolean;
+}
+
+interface AgentHello {
+  fixtures: FixtureInfo[];
+  active: string;
+}
+
 interface GrackleClientState {
   status: ConnectionStatus;
   lastPong: string | null;
+  availableFixtures: FixtureInfo[];
+  activeFixtureName: string | null;
+  isLoadingFixture: boolean;
   _ws: WebSocket | null;
   _staticGraphHandlers: Set<(graph: Graph) => void>;
   _pendingReadSource: Map<string, (msg: SourceReply) => void>;
@@ -36,6 +59,8 @@ interface GrackleClientState {
   _traceSessionEndHandlers: Set<(msg: TraceSessionEndMessage) => void>;
   connect: (url: string) => void;
   disconnect: () => void;
+  /** Demo-only: ask the demo agent to switch the active fixture. */
+  loadFixture: (name: string) => void;
   ping: () => void;
   onStaticGraph: (handler: (graph: Graph) => void) => () => void;
   sendReadSource: (path: string) => Promise<SourceReply>;
@@ -158,6 +183,9 @@ function pendingRequest<R, T = R>(
 export const useGrackleClient = create<GrackleClientState>()((set, get) => ({
   status: "disconnected",
   lastPong: null,
+  availableFixtures: [],
+  activeFixtureName: null,
+  isLoadingFixture: false,
   _ws: null,
   _staticGraphHandlers: new Set(),
   _pendingReadSource: new Map(),
@@ -195,8 +223,17 @@ export const useGrackleClient = create<GrackleClientState>()((set, get) => ({
         const envelope = JSON.parse(event.data) as WsEnvelope;
         if (envelope.type === "pong") {
           set({ lastPong: envelope.id });
+        } else if (envelope.type === "agent_hello") {
+          // Demo-only: the fixture switcher list.
+          const hello = envelope.payload as unknown as AgentHello;
+          set({
+            availableFixtures: hello.fixtures,
+            activeFixtureName: hello.active,
+          });
         } else if (envelope.type === "static_graph") {
           const msg = envelope as unknown as StaticGraphMessage;
+          // A graph arriving completes any in-flight fixture switch.
+          set({ isLoadingFixture: false });
           get()._staticGraphHandlers.forEach((h) => {
             h(msg.payload);
           });
@@ -267,6 +304,21 @@ export const useGrackleClient = create<GrackleClientState>()((set, get) => ({
   disconnect: () => {
     get()._ws?.close();
     set({ status: "disconnected", _ws: null });
+  },
+
+  loadFixture: (name: string) => {
+    const { _ws, status, activeFixtureName } = get();
+    if (_ws === null || status !== "connected") return;
+    if (name === activeFixtureName) return;
+    // Optimistic: the agent replies with a static_graph (no fixture name in
+    // the payload), which clears isLoadingFixture above.
+    set({ isLoadingFixture: true, activeFixtureName: name });
+    const envelope: WsEnvelope = {
+      id: crypto.randomUUID(),
+      type: "load_fixture",
+      payload: { name },
+    };
+    _ws.send(JSON.stringify(envelope));
   },
 
   ping: () => {
