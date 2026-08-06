@@ -28,6 +28,9 @@ class PythonRuntimeAdapter:
     # .py/.pyw infer to Python. Extension-less scripts (shebang launchers) also
     # default to Python, but that fallback stays in the CLI, not this index.
     extensions: tuple[str, ...] = (".py", ".pyw")
+    # trace_streaming() emits exactly the same per-call events trace() would
+    # return — sys.monitoring drives both identically (Phase 12.0).
+    streaming_trace_parity: bool = True
 
     def runtime_unavailable_reason(self, script: Path) -> str | None:
         # sys.monitoring is guaranteed by requires-python >=3.12; nothing to gate.

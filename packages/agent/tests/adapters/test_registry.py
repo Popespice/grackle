@@ -33,6 +33,7 @@ class _RuntimeStub:
     def __init__(self, language: str, *, extensions: tuple[str, ...] = ()) -> None:
         self.language = language
         self.extensions = extensions
+        self.streaming_trace_parity = False
 
     def capabilities(self) -> Capabilities:
         return Capabilities()

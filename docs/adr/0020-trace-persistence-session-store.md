@@ -55,7 +55,7 @@ New CLI option on the `serve` command.  When provided:
 
 **Concurrency.**  `session_list` / `session_load` (and the startup write) are serialized through a `threading.Lock` inside `SessionStore` and the read paths are offloaded to `run_in_executor`, so SQLite is never touched concurrently and never blocks the event loop.
 
-~~Auto-saving a *live* `--stream` producer (rather than a replay file) is still future work~~ — implemented in Phase 9.3; see the Amendment section below.
+~~Auto-saving a *live* `--stream` producer (rather than a replay file) is still future work~~ — implemented in Phase 9.3; see the Phase 9.3 Amendment section below.
 
 ### New message types
 
@@ -92,6 +92,16 @@ Finalization (close the `.jsonl.part`, atomically `Path.replace()` it, and call 
 
 This closes the negative/known-limit item below — "auto-saving a live `--stream` producer to the store is not yet wired" no longer applies.
 
+## Amendment — Phase 12.0 (2026-08-05)
+
+The write-then-atomically-rename mechanism `RecordingSink` introduced in Phase 9.3 was policy-free at its core but entangled with server/store concerns (asyncio, `structlog`, session registration). Phase 12.0 extracts that core into `packages/agent/src/grackle/python_runtime/writer.py::JsonlPartWriter` — open `<final>.part` exclusive-create, write one JSON line per event with no per-event flush/fsync, track the byte offset of the last fully-written event, and `finalize()` by truncating any torn tail, closing, and atomically `Path.replace()`-ing into place — so the `grackle trace` CLI's `-o` and `--stream --output` (tee) paths can reuse the identical mechanism, not just the server's live-session recorder.
+
+**Flush policy, stated explicitly:** there is still no per-event `flush()`/`fsync()` — the durability target is *process-kill* (a SIGKILL or crash loses at most whatever sat in the OS-level write buffer unflushed, typically a few KB), not *power-loss* (an OS/hardware crash could still lose data the kernel itself hadn't written to the disk platter). This was already true of `RecordingSink`; Phase 12.0 does not change it, only generalizes it. A coarse time-based flush is possible future work, not built.
+
+**Keep-vs-discard policy split.** `JsonlPartWriter` itself is policy-free: `write()`/`finalize()` raise on I/O failure and `finalize()` leaves the `.part` file in place on failure — it has no opinion on what a caller should do next. The two callers diverge deliberately: `RecordingSink` (server-side, a disposable recording) discards on any failure, including an empty (zero-event) session, so a broken or unloadable row never pollutes the session library. The `grackle trace -o`/`--stream` CLI paths (agent-scoped, no server) *keep* the surviving `.part` file and report its path in the error — for a user-invoked trace, the file IS the product, and a partial trace with real events is more useful kept than silently discarded.
+
+**Scope of the CLI reuse.** Only adapters whose `trace_streaming()` emits the same event stream `trace()` would (`RuntimeAdapter.streaming_trace_parity`, `adapters/base.py`) get the incremental `-o` path — Python today. Node's `trace()` (a CPU sampling profiler) and `trace_streaming()` (precise-coverage polling) are different instruments, not two deliveries of one stream, so substituting one for the other would silently change what gets recorded; Go and Rust have no streaming trace at all. Those three languages keep the original collect-then-`write_jsonl`-once behavior for `-o`. The `--stream` tee path (which already only exists for streaming-capable adapters) is unaffected by this gating and now writes-then-sends through the same `JsonlPartWriter`, strengthening the tee's existing "file count ≥ sent count" losslessness invariant to hold at every instant, including a mid-stream kill — not only at the end of a completed run.
+
 ## Consequences
 
 **Positive:**
@@ -99,7 +109,8 @@ This closes the negative/known-limit item below — "auto-saving a live `--strea
 - Zero new runtime dependencies — `sqlite3` is stdlib.
 - `session_load_request` reuses the existing seekable-session machinery end-to-end — loaded sessions get full seek **and** aggregate-query support, not a degraded subset.
 - `serve --store --trace-source` populates the library out of the box, so the feature is usable end-to-end (not just an unwired flag).
-- **(Phase 9.3)** Live `--stream` sessions are now auto-recorded and registered without any extra flag beyond `--store` — see the Amendment above.
+- **(Phase 9.3)** Live `--stream` sessions are now auto-recorded and registered without any extra flag beyond `--store` — see the Phase 9.3 Amendment above.
+- **(Phase 12.0)** `grackle trace -o`/`--stream --output` no longer buffer the whole run in memory — a killed tracing process (not just a killed *traced script*, which was already safe) keeps every event written so far in `FILE.jsonl.part`, and memory stays flat regardless of run length — see the Phase 12.0 Amendment above.
 
 **Negative / known limits:**
 - The store stores `source_path` as whatever string the caller provides.  On Windows this may be an absolute path with drive letter; the cross-platform implications are noted but not guarded — the load path uses `Path(meta.source_path)` which handles both.

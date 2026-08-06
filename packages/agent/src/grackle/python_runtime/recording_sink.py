@@ -1,34 +1,34 @@
-"""Live-stream recording sink (ADR-0020 amendment, Phase 9.3).
+"""Live-stream recording sink (ADR-0020 amendment, Phase 9.3 + Phase 12.0).
 
 Tees a live ``--stream`` producer's trace events to a JSONL file on disk and
 registers the finished session in the :class:`~grackle.session_store.SessionStore`
 so it is loadable/seekable from the library — without buffering the whole
 session in memory and without any wire-schema change.
 
-The ``.part`` -> final rename follows the project's atomic-write convention
-(name-append, ``Path.replace``; see ``python_runtime/writer.py``).
-
-The recording file is written in **binary** mode and each event is encoded to
-UTF-8 bytes with an explicit ``\\n`` terminator. Binary mode avoids text-mode
-newline translation (so the byte offset we track is exact on every platform,
-including Windows), lets us advance ``_last_good_offset`` by ``len(encoded)``
-without a per-event ``tell()`` flush on the hot path, and makes the
-broken-write salvage a single ``truncate(offset)``.
+The incremental-write mechanism (open ``.part`` exclusive-create, per-event
+binary write, truncate-then-atomic-rename finalize) lives in
+:class:`~grackle.python_runtime.writer.JsonlPartWriter` — extracted in
+Phase 12.0 so the CLI's ``-o`` and ``--stream`` tee paths can reuse it too.
+This class is a thin policy wrapper around that core: it never raises (a
+recording failure must never disrupt the live fan-out it rides alongside),
+discards an empty (zero-event) recording, and registers the finished session
+in the store.
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
-import json
 import re
 import time
-from typing import TYPE_CHECKING, Any, BinaryIO
+from typing import TYPE_CHECKING
 
 import structlog
 
+from grackle.python_runtime.writer import JsonlPartWriter
+
 if TYPE_CHECKING:
     from pathlib import Path
+    from typing import Any, BinaryIO
 
     from grackle.session_store import SessionStore
 
@@ -63,6 +63,14 @@ class RecordingSink:
     ``trace_event`` via :meth:`write`; closed via :meth:`finalize` on
     ``trace_session_end``, producer disconnect, or server shutdown.
 
+    A thin policy wrapper around :class:`~grackle.python_runtime.writer.JsonlPartWriter`
+    (Phase 12.0): never raises (both :meth:`write` and :meth:`finalize` catch
+    and log), discards an empty (zero-event) recording — an unloadable
+    zero-event session would pollute the library and break ``build_seekable``
+    — and discards on any finalize failure too, since a lingering ``.part``
+    would block a later same-id recording (exclusive-create would otherwise
+    raise ``FileExistsError``).
+
     ``finalize`` is idempotent and safe to call from a ``finally`` block under
     cancellation: the truncate + close + rename happen synchronously before the
     only await (the store write), so a torn finalize still leaves a valid
@@ -85,30 +93,42 @@ class RecordingSink:
         self._session_id = session_id
         self._store = store
         self._language = language
-        self._final_path = recordings_dir / f"{session_id}.jsonl"
-        self._tmp_path = recordings_dir / f"{session_id}.jsonl.part"
         self._started_wall_ns = time.time_ns()
-        self._event_count = 0
-        self._last_good_offset = 0
         self._finalized = False
-        self._broken = False
-        self._f: BinaryIO = self._tmp_path.open("xb")
+        self._writer = JsonlPartWriter(recordings_dir / f"{session_id}.jsonl")
+
+    # -- test seams (regression anchor: tests/test_recording_sink.py reaches
+    # these five names directly and must not need to change) --------------
+    @property
+    def _f(self) -> BinaryIO:
+        return self._writer._f  # noqa: SLF001
+
+    @_f.setter
+    def _f(self, value: BinaryIO) -> None:
+        self._writer._f = value  # noqa: SLF001
+
+    @property
+    def _event_count(self) -> int:
+        return self._writer.count
+
+    @property
+    def _broken(self) -> bool:
+        return self._writer.broken
+
+    @property
+    def _tmp_path(self) -> Path:
+        return self._writer.part_path
+
+    @property
+    def _final_path(self) -> Path:
+        return self._writer.final_path
 
     def write(self, payload: dict[str, Any]) -> None:
         """Append one TraceEvent payload. Never raises — a recording failure
         must never disrupt the live fan-out it rides alongside."""
-        if self._broken:
-            return
         try:
-            data = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
-            self._f.write(data)
-            # Advance count and offset together, only on a fully successful
-            # write, so they can never disagree (a partial/failed write leaves
-            # both untouched and the salvage truncates the partial bytes away).
-            self._event_count += 1
-            self._last_good_offset += len(data)
+            self._writer.write(payload)
         except Exception as exc:
-            self._broken = True
             log.warning(
                 "recording sink: write failed — will salvage events written so far on finalize",
                 session_id=self._session_id,
@@ -116,61 +136,33 @@ class RecordingSink:
             )
 
     async def finalize(self) -> None:
-        """Truncate any partial tail, atomically rename, and register the session.
+        """Finalize the recording and register the session.
 
-        Idempotent. An empty recording (no events) is discarded — an
-        unloadable zero-event session would pollute the library and break
-        ``build_seekable``. A recording broken by a failed :meth:`write` is
-        salvaged: the file is truncated to ``_last_good_offset`` (the end of
-        the last fully-written event) so the events already written and
-        broadcast to consumers are not thrown away over one bad write. Every
-        step (truncate, close, rename, store write) is independently guarded so
-        a transient failure here can never propagate out and disrupt the
-        connection's receive loop — like :meth:`write`, this method logs and
-        moves on, never raises.
+        Idempotent. An empty recording (no events) is discarded. A recording
+        broken by a failed :meth:`write` is salvaged by
+        ``JsonlPartWriter.finalize`` (truncated to the last fully-written
+        event) so the events already written and broadcast to consumers are
+        not thrown away over one bad write. Any finalize failure discards
+        the recording — like :meth:`write`, this method logs and moves on,
+        never raises.
         """
         if self._finalized:
             return
         self._finalized = True
 
-        if self._event_count == 0:
-            self._close_and_discard()
-            return
-
-        if self._broken:
-            try:
-                self._f.truncate(self._last_good_offset)
-            except Exception as exc:
-                log.warning(
-                    "recording sink: could not salvage partial recording — discarding",
-                    session_id=self._session_id,
-                    error=str(exc),
-                )
-                self._close_and_discard()
-                return
-
-        try:
-            self._f.close()
-        except OSError as exc:
-            log.warning(
-                "recording sink: close failed — discarding recording",
-                session_id=self._session_id,
-                error=str(exc),
-            )
-            self._unlink_tmp()
+        if self._writer.count == 0:
+            self._writer.discard()
             return
 
         try:
-            self._tmp_path.replace(self._final_path)
-        except OSError as exc:
+            self._writer.finalize()
+        except Exception as exc:
             log.warning(
-                "recording sink: finalize rename failed — discarding recording",
+                "recording sink: finalize failed — discarding recording",
                 session_id=self._session_id,
                 error=str(exc),
             )
-            # Unlink the orphaned .part so it does not block a later same-id
-            # recording (exclusive-create would otherwise raise FileExistsError).
-            self._unlink_tmp()
+            self._writer.discard()
             return
 
         from grackle.session_store import SessionMeta
@@ -180,8 +172,8 @@ class RecordingSink:
             label=f"live {self._session_id[:8]}",
             started_ns=self._started_wall_ns,
             ended_ns=time.time_ns(),
-            source_path=str(self._final_path.resolve()),
-            event_count=self._event_count,
+            source_path=str(self._writer.final_path.resolve()),
+            event_count=self._writer.count,
             language=self._language,
         )
         loop = asyncio.get_running_loop()
@@ -197,24 +189,9 @@ class RecordingSink:
         log.info(
             "live session recorded",
             session_id=self._session_id,
-            events=self._event_count,
-            path=str(self._final_path),
+            events=self._writer.count,
+            path=str(self._writer.final_path),
         )
-
-    def _close_and_discard(self) -> None:
-        with contextlib.suppress(OSError):
-            self._f.close()
-        self._unlink_tmp()
-
-    def _unlink_tmp(self) -> None:
-        try:
-            self._tmp_path.unlink(missing_ok=True)
-        except OSError as exc:
-            log.warning(
-                "recording sink: cleanup unlink failed",
-                session_id=self._session_id,
-                error=str(exc),
-            )
 
 
 def sweep_orphaned_recordings(recordings_dir: Path, *, min_age_s: float = 30.0) -> None:

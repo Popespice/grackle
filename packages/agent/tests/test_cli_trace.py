@@ -13,8 +13,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import subprocess
+import sys
+import time
 from typing import TYPE_CHECKING
 
+import pytest
 from click.testing import CliRunner
 
 from grackle.cli import main
@@ -588,3 +592,725 @@ async def test_trace_stream_tee_writes_file(free_port: int, tmp_path: Path) -> N
             await server_task
         with contextlib.suppress(asyncio.CancelledError):
             await consumer_task
+
+
+# ---------------------------------------------------------------------------
+# Phase 12.0 — tee path through JsonlPartWriter (--stream + --output)
+# ---------------------------------------------------------------------------
+
+
+async def test_trace_stream_tee_write_failure_does_not_disrupt_stream(
+    monkeypatch: pytest.MonkeyPatch, free_port: int, tmp_path: Path
+) -> None:
+    """A write failure mid-tee must not kill the live stream — the stream
+    completes normally (write-then-send never lets a recording failure
+    propagate into the hot path), but the CLI still exits non-zero to
+    report the file problem after the fact."""
+    import json as _json
+
+    from websockets.asyncio.client import connect as _ws_connect
+
+    from grackle.python_runtime.writer import JsonlPartWriter
+    from grackle.server import serve as _serve
+
+    call_count = {"n": 0}
+    real_write = JsonlPartWriter.write
+
+    def _flaky_write(self: JsonlPartWriter, event: object) -> None:
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            self.broken = True
+            raise OSError("simulated disk failure")
+        real_write(self, event)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(JsonlPartWriter, "write", _flaky_write)
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    script = _write_simple_script(root)
+    out = tmp_path / "tee.jsonl"
+    url = f"ws://127.0.0.1:{free_port}"
+
+    server_task = asyncio.create_task(_serve("127.0.0.1", free_port, root=root))
+    await asyncio.sleep(0.05)
+
+    received: list[dict[str, object]] = []
+    consumer_done = asyncio.Event()
+
+    async def _consume() -> None:
+        async with _ws_connect(url) as ws:
+            await ws.send(_json.dumps({"id": "ping0", "type": "ping", "payload": {}}))
+            async for raw in ws:
+                msg = _json.loads(raw)
+                received.append(msg)
+                if msg["type"] == "trace_session_end":
+                    consumer_done.set()
+                    break
+
+    consumer_task = asyncio.create_task(_consume())
+    try:
+        await asyncio.sleep(0.05)
+
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: CliRunner().invoke(
+                main,
+                [
+                    "trace",
+                    str(script),
+                    "--root",
+                    str(root),
+                    "--stream",
+                    "--connect",
+                    url,
+                    "--output",
+                    str(out),
+                ],
+            ),
+        )
+
+        # The live stream itself completed normally...
+        await asyncio.wait_for(consumer_done.wait(), timeout=5.0)
+        types = [m["type"] for m in received]
+        assert "trace_session_end" in types
+
+        # ...but the CLI reports the write failure with a non-zero exit,
+        # never a bare traceback.
+        assert result.exit_code != 0
+        assert "Traceback" not in result.output
+    finally:
+        server_task.cancel()
+        consumer_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await server_task
+        with contextlib.suppress(asyncio.CancelledError):
+            await consumer_task
+
+
+async def test_trace_stream_tee_cap_and_writer_failure_both_reported(
+    monkeypatch: pytest.MonkeyPatch, free_port: int, tmp_path: Path
+) -> None:
+    """When BOTH the adapter (cap exceeded) and the writer (finalize
+    failure) fail in the same tee session, the combined error must mention
+    both — neither is silently dropped in favor of the other."""
+    import json as _json
+
+    from websockets.asyncio.client import connect as _ws_connect
+
+    from grackle.python_runtime.writer import JsonlPartWriter
+    from grackle.server import serve as _serve
+
+    def _flaky_finalize(self: JsonlPartWriter) -> None:
+        raise OSError("simulated disk full at finalize")
+
+    monkeypatch.setattr(JsonlPartWriter, "finalize", _flaky_finalize)
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    script = root / "script.py"
+    script.write_text(
+        "def hot(i):\n    return i\n\nfor _n in range(50):\n    hot(_n)\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "tee.jsonl"
+    url = f"ws://127.0.0.1:{free_port}"
+
+    server_task = asyncio.create_task(_serve("127.0.0.1", free_port, root=root))
+    await asyncio.sleep(0.05)
+
+    # The consumer just needs to keep the connection alive and draining —
+    # this test's assertions are entirely CLI-side (exit code + combined
+    # error message), so it does not wait for any particular server message.
+    async def _consume() -> None:
+        async with _ws_connect(url) as ws:
+            await ws.send(_json.dumps({"id": "ping0", "type": "ping", "payload": {}}))
+            async for _raw in ws:
+                pass
+
+    consumer_task = asyncio.create_task(_consume())
+    try:
+        await asyncio.sleep(0.05)
+
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: CliRunner().invoke(
+                main,
+                [
+                    "trace",
+                    str(script),
+                    "--root",
+                    str(root),
+                    "--stream",
+                    "--connect",
+                    url,
+                    "--output",
+                    str(out),
+                    "--max-events",
+                    "3",
+                ],
+            ),
+        )
+
+        assert result.exit_code != 0
+        output_lower = result.output.lower()
+        assert "cap" in output_lower  # the held adapter-side error
+        assert "disk full" in output_lower  # the writer-side error — neither dropped
+    finally:
+        server_task.cancel()
+        consumer_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await server_task
+        with contextlib.suppress(asyncio.CancelledError):
+            await consumer_task
+
+
+async def test_trace_stream_tee_lossless_under_real_backpressure(
+    monkeypatch: pytest.MonkeyPatch, free_port: int, tmp_path: Path
+) -> None:
+    """Tee losslessness holds under REAL WS backpressure drops (mirrors the
+    precedent in test_stream_sender.py's test_sender_backpressure_bounds_memory):
+    the file has every event (write precedes send), while the WS stream may
+    have fewer — the file is a strict superset, not just >=."""
+    monkeypatch.setenv("GRACKLE_STREAM_MAX_INFLIGHT", "10")
+
+    import json as _json
+
+    from websockets.asyncio.client import connect as _ws_connect
+
+    from grackle.server import serve as _serve
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    script = root / "script.py"
+    script.write_text(
+        "def hot(i):\n    return i\n\nfor _n in range(600):\n    hot(_n)\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "tee.jsonl"
+    url = f"ws://127.0.0.1:{free_port}"
+
+    server_task = asyncio.create_task(_serve("127.0.0.1", free_port, root=root))
+    await asyncio.sleep(0.05)
+
+    received: list[dict[str, object]] = []
+    consumer_done = asyncio.Event()
+
+    async def _consume() -> None:
+        async with _ws_connect(url) as ws:
+            await ws.send(_json.dumps({"id": "ping0", "type": "ping", "payload": {}}))
+            async for raw in ws:
+                msg = _json.loads(raw)
+                received.append(msg)
+                if msg["type"] == "trace_session_end":
+                    consumer_done.set()
+                    break
+
+    consumer_task = asyncio.create_task(_consume())
+    try:
+        await asyncio.sleep(0.05)
+
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: CliRunner().invoke(
+                main,
+                [
+                    "trace",
+                    str(script),
+                    "--root",
+                    str(root),
+                    "--stream",
+                    "--connect",
+                    url,
+                    "--output",
+                    str(out),
+                ],
+            ),
+        )
+
+        assert result.exit_code == 0, result.output
+        assert out.exists()
+        file_lines = out.read_text(encoding="utf-8").splitlines()
+
+        await asyncio.wait_for(consumer_done.wait(), timeout=10.0)
+
+        streamed_count = sum(1 for m in received if m["type"] == "trace_event")
+        assert len(file_lines) > 0
+        # The file is a strict superset under real drops — the discriminating
+        # assertion (>=  would also pass with zero drops, which is not what
+        # this test exists to prove).
+        assert len(file_lines) > streamed_count
+    finally:
+        server_task.cancel()
+        consumer_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await server_task
+        with contextlib.suppress(asyncio.CancelledError):
+            await consumer_task
+
+
+async def test_trace_stream_tee_clears_stale_part_from_prior_kill(
+    free_port: int, tmp_path: Path
+) -> None:
+    """A leftover .part from a previous killed --stream --output run must
+    not block a fresh tee session."""
+    import json as _json
+
+    from websockets.asyncio.client import connect as _ws_connect
+
+    from grackle.server import serve as _serve
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    script = _write_simple_script(root)
+    out = tmp_path / "tee.jsonl"
+    stale_part = tmp_path / "tee.jsonl.part"
+    stale_part.write_bytes(b'{"garbage": true}\n')
+    url = f"ws://127.0.0.1:{free_port}"
+
+    server_task = asyncio.create_task(_serve("127.0.0.1", free_port, root=root))
+    await asyncio.sleep(0.05)
+
+    consumer_done = asyncio.Event()
+
+    async def _consume() -> None:
+        async with _ws_connect(url) as ws:
+            await ws.send(_json.dumps({"id": "ping0", "type": "ping", "payload": {}}))
+            async for raw in ws:
+                msg = _json.loads(raw)
+                if msg["type"] == "trace_session_end":
+                    consumer_done.set()
+                    break
+
+    consumer_task = asyncio.create_task(_consume())
+    try:
+        await asyncio.sleep(0.05)
+
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: CliRunner().invoke(
+                main,
+                [
+                    "trace",
+                    str(script),
+                    "--root",
+                    str(root),
+                    "--stream",
+                    "--connect",
+                    url,
+                    "--output",
+                    str(out),
+                ],
+            ),
+        )
+
+        assert result.exit_code == 0, result.output
+        assert out.exists()
+        assert not stale_part.exists()
+        events = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+        assert all("garbage" not in e for e in events)
+
+        await asyncio.wait_for(consumer_done.wait(), timeout=5.0)
+    finally:
+        server_task.cancel()
+        consumer_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await server_task
+        with contextlib.suppress(asyncio.CancelledError):
+            await consumer_task
+
+
+async def test_trace_stream_tee_trivial_session_leaves_no_stray_part(
+    free_port: int, tmp_path: Path
+) -> None:
+    """A --stream --output session over a trivial script (no function calls,
+    at most the module-level frame) must finalize cleanly — no stray .part
+    left behind — even at the minimum possible event count."""
+    import json as _json
+
+    from websockets.asyncio.client import connect as _ws_connect
+
+    from grackle.server import serve as _serve
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    script = root / "script.py"
+    script.write_text("", encoding="utf-8")
+    out = tmp_path / "tee.jsonl"
+    url = f"ws://127.0.0.1:{free_port}"
+
+    server_task = asyncio.create_task(_serve("127.0.0.1", free_port, root=root))
+    await asyncio.sleep(0.05)
+
+    consumer_done = asyncio.Event()
+
+    async def _consume() -> None:
+        async with _ws_connect(url) as ws:
+            await ws.send(_json.dumps({"id": "ping0", "type": "ping", "payload": {}}))
+            async for raw in ws:
+                msg = _json.loads(raw)
+                if msg["type"] == "trace_session_end":
+                    consumer_done.set()
+                    break
+
+    consumer_task = asyncio.create_task(_consume())
+    try:
+        await asyncio.sleep(0.05)
+
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: CliRunner().invoke(
+                main,
+                [
+                    "trace",
+                    str(script),
+                    "--root",
+                    str(root),
+                    "--stream",
+                    "--connect",
+                    url,
+                    "--output",
+                    str(out),
+                ],
+            ),
+        )
+
+        assert result.exit_code == 0, result.output
+        assert out.exists()
+        assert not (tmp_path / "tee.jsonl.part").exists()
+
+        await asyncio.wait_for(consumer_done.wait(), timeout=5.0)
+    finally:
+        server_task.cancel()
+        consumer_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await server_task
+        with contextlib.suppress(asyncio.CancelledError):
+            await consumer_task
+
+
+# ---------------------------------------------------------------------------
+# Phase 12.0 — incremental trace persistence (-o for streaming_trace_parity
+# adapters, i.e. Python today)
+# ---------------------------------------------------------------------------
+
+
+def test_trace_max_events_cap_with_output_finalizes_file(tmp_path: Path) -> None:
+    """--max-events with --output must still write the captured prefix
+    (D12.0.6): the incremental path finalizes the file BEFORE re-raising the
+    cap error, unlike the old buffered path which lost everything on cap."""
+    script = tmp_path / "script.py"
+    script.write_text(
+        "def hot(i):\n    return i\n\nfor _n in range(50):\n    hot(_n)\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "trace.jsonl"
+    result = CliRunner().invoke(
+        main,
+        [
+            "trace",
+            str(script),
+            "--root",
+            str(tmp_path),
+            "--output",
+            str(out),
+            "--max-events",
+            "3",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "cap" in result.output.lower()
+    assert out.exists()
+    lines = out.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 3
+    for line in lines:
+        json.loads(line)
+
+
+def test_trace_cap_and_writer_failure_both_reported(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """When BOTH the adapter (cap exceeded) and the writer (finalize
+    failure) fail in the same run, the combined error must mention both —
+    neither is silently dropped in favor of the other."""
+    from grackle.python_runtime.writer import JsonlPartWriter
+
+    def _flaky_finalize(self: JsonlPartWriter) -> None:
+        raise OSError("simulated disk full at finalize")
+
+    monkeypatch.setattr(JsonlPartWriter, "finalize", _flaky_finalize)
+
+    script = tmp_path / "script.py"
+    script.write_text(
+        "def hot(i):\n    return i\n\nfor _n in range(50):\n    hot(_n)\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "trace.jsonl"
+    result = CliRunner().invoke(
+        main,
+        [
+            "trace",
+            str(script),
+            "--root",
+            str(tmp_path),
+            "--output",
+            str(out),
+            "--max-events",
+            "3",
+        ],
+    )
+    assert result.exit_code != 0
+    output_lower = result.output.lower()
+    assert "cap" in output_lower  # the held adapter-side error
+    assert "disk full" in output_lower  # the writer-side error — neither dropped
+    # finalize() failed, so the .part is deliberately KEPT (never renamed) —
+    # the CLI's keep-on-failure policy (D12.0.1), not RecordingSink's discard.
+    assert (tmp_path / "trace.jsonl.part").exists()
+
+
+def test_trace_keyboard_interrupt_mid_run_still_writes_events_so_far(tmp_path: Path) -> None:
+    """A KeyboardInterrupt raised BY THE TRACED SCRIPT must not lose events
+    already written — Tracer.run() catches BaseException and the incremental
+    writer already has everything on disk by the time it propagates (D12.0.9)."""
+    script = tmp_path / "script.py"
+    script.write_text(
+        "def hot(i):\n"
+        "    return i\n"
+        "\n"
+        "for _n in range(5):\n"
+        "    hot(_n)\n"
+        "    if _n == 2:\n"
+        "        raise KeyboardInterrupt\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "trace.jsonl"
+    result = CliRunner().invoke(
+        main,
+        ["trace", str(script), "--root", str(tmp_path), "--output", str(out)],
+    )
+    assert result.exit_code == 0, result.output
+    assert out.exists()
+    assert not (tmp_path / "trace.jsonl.part").exists()
+    events = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+    hot_calls = [e for e in events if e["event"] == "call" and e["node_id"].endswith(":hot")]
+    # hot(0), hot(1), hot(2) all ran before the raise on the _n == 2 iteration.
+    assert len(hot_calls) == 3
+
+
+def test_trace_output_clears_stale_part_from_prior_kill(tmp_path: Path) -> None:
+    """A leftover .part from a previous killed run must not block a fresh run."""
+    script = _write_simple_script(tmp_path)
+    out = tmp_path / "trace.jsonl"
+    stale_part = tmp_path / "trace.jsonl.part"
+    stale_part.write_bytes(b'{"garbage": true}\n')
+
+    result = CliRunner().invoke(
+        main,
+        ["trace", str(script), "--root", str(tmp_path), "--output", str(out)],
+    )
+    assert result.exit_code == 0, result.output
+    assert out.exists()
+    assert not stale_part.exists()
+    events = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+    assert all("garbage" not in e for e in events)
+
+
+async def test_trace_output_with_connect_replays_from_written_file(
+    free_port: int, tmp_path: Path
+) -> None:
+    """-o + --connect (no --stream) must replay from the FINALIZED file — the
+    incremental path retains nothing in memory, so the replayed count read
+    back via read_jsonl(output) must equal the file's line count."""
+    import json as _json
+
+    from websockets.asyncio.client import connect as _ws_connect
+
+    from grackle.server import serve as _serve
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    script = _write_simple_script(root)
+    out = tmp_path / "trace.jsonl"
+    url = f"ws://127.0.0.1:{free_port}"
+
+    server_task = asyncio.create_task(_serve("127.0.0.1", free_port, root=root))
+    await asyncio.sleep(0.05)
+
+    received: list[dict[str, object]] = []
+    consumer_done = asyncio.Event()
+
+    async def _consume() -> None:
+        async with _ws_connect(url) as ws:
+            await ws.send(_json.dumps({"id": "ping0", "type": "ping", "payload": {}}))
+            async for raw in ws:
+                msg = _json.loads(raw)
+                received.append(msg)
+                if msg["type"] == "trace_session_end":
+                    consumer_done.set()
+                    break
+
+    consumer_task = asyncio.create_task(_consume())
+    try:
+        await asyncio.sleep(0.05)
+
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: CliRunner().invoke(
+                main,
+                [
+                    "trace",
+                    str(script),
+                    "--root",
+                    str(root),
+                    "--output",
+                    str(out),
+                    "--connect",
+                    url,
+                    "--no-pace",
+                ],
+            ),
+        )
+
+        assert result.exit_code == 0, result.output
+        assert out.exists()
+        file_lines = out.read_text(encoding="utf-8").splitlines()
+
+        await asyncio.wait_for(consumer_done.wait(), timeout=5.0)
+
+        streamed_count = sum(1 for m in received if m["type"] == "trace_event")
+        # No backpressure/dropping on this reliable, awaited-send path
+        # (unlike --stream's TraceStreamSender) — must be exact, not >=.
+        assert streamed_count == len(file_lines)
+    finally:
+        server_task.cancel()
+        consumer_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await server_task
+        with contextlib.suppress(asyncio.CancelledError):
+            await consumer_task
+
+
+def test_trace_streaming_writes_incrementally_as_events_arrive(tmp_path: Path) -> None:
+    """A spy sink wrapping JsonlPartWriter.write must see the writer's count
+    grow monotonically DURING the trace (proving persistence is per-event at
+    the object level, not buffered-until-the-end) and the .part file must
+    already hold real bytes on disk by the time the run completes — i.e.
+    before finalize()'s close() forces a flush. (A small handful of events
+    can sit in Python's internal write buffer — typically a few KB — so this
+    is checked once after enough events have definitely crossed that buffer,
+    not at every small checkpoint, which would be flaky by construction.)"""
+    import grackle  # noqa: F401 — side-effect import triggers registration
+    from grackle.adapters.base import TraceEvent, TraceOptions
+    from grackle.python_runtime.adapter import PythonRuntimeAdapter
+    from grackle.python_runtime.writer import JsonlPartWriter
+
+    root = tmp_path
+    script = root / "script.py"
+    script.write_text(
+        "def hot(i):\n    return i\n\nfor _n in range(500):\n    hot(_n)\n",
+        encoding="utf-8",
+    )
+    out = root / "trace.jsonl"
+    writer = JsonlPartWriter(out)
+    part = writer.part_path
+
+    counts_seen: list[int] = []
+
+    def _spy_sink(event: TraceEvent) -> None:
+        writer.write(event)
+        if writer.count % 100 == 0:
+            counts_seen.append(writer.count)
+            assert part.exists()
+
+    adapter = PythonRuntimeAdapter()
+    adapter.trace_streaming(script, root, TraceOptions(), _spy_sink)
+
+    # ~1000 call+return events at this point (500 hot() calls, 2 events
+    # each) comfortably exceed a default ~8KB write buffer several times
+    # over, so real bytes must already be on disk before finalize().
+    assert part.stat().st_size > 0
+
+    writer.finalize()
+
+    assert counts_seen == sorted(counts_seen)  # observed monotonically non-decreasing
+    assert len(counts_seen) >= 2  # growth observed at more than one checkpoint
+    assert out.exists()
+
+
+def test_trace_kill_mid_run_keeps_events_written_so_far(tmp_path: Path) -> None:
+    """The headline Phase 12.0 test: SIGKILL of the tracing PROCESS (not the
+    traced script) must keep every fully-flushed event on disk. This test
+    FAILS against the pre-12.0 buffered -o path, which loses everything on a
+    mid-run process kill (the whole run was held in memory) — that is the
+    regression this chunk fixes.
+    """
+    root = tmp_path
+    marker = root / "marker"
+    script = root / "script.py"
+    script.write_text(
+        "import pathlib\n"
+        "import time\n"
+        "\n"
+        "def hot(i):\n"
+        "    return i\n"
+        "\n"
+        "for _n in range(3000):\n"
+        "    hot(_n)\n"
+        "    if _n == 1500:\n"
+        f"        pathlib.Path({str(marker)!r}).write_text('go', encoding='utf-8')\n"
+        "\n"
+        "time.sleep(30)\n",
+        encoding="utf-8",
+    )
+    out = root / "trace.jsonl"
+
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "from grackle.cli import main; main()",
+            "trace",
+            str(script),
+            "--root",
+            str(root),
+            "--output",
+            str(out),
+        ],
+        cwd=root,
+    )
+    try:
+        deadline = time.monotonic() + 30.0
+        while not marker.exists():
+            if time.monotonic() > deadline:
+                proc.kill()
+                proc.wait(timeout=10)
+                pytest.fail("subprocess never reached the marker — trace did not run")
+            time.sleep(0.02)
+        proc.kill()
+        proc.wait(timeout=10)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=10)
+
+    part = root / "trace.jsonl.part"
+    assert not out.exists()
+    assert part.exists()
+    raw = part.read_text(encoding="utf-8")
+    assert raw  # non-empty: SIGKILL did not lose everything
+
+    lines = raw.split("\n")
+    # The trailing element is either "" (clean trailing newline) or a torn
+    # partial line if the kill landed exactly mid-write — either way, drop
+    # it and require every line BEFORE it to be complete, valid JSON. This
+    # is what "kept events written so far" means without asserting an
+    # exact, timing-dependent count.
+    complete_lines = lines[:-1]
+    assert len(complete_lines) > 0
+    for line in complete_lines:
+        json.loads(line)

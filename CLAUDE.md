@@ -110,11 +110,21 @@ unchanged; per-epoch tail 20→22, C 28→30, 60-epoch total ≈25,830) — plus
 traceable subject", ADR count 27→28), `PHASE_11_SUMMARY.md`, `PROJECT_ACCEPTANCE.md` §G, version
 `0.11.0`, tag (post-merge). The three beacons are identity passthroughs whose captured return reprs
 are a versioned frontend parse contract (Phase 12.4 renders the latter two). **Phase 12
-("grackle learns as it analyzes") queued after 11.H** — `nn/ml/`: a self-supervised
-hotspot-prediction engine trained from the session-store corpus via `grackle learn`, surfaced as a
-capability-gated `predicted_heat` `AnalysisRegistry` entry with **no wire-schema change**, plus a
-frontend predicted-vs-actual overlay (ADRs 0029–0030, `v0.12.0`). No ADRs written yet for Phase
-12 — reserved numbers only. Full plan: `~/.claude/plans/as-phase-10-is-snazzy-sedgewick.md`.
+("grackle learns as it analyzes") queued after 11.H.** **12.0** — incremental trace persistence
+(agent-only durability fix, lands before the ML chunks): `grackle trace -o` used to buffer the
+whole run in memory and write once at the end, so a killed tracing process lost everything;
+`JsonlPartWriter` (extracted from the Phase-9.3 `RecordingSink` mechanism, `python_runtime/
+writer.py`) now backs both `-o` (Python only, gated on a new `RuntimeAdapter.streaming_trace_parity`
+protocol attribute — Node/Go/Rust keep the one-shot buffered write, since their `trace()` is a
+different instrument or a post-hoc coverage conversion) and the `--stream` tee, writing per-event
+to `FILE.jsonl.part` with atomic truncate-close-rename finalize — a killed run keeps every event
+written so far. ADR-0020 amendment (no new ADR — same precedent as `RecordingSink` itself). Then
+`nn/ml/`: a self-supervised hotspot-prediction engine trained from the session-store corpus via
+`grackle learn`, surfaced as a capability-gated `predicted_heat` `AnalysisRegistry` entry with
+**no wire-schema change**, plus a frontend predicted-vs-actual overlay and a NetworkViewPanel
+visualizing the NN itself (ADRs 0029–0030, `v0.12.0`). No new ADR numbers consumed yet for Phase
+12's ML chunks — 0029–0030 reserved only. Full plan:
+`~/.claude/plans/as-phase-10-is-snazzy-sedgewick.md`.
 
 Granular per-sub-chunk implementation detail (Phase 8.5, 9.1–9.3, 10.1–10.7) has moved out
 of this file — it's already fully preserved in `PHASE_8_SUMMARY.md`, `PHASE_9_SUMMARY.md`, and

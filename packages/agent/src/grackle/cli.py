@@ -72,6 +72,24 @@ def _resolve_runtime_adapter(script: Path, language: str | None) -> RuntimeAdapt
     return adapter
 
 
+def _clear_stale_part(output: Path) -> None:
+    """Remove a leftover ``<output>.part`` from a previous killed run.
+
+    ``-o`` is an explicit user-chosen path, so a stale ``.part`` left by a
+    prior SIGKILL must not fail the new run (``JsonlPartWriter``'s
+    exclusive-create would otherwise raise ``FileExistsError``). Raises a
+    clean ``ClickException`` if the leftover file cannot be removed (e.g.
+    another trace process is concurrently writing it).
+    """
+    part = output.parent / (output.name + ".part")
+    try:
+        part.unlink(missing_ok=True)
+    except OSError as exc:
+        raise click.ClickException(
+            f"cannot clear stale {part} — another trace may be writing it: {exc}"
+        ) from exc
+
+
 @click.group()
 def main() -> None:
     """grackle — local-first live code visualizer."""
@@ -153,9 +171,14 @@ def parse(
     default=None,
     type=click.Path(dir_okay=False, writable=True, path_type=Path),
     help=(
-        "Write JSONL to FILE. Without --stream, writes after tracing completes "
-        "(instead of stdout). With --stream, captures a lossless copy alongside "
-        "the live WebSocket stream (tee mode)."
+        "Write JSONL to FILE (instead of stdout). With --stream, captures a "
+        "lossless copy alongside the live WebSocket stream (tee mode). For "
+        "Python, the file is written INCREMENTALLY to FILE.part as the run "
+        "executes and atomically finalized to FILE when it ends — a killed "
+        "trace process keeps every event written so far in FILE.part "
+        "(delete a torn last line, or re-run, before replaying it). Go, "
+        "Rust, and Node traces are small post-hoc conversions/reconstructions "
+        "and are still written once, at the end."
     ),
 )
 @click.option(
@@ -326,7 +349,7 @@ def trace(
     from grackle.adapters.base import TraceCapExceeded, TraceOptions
     from grackle.go_runtime.errors import GoRuntimeError
     from grackle.node_runtime.errors import NodeRuntimeError
-    from grackle.python_runtime.writer import write_jsonl
+    from grackle.python_runtime.writer import JsonlPartWriter, read_jsonl, write_jsonl
     from grackle.rust_runtime.errors import RustRuntimeError
 
     # ------------------------------------------------------------------
@@ -382,19 +405,34 @@ def trace(
         except ConnectionError as exc:
             raise click.ClickException(f"could not connect to {connect}: {exc}") from exc
 
-        # Tee path: if --output is given, buffer every event alongside the WS
-        # stream.  The file is lossless — it captures all events including any
-        # the WS sender drops under backpressure — so file count >= sent count.
-        _tee_buf: list[TraceEvent] | None = None
+        # Tee path (Phase 12.0): if --output is given, write every event to a
+        # JsonlPartWriter BEFORE sending it over the WS stream (write-then-
+        # send) — the file is lossless — it captures all events including
+        # any the WS sender drops under backpressure — so file count >= sent
+        # count at EVERY instant, including a mid-stream kill, not only at
+        # the end of a completed run.
+        writer: JsonlPartWriter | None = None
         active_sink: Callable[[TraceEvent], None]
         if output is not None:
-            _buf: list[TraceEvent] = []
-            _tee_buf = _buf
+            _clear_stale_part(output)
+            writer = JsonlPartWriter(output)
             _ws_sink = sender.sink
+            _writer = writer  # local alias — narrows Optional for the closure below
 
             def _tee_sink(event: TraceEvent) -> None:
+                # A recording failure must never disrupt the live stream it
+                # rides alongside — the writer is now broken and self-no-ops
+                # on further writes; surfaced via writer.broken after
+                # sender.finish() below. Bare try/except, not
+                # contextlib.suppress: this sink is invoked directly from
+                # sys.monitoring's hot path (every traced call/return), and
+                # suppress(Exception) constructs a fresh context-manager
+                # object on every call — try/except has no such allocation.
+                try:  # noqa: SIM105
+                    _writer.write(event)
+                except Exception:
+                    pass
                 _ws_sink(event)
-                _buf.append(event)
 
             active_sink = _tee_sink
         else:
@@ -402,29 +440,47 @@ def trace(
 
         sent = 0
         _cap_exc: click.ClickException | None = None
+        _err_exc: click.ClickException | None = None
         try:
             adapter.trace_streaming(script, root, options, active_sink)
         except TraceCapExceeded as exc:
-            # Store cap error — write the file first (captured prefix is valid),
-            # then re-raise below so the user gets both the file and the error.
+            # Held, not raised — finalize below writes the captured prefix
+            # first (the file IS the product), matching the completed-trace
+            # incremental path; then re-raised so the user gets both.
             _cap_exc = click.ClickException(str(exc))
         except (NodeRuntimeError, GoRuntimeError, RustRuntimeError) as exc:
-            raise click.ClickException(str(exc)) from exc
+            _err_exc = click.ClickException(str(exc))
         except Exception as exc:
-            raise click.ClickException(f"trace error: {exc}") from exc
+            _err_exc = click.ClickException(f"trace error: {exc}")
         finally:
             sent = sender.finish()
 
-        if _tee_buf is not None:
-            assert output is not None
+        _tee_writer_exc: click.ClickException | None = None
+        if writer is not None:
             try:
-                tee_count = write_jsonl(_tee_buf, output)
-                click.echo(f"wrote {tee_count} events → {output}", err=True)
-            except Exception as write_exc:
-                raise click.ClickException(f"could not write {output}: {write_exc}") from write_exc
+                writer.finalize()
+            except OSError as write_exc:
+                _tee_writer_exc = click.ClickException(
+                    f"could not write {output}: {write_exc}; "
+                    f"partial data kept at {writer.part_path}"
+                )
+            else:
+                click.echo(f"wrote {writer.count} events → {output}", err=True)
+                if writer.broken:
+                    _tee_writer_exc = click.ClickException(
+                        f"could not write {output}: a write failed mid-stream"
+                    )
 
-        if _cap_exc is not None:
-            raise _cap_exc
+        # Combine every held error rather than silently dropping one when
+        # both the adapter (cap/runtime error) AND the writer failed in the
+        # same run — e.g. --max-events hit at the same moment disk fills up.
+        _tee_held = [e for e in (_cap_exc, _err_exc, _tee_writer_exc) if e is not None]
+        if _tee_held:
+            raise (
+                _tee_held[0]
+                if len(_tee_held) == 1
+                else click.ClickException("; ".join(str(e) for e in _tee_held))
+            )
 
         if sender.connection_lost:
             click.echo(
@@ -438,6 +494,64 @@ def trace(
     # ------------------------------------------------------------------
     # Completed-trace path  (default, or --connect without --stream)
     # ------------------------------------------------------------------
+    if output is not None and adapter.streaming_trace_parity:
+        # Incremental persistence (Phase 12.0): write per-event to a .part
+        # file as the run executes instead of buffering the whole trace in
+        # memory, so a killed process keeps everything written so far. Only
+        # for adapters whose trace_streaming() emits the same event stream
+        # trace() would (streaming_trace_parity — Python today; see
+        # adapters/base.py). Other languages keep the buffered path below.
+        _clear_stale_part(output)
+        writer = JsonlPartWriter(output)
+        _incr_cap_exc: click.ClickException | None = None
+        _incr_err_exc: click.ClickException | None = None
+        try:
+            adapter.trace_streaming(script, root, options, writer.write)
+        except TraceCapExceeded as exc:
+            # Held, not raised — finalize below writes the captured prefix
+            # first (the file IS the product), matching --stream's tee
+            # semantics; then re-raised so the user gets both.
+            _incr_cap_exc = click.ClickException(str(exc))
+        except (NodeRuntimeError, GoRuntimeError, RustRuntimeError) as exc:
+            _incr_err_exc = click.ClickException(str(exc))
+        except Exception as exc:
+            # Belt-and-suspenders: no adapter failure should reach the user
+            # as a traceback (mirrors the --stream path above). Also catches
+            # a propagated writer.write() OSError (the tracer's sink-exception
+            # re-raise) — the run stops early but finalize below still
+            # salvages the prefix already written.
+            _incr_err_exc = click.ClickException(f"trace error: {exc}")
+
+        _incr_writer_exc: click.ClickException | None = None
+        try:
+            writer.finalize()
+        except OSError as write_exc:
+            _incr_writer_exc = click.ClickException(
+                f"could not write {output}: {write_exc}; partial data kept at {writer.part_path}"
+            )
+        else:
+            click.echo(f"wrote {writer.count} events → {output}", err=True)
+
+        # Combine every held error rather than silently dropping one when
+        # both the adapter (cap/runtime error) AND the writer failed in the
+        # same run — e.g. --max-events hit at the same moment disk fills up.
+        _incr_held = [e for e in (_incr_cap_exc, _incr_err_exc, _incr_writer_exc) if e is not None]
+        if _incr_held:
+            raise (
+                _incr_held[0]
+                if len(_incr_held) == 1
+                else click.ClickException("; ".join(str(e) for e in _incr_held))
+            )
+
+        if connect is not None:
+            replayed = read_jsonl(output)
+            try:
+                asyncio.run(_stream_events_to_server(replayed, connect, pace=not no_pace))
+                click.echo(f"streamed {len(replayed)} events → {connect}", err=True)
+            except Exception as exc:
+                raise click.ClickException(f"stream to {connect} failed: {exc}") from exc
+        return
+
     try:
         events = list(adapter.trace(script, root, options))
     except TraceCapExceeded as exc:
