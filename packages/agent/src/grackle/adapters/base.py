@@ -216,6 +216,16 @@ class RuntimeAdapter(Protocol):
     # generic "cannot infer"). Open surface (ADR-0004) — unknown extensions are
     # simply absent here, never an error.
     extensions: tuple[str, ...]
+    # True when trace_streaming() emits the same event stream trace() would
+    # return for the same script (same events, same semantics) — so the CLI
+    # may substitute streaming delivery (incremental disk persistence, Phase
+    # 12.0) for collect-then-write without changing what gets recorded.
+    # Deliberately NOT on ``Capabilities`` — that dataclass is mirrored 1:1 in
+    # packages/shared-types/schema/adapters.schema.json with
+    # ``additionalProperties: false`` and every field ``required``, so adding
+    # a field there means a schema + codegen change. This is a CLI routing
+    # concern, same footing as ``extensions`` above (ADR-0004 open surface).
+    streaming_trace_parity: bool
 
     def capabilities(self) -> Capabilities: ...
     def trace(self, script: Path, root: Path, options: TraceOptions) -> Iterator[TraceEvent]: ...

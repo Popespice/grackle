@@ -39,6 +39,10 @@ class GoRuntimeAdapter:
 
     language: str = "go"
     extensions: tuple[str, ...] = (".go",)
+    # No streaming: trace_streaming() is unsupported (raises), and trace()
+    # itself is a post-hoc coverage-instrumented-build conversion, not a
+    # live event stream — nothing for incremental persistence to buy here.
+    streaming_trace_parity: bool = False
 
     def runtime_unavailable_reason(self, script: Path) -> str | None:
         """Reject ``_test.go`` inputs and a missing/old Go toolchain; else None."""

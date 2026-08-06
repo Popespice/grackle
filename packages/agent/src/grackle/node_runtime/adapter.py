@@ -79,6 +79,15 @@ class NodeRuntimeAdapter:
     # users to expect they work.
     extensions: tuple[str, ...] = (".ts", ".mts", ".cts")
 
+    # False: trace() (sampling profiler) and trace_streaming() (precise-coverage
+    # polling) are different instruments, not two deliveries of the same event
+    # stream — see the module docstring's "hybrid" split. Substituting one for
+    # the other under -o would silently change what gets recorded, and the
+    # sampling profile is inherently post-hoc (reconstructed only after the
+    # process exits), so there is no mid-run state incremental persistence
+    # could buy here anyway (Phase 12.0 D12.0.2).
+    streaming_trace_parity: bool = False
+
     # JSX extensions: type-stripping strips type annotations but cannot transform
     # JSX. Out of scope until Phase 9 — surfaced as a clean, specific message when
     # the user passes --language typescript explicitly.

@@ -28,6 +28,9 @@ class PythonRuntimeAdapter:
     # .py/.pyw infer to Python. Extension-less scripts (shebang launchers) also
     # default to Python, but that fallback stays in the CLI, not this index.
     extensions: tuple[str, ...] = (".py", ".pyw")
+    # trace_streaming() emits exactly the same per-call events trace() would
+    # return — sys.monitoring drives both identically (Phase 12.0).
+    streaming_trace_parity: bool = True
 
     def runtime_unavailable_reason(self, script: Path) -> str | None:
         # sys.monitoring is guaranteed by requires-python >=3.12; nothing to gate.
@@ -71,9 +74,13 @@ class PythonRuntimeAdapter:
     ) -> None:
         """Execute *script* routing each event to *sink* instead of a list.
 
-        Intended for real-time streaming (``grackle trace --stream``).  The
-        *sink* is called directly from ``sys.monitoring`` callbacks on the
-        hot path — it must be non-blocking (no I/O, no ``await``).
+        Intended for real-time streaming (``grackle trace --stream``) and for
+        incremental persistence (``grackle trace -o``, Phase 12.0).  The
+        *sink* is called directly from ``sys.monitoring`` callbacks on the hot
+        path, so it must be amortized-cheap and never block on something
+        unbounded: no network, no locks, no ``await``.  A buffered local file
+        write qualifies; a socket send does not (``TraceStreamSender``
+        enqueues rather than sending inline for exactly this reason).
 
         Unlike :meth:`trace`, this method returns ``None``; the caller is
         responsible for the session lifecycle (``session_start`` / ``session_end``

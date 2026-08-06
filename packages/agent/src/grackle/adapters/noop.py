@@ -27,6 +27,7 @@ class NoOpStaticParser:
 class NoOpRuntimeAdapter:
     language: str = "noop"
     extensions: tuple[str, ...] = ()
+    streaming_trace_parity: bool = False
 
     def capabilities(self) -> Capabilities:
         return Capabilities()

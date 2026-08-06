@@ -47,6 +47,10 @@ class RustRuntimeAdapter:
 
     language: str = "rust"
     extensions: tuple[str, ...] = (".rs",)
+    # No streaming: trace_streaming() is unsupported (raises), and trace()
+    # itself is a post-hoc LLVM-coverage-instrumented-build conversion, not a
+    # live event stream — nothing for incremental persistence to buy here.
+    streaming_trace_parity: bool = False
 
     # Directory names that, as the *immediate* parent of a `.rs` file, indicate a
     # Cargo integration-test or benchmark target (non-binary). Deeper toolchain
