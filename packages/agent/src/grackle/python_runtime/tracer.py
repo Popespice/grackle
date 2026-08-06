@@ -103,9 +103,14 @@ class Tracer:
         sink:     Optional callable invoked with each ``TraceEvent`` instead
                   of appending to an internal list.  When provided, the list
                   returned by :meth:`run` will be empty — the caller is
-                  responsible for consuming events via the sink.  The sink
-                  must be non-blocking (it is called on the hot path inside
-                  ``sys.monitoring`` callbacks).
+                  responsible for consuming events via the sink.  The sink is
+                  called on the hot path inside ``sys.monitoring`` callbacks,
+                  so it must be amortized-cheap and never block on something
+                  unbounded: no network, no locks, no ``await``.  A buffered
+                  local file write is acceptable (``grackle trace -o`` does
+                  exactly that — see ``JsonlPartWriter``); a socket send is
+                  not, which is why ``TraceStreamSender`` hands off to a
+                  queue instead.
     """
 
     def __init__(

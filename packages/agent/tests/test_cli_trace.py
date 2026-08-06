@@ -851,76 +851,42 @@ async def test_trace_stream_tee_lossless_under_real_backpressure(
             await consumer_task
 
 
-async def test_trace_stream_tee_clears_stale_part_from_prior_kill(
-    free_port: int, tmp_path: Path
-) -> None:
-    """A leftover .part from a previous killed --stream --output run must
-    not block a fresh tee session."""
-    import json as _json
+def test_trace_stream_tee_refuses_to_clobber_an_existing_part(tmp_path: Path) -> None:
+    """The tee path refuses an existing .part too — and refuses it BEFORE the
+    sender starts, so no server is needed here and none is contacted.
 
-    from websockets.asyncio.client import connect as _ws_connect
-
-    from grackle.server import serve as _serve
-
+    Same rule as the plain -o path: a .part holds a prior run's salvaged
+    events and is never deleted on the user's behalf. Opening the file first
+    also means an unusable -o path can never leave a live sender thread and
+    WebSocket connection behind.
+    """
     root = tmp_path / "proj"
     root.mkdir()
     script = _write_simple_script(root)
     out = tmp_path / "tee.jsonl"
-    stale_part = tmp_path / "tee.jsonl.part"
-    stale_part.write_bytes(b'{"garbage": true}\n')
-    url = f"ws://127.0.0.1:{free_port}"
+    existing_part = tmp_path / "tee.jsonl.part"
+    salvaged = b'{"event": "call", "node_id": "prior_run.py:f"}\n'
+    existing_part.write_bytes(salvaged)
 
-    server_task = asyncio.create_task(_serve("127.0.0.1", free_port, root=root))
-    await asyncio.sleep(0.05)
-
-    consumer_done = asyncio.Event()
-
-    async def _consume() -> None:
-        async with _ws_connect(url) as ws:
-            await ws.send(_json.dumps({"id": "ping0", "type": "ping", "payload": {}}))
-            async for raw in ws:
-                msg = _json.loads(raw)
-                if msg["type"] == "trace_session_end":
-                    consumer_done.set()
-                    break
-
-    consumer_task = asyncio.create_task(_consume())
-    try:
-        await asyncio.sleep(0.05)
-
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            lambda: CliRunner().invoke(
-                main,
-                [
-                    "trace",
-                    str(script),
-                    "--root",
-                    str(root),
-                    "--stream",
-                    "--connect",
-                    url,
-                    "--output",
-                    str(out),
-                ],
-            ),
-        )
-
-        assert result.exit_code == 0, result.output
-        assert out.exists()
-        assert not stale_part.exists()
-        events = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
-        assert all("garbage" not in e for e in events)
-
-        await asyncio.wait_for(consumer_done.wait(), timeout=5.0)
-    finally:
-        server_task.cancel()
-        consumer_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await server_task
-        with contextlib.suppress(asyncio.CancelledError):
-            await consumer_task
+    result = CliRunner().invoke(
+        main,
+        [
+            "trace",
+            str(script),
+            "--root",
+            str(root),
+            "--stream",
+            "--connect",
+            "ws://127.0.0.1:1",  # never reached — the refusal precedes the connect
+            "--output",
+            str(out),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "already exists" in result.output, result.output
+    assert "could not connect" not in result.output, result.output
+    assert existing_part.read_bytes() == salvaged
+    assert not out.exists()
 
 
 async def test_trace_stream_tee_trivial_session_leaves_no_stray_part(
@@ -1072,6 +1038,258 @@ def test_trace_cap_and_writer_failure_both_reported(
     assert (tmp_path / "trace.jsonl.part").exists()
 
 
+def test_trace_cap_does_not_mask_a_broken_mid_run_write(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A write that fails MID-RUN must be reported even when --max-events also
+    fires and the traced script swallowed the propagated error.
+
+    finalize() succeeds here (it salvages the prefix), so the only signal that
+    events were lost is ``writer.broken``. The incremental path originally
+    checked it on the tee side only, so this exact combination — swallowed
+    write error + cap — printed "wrote N events" and reported the cap alone,
+    never telling the user the file was short.
+    """
+    from grackle.python_runtime.writer import JsonlPartWriter
+
+    class _FailsAfter:
+        """Wraps the real file object so JsonlPartWriter.write's own failure
+        handling runs — patching write() wholesale would skip the very
+        ``broken`` bookkeeping under test."""
+
+        def __init__(self, real: object, fail_at: int) -> None:
+            self._real = real
+            self._fail_at = fail_at
+            self._n = 0
+
+        def write(self, data: bytes) -> int:
+            self._n += 1
+            if self._n >= self._fail_at:
+                raise OSError("simulated disk full mid-run")
+            return int(self._real.write(data))  # type: ignore[attr-defined]
+
+        def truncate(self, size: int | None = None) -> int:
+            return int(self._real.truncate(size))  # type: ignore[attr-defined]
+
+        def close(self) -> None:
+            self._real.close()  # type: ignore[attr-defined]
+
+    real_init = JsonlPartWriter.__init__
+
+    def _flaky_init(self: JsonlPartWriter, final_path: Path) -> None:
+        real_init(self, final_path)
+        self._f = _FailsAfter(self._f, 2)  # type: ignore[assignment]
+
+    monkeypatch.setattr(JsonlPartWriter, "__init__", _flaky_init)
+
+    script = tmp_path / "script.py"
+    # The bare `except Exception: pass` is the point — the traced program
+    # absorbs the injected sink error, so the run continues to the cap.
+    script.write_text(
+        "def hot(i):\n"
+        "    try:\n"
+        "        return i\n"
+        "    except Exception:\n"
+        "        pass\n"
+        "\n"
+        "for _n in range(50):\n"
+        "    try:\n"
+        "        hot(_n)\n"
+        "    except Exception:\n"
+        "        pass\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "trace.jsonl"
+    result = CliRunner().invoke(
+        main,
+        [
+            "trace",
+            str(script),
+            "--root",
+            str(tmp_path),
+            "--output",
+            str(out),
+            "--max-events",
+            "6",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "a write failed mid-stream" in result.output, result.output
+
+
+def test_trace_write_failure_does_not_perturb_the_traced_program(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A grackle disk error must never surface inside the traced program.
+
+    ``sys.monitoring`` propagates an exception raised by a callback into the
+    frame being monitored, so a sink that lets a write error escape (a) aborts
+    the program mid-run and (b) fires whatever ``except``/``finally`` is live
+    in the user's call stack — rollbacks, retries and alerts really execute,
+    because grackle's disk filled up. The sink therefore swallows and reports
+    via ``writer.broken`` instead, exactly as the ``--stream`` tee sink does.
+
+    The event order here is deterministic — module call, ``main`` call,
+    ``work`` call, ``inner`` call — so failing the 4th write lands the error
+    while ``work`` is inside its ``try``, which is what makes the handler
+    assertion discriminating. Failing on ``work``'s own call event instead
+    would land *before* the ``try`` is entered and prove nothing.
+    """
+    from grackle.python_runtime.writer import JsonlPartWriter
+
+    class _FailsAfter:
+        def __init__(self, real: object, fail_at: int) -> None:
+            self._real = real
+            self._fail_at = fail_at
+            self._n = 0
+
+        def write(self, data: bytes) -> int:
+            self._n += 1
+            if self._n >= self._fail_at:
+                raise OSError("simulated disk full mid-run")
+            return int(self._real.write(data))  # type: ignore[attr-defined]
+
+        def truncate(self, size: int | None = None) -> int:
+            return int(self._real.truncate(size))  # type: ignore[attr-defined]
+
+        def close(self) -> None:
+            self._real.close()  # type: ignore[attr-defined]
+
+    real_init = JsonlPartWriter.__init__
+
+    def _flaky_init(self: JsonlPartWriter, final_path: Path) -> None:
+        real_init(self, final_path)
+        # 4th event == inner's call, i.e. while work is inside its try.
+        self._f = _FailsAfter(self._f, 4)  # type: ignore[assignment]
+
+    monkeypatch.setattr(JsonlPartWriter, "__init__", _flaky_init)
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    handler_marker = tmp_path / "handler-fired"
+    completed_marker = tmp_path / "ran-to-completion"
+    script = root / "script.py"
+    script.write_text(
+        "import pathlib\n"
+        "\n"
+        "def inner(i):\n"
+        "    return i + 1\n"
+        "\n"
+        "def work(i):\n"
+        "    try:\n"
+        "        return inner(i) * 2\n"
+        "    except BaseException:\n"
+        f"        pathlib.Path({str(handler_marker)!r}).write_text('perturbed')\n"
+        "        raise\n"
+        "\n"
+        "def main():\n"
+        "    total = 0\n"
+        "    for n in range(30):\n"
+        "        total += work(n)\n"
+        "    return total\n"
+        "\n"
+        "main()\n"
+        f"pathlib.Path({str(completed_marker)!r}).write_text('done')\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "trace.jsonl"
+    result = CliRunner().invoke(
+        main,
+        ["trace", str(script), "--root", str(root), "--output", str(out)],
+    )
+
+    # The traced program ran to completion, untouched...
+    assert not handler_marker.exists(), "grackle's write error reached the traced program"
+    assert completed_marker.exists(), "grackle's write error aborted the traced program"
+    # ...and the failure is still reported, structurally, with the prefix kept.
+    assert result.exit_code != 0
+    assert "a write failed mid-stream" in result.output, result.output
+    assert out.exists()
+
+
+def test_trace_output_survives_a_traced_script_that_chdirs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A relative -o must still finalize when the traced script calls os.chdir().
+
+    The Python tracer runs the script IN-PROCESS via runpy, so its chdir moves
+    the agent's own cwd between the .part being opened and finalize()'s
+    rename. Unless the writer pinned both paths at construction, the rename
+    resolves against the NEW directory and fails, stranding the events under
+    the original cwd with no final file.
+    """
+    root = tmp_path / "proj"
+    root.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    script = root / "script.py"
+    script.write_text(
+        "import os\n"
+        "\n"
+        "def work(i):\n"
+        "    return i * 2\n"
+        "\n"
+        "for _n in range(3):\n"
+        "    work(_n)\n"
+        f"os.chdir({str(elsewhere)!r})\n"
+        "for _n in range(3):\n"
+        "    work(_n)\n",
+        encoding="utf-8",
+    )
+
+    rundir = tmp_path / "rundir"
+    rundir.mkdir()
+    monkeypatch.chdir(rundir)
+
+    result = CliRunner().invoke(
+        main,
+        ["trace", str(script), "--root", str(root), "--output", "out.jsonl"],
+    )
+    assert result.exit_code == 0, result.output
+    final = rundir / "out.jsonl"
+    assert final.exists(), "finalize must land in the cwd the user launched from"
+    assert not (rundir / "out.jsonl.part").exists()
+    assert not (elsewhere / "out.jsonl").exists(), "must not follow the script's chdir"
+    lines = final.read_text(encoding="utf-8").splitlines()
+    assert len(lines) > 0
+    for line in lines:
+        json.loads(line)
+
+
+def test_trace_stream_tee_unwritable_output_fails_cleanly(tmp_path: Path) -> None:
+    """An unopenable --output must be a clean CLI error, not a traceback.
+
+    click.Path(writable=True) does not validate a nonexistent parent, so the
+    exclusive-create open is the first thing to fail. It is deliberately
+    attempted BEFORE the sender starts, so this path also cannot leave a live
+    sender thread and WebSocket connection behind (there is no server here —
+    if the open were attempted after sender.start(), the connect error would
+    mask the real problem).
+    """
+    root = tmp_path / "proj"
+    root.mkdir()
+    script = _write_simple_script(root)
+    missing_dir = tmp_path / "nope" / "deeper"
+    result = CliRunner().invoke(
+        main,
+        [
+            "trace",
+            str(script),
+            "--root",
+            str(root),
+            "--output",
+            str(missing_dir / "trace.jsonl"),
+            "--stream",
+            "--connect",
+            "ws://127.0.0.1:1",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "could not open" in result.output, result.output
+    # A clean ClickException, never a bubbled-up OSError.
+    assert result.exception is None or isinstance(result.exception, SystemExit), result.exception
+
+
 def test_trace_keyboard_interrupt_mid_run_still_writes_events_so_far(tmp_path: Path) -> None:
     """A KeyboardInterrupt raised BY THE TRACED SCRIPT must not lose events
     already written — Tracer.run() catches BaseException and the incremental
@@ -1101,22 +1319,30 @@ def test_trace_keyboard_interrupt_mid_run_still_writes_events_so_far(tmp_path: P
     assert len(hot_calls) == 3
 
 
-def test_trace_output_clears_stale_part_from_prior_kill(tmp_path: Path) -> None:
-    """A leftover .part from a previous killed run must not block a fresh run."""
+def test_trace_output_refuses_to_clobber_an_existing_part(tmp_path: Path) -> None:
+    """An existing .part is REFUSED, never silently deleted.
+
+    A .part left by a killed run holds that run's salvaged events — the whole
+    product of Phase 12.0. Clearing it on the next run would destroy exactly
+    that data the moment the user reflexively re-runs the command that died.
+    (It is also how two concurrent traces to one -o path corrupt each other:
+    POSIX unlink succeeds on a file another process still holds open.)
+    """
     script = _write_simple_script(tmp_path)
     out = tmp_path / "trace.jsonl"
-    stale_part = tmp_path / "trace.jsonl.part"
-    stale_part.write_bytes(b'{"garbage": true}\n')
+    existing_part = tmp_path / "trace.jsonl.part"
+    salvaged = b'{"event": "call", "node_id": "prior_run.py:f"}\n'
+    existing_part.write_bytes(salvaged)
 
     result = CliRunner().invoke(
         main,
         ["trace", str(script), "--root", str(tmp_path), "--output", str(out)],
     )
-    assert result.exit_code == 0, result.output
-    assert out.exists()
-    assert not stale_part.exists()
-    events = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
-    assert all("garbage" not in e for e in events)
+    assert result.exit_code != 0
+    assert "already exists" in result.output, result.output
+    # The prior run's events are untouched, and no output file was produced.
+    assert existing_part.read_bytes() == salvaged
+    assert not out.exists()
 
 
 async def test_trace_output_with_connect_replays_from_written_file(

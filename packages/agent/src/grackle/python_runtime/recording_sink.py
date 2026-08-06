@@ -151,7 +151,7 @@ class RecordingSink:
         self._finalized = True
 
         if self._writer.count == 0:
-            self._writer.discard()
+            self._discard()
             return
 
         try:
@@ -162,7 +162,7 @@ class RecordingSink:
                 session_id=self._session_id,
                 error=str(exc),
             )
-            self._writer.discard()
+            self._discard()
             return
 
         from grackle.session_store import SessionMeta
@@ -192,6 +192,22 @@ class RecordingSink:
             events=self._writer.count,
             path=str(self._writer.final_path),
         )
+
+    def _discard(self) -> None:
+        """Drop the recording, logging when the ``.part`` could not be removed.
+
+        ``JsonlPartWriter.discard`` never raises, but a leftover ``.part``
+        matters here: it blocks a later same-id recording (exclusive-create
+        would raise ``FileExistsError``) until ``sweep_orphaned_recordings``
+        clears it at the next server start, so the operator needs a line
+        explaining why.
+        """
+        if not self._writer.discard():
+            log.warning(
+                "recording sink: cleanup unlink failed",
+                session_id=self._session_id,
+                path=str(self._writer.part_path),
+            )
 
 
 def sweep_orphaned_recordings(recordings_dir: Path, *, min_age_s: float = 30.0) -> None:

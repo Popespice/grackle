@@ -80,10 +80,12 @@ uv run --project packages/agent grackle serve --root path/to/project --watch
 
 > **If a trace is killed mid-run**: for Python, `-o`/`--stream` write incrementally to
 > `FILE.jsonl.part` as the run executes and atomically finalize it to `FILE.jsonl` when it ends —
-> so a killed process (SIGKILL, a crash) keeps everything written so far in the `.part` file
-> instead of losing the whole run. `grackle diff`/aggregation tolerate a torn last line; for
-> replay (`serve --trace-source`) delete the torn last line, or just re-run the trace. Go, Rust,
-> and Node traces are small post-hoc conversions and are still written once, at the end.
+> so a killed process (SIGKILL, a crash) keeps the run so far in the `.part` file instead of
+> losing everything. Writes are buffered, not flushed per event, so the tail still in Python's
+> write buffer at the moment of the kill (up to ~8 KB, tens of events) is lost; everything before
+> it survives. `grackle diff`/aggregation tolerate a torn last line; for replay
+> (`serve --trace-source`) delete the torn last line, or just re-run the trace. Go, Rust, and
+> Node traces are small post-hoc conversions and are still written once, at the end.
 
 ---
 

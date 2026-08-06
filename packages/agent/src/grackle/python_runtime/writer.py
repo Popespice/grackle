@@ -41,6 +41,15 @@ def write_jsonl(events: Iterable[TraceEvent], dest: Path) -> int:
     Appending preserves the full filename ("foo.tar.gz.tmp") for
     collision-free atomic swaps.
 
+    Written in **binary** mode with an explicit ``\\n`` terminator, so the
+    bytes on disk are identical on every platform. Text mode would apply
+    universal-newline translation and emit CRLF on Windows — which would
+    (a) diverge from :class:`JsonlPartWriter` and ``RecordingSink``, both of
+    which have always written LF, and (b) make the same ``grackle trace -o``
+    invocation produce different bytes on different OSes. JSONL is an
+    LF-delimited format; ``read_jsonl`` accepts either, but grackle only
+    ever *emits* LF.
+
     Args:
         events: Iterable of ``TraceEvent`` dicts.
         dest:   Destination path (created if it does not exist; parent must
@@ -54,7 +63,8 @@ def write_jsonl(events: Iterable[TraceEvent], dest: Path) -> int:
         lines.append(json.dumps(event, ensure_ascii=False))
 
     tmp = dest.parent / (dest.name + ".tmp")
-    tmp.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    body = "\n".join(lines) + ("\n" if lines else "")
+    tmp.write_bytes(body.encode("utf-8"))
     tmp.replace(dest)
     return len(lines)
 
@@ -115,10 +125,17 @@ class JsonlPartWriter:
     """
 
     def __init__(self, final_path: Path) -> None:
-        self.final_path = final_path
+        # Anchored to the cwd at construction time. The Python tracer runs the
+        # traced script IN-PROCESS via runpy, so a script that calls os.chdir()
+        # moves the agent's cwd between the .part being opened and finalize()'s
+        # rename — a relative path would then resolve the rename against the
+        # NEW directory and fail with FileNotFoundError, stranding the events
+        # under the original cwd. absolute(), not resolve(): the goal is to pin
+        # the cwd, not to follow symlinks the user deliberately pointed at.
+        self.final_path = final_path.absolute()
         # Name-append, never with_suffix — see write_jsonl's docstring for
         # why (multi-suffix filenames like "foo.tar.gz" would collide).
-        self.part_path = final_path.parent / (final_path.name + ".part")
+        self.part_path = self.final_path.parent / (self.final_path.name + ".part")
         self.count = 0
         self.broken = False
         self._last_good_offset = 0
@@ -168,13 +185,22 @@ class JsonlPartWriter:
         self.part_path.replace(self.final_path)
         self._finalized = True
 
-    def discard(self) -> None:
+    def discard(self) -> bool:
         """Close (best-effort) and remove the ``.part`` file.
 
         Never raises — this is a last-resort cleanup path with no useful
-        recovery on failure.
+        recovery on failure. Returns True when the ``.part`` file is gone
+        afterwards, False when it could not be removed — Windows refuses to
+        unlink a file whose handle is still open, so a discard following a
+        *failed* ``close()`` leaves an orphan behind, and an orphaned
+        ``.part`` blocks the next exclusive-create at that path until
+        something sweeps it. Callers that have somewhere to log (see
+        ``RecordingSink``) surface that rather than losing it silently.
         """
         with contextlib.suppress(OSError):
             self._f.close()
-        with contextlib.suppress(OSError):
+        try:
             self.part_path.unlink(missing_ok=True)
+        except OSError:
+            return False
+        return True

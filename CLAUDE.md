@@ -117,8 +117,13 @@ whole run in memory and write once at the end, so a killed tracing process lost 
 writer.py`) now backs both `-o` (Python only, gated on a new `RuntimeAdapter.streaming_trace_parity`
 protocol attribute — Node/Go/Rust keep the one-shot buffered write, since their `trace()` is a
 different instrument or a post-hoc coverage conversion) and the `--stream` tee, writing per-event
-to `FILE.jsonl.part` with atomic truncate-close-rename finalize — a killed run keeps every event
-written so far. ADR-0020 amendment (no new ADR — same precedent as `RecordingSink` itself). Then
+to `FILE.jsonl.part` with atomic truncate-close-rename finalize — a killed run keeps the run so far
+(minus the unflushed write-buffer tail; process-kill durable, not power-loss durable). An existing
+`.part` is **refused, never cleared** — it holds a prior run's salvaged events, and clobbering it is
+also how two concurrent traces corrupt each other. Write failures are swallowed at the sink and
+reported from `writer.broken`, never propagated into the traced program via `sys.monitoring`. All
+JSONL emitters write binary LF (`write_jsonl` used text mode, so it emitted CRLF on Windows).
+ADR-0020 amendment (no new ADR — same precedent as `RecordingSink` itself). Then
 `nn/ml/`: a self-supervised hotspot-prediction engine trained from the session-store corpus via
 `grackle learn`, surfaced as a capability-gated `predicted_heat` `AnalysisRegistry` entry with
 **no wire-schema change**, plus a frontend predicted-vs-actual overlay and a NetworkViewPanel

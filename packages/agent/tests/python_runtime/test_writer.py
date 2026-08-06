@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -10,8 +11,6 @@ import pytest
 from grackle.python_runtime.writer import JsonlPartWriter, read_jsonl, write_jsonl
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from grackle.adapters.base import TraceEvent
 
 
@@ -163,6 +162,23 @@ class _FlakyFile:
         self._real.close()
 
 
+def test_write_jsonl_emits_lf_never_crlf(tmp_path: Path) -> None:
+    """write_jsonl writes bytes, not text, so grackle only ever emits LF.
+
+    Discriminating on Windows only — a text-mode write (``Path.write_text``,
+    what this used to be) applies universal-newline translation there and
+    emits CRLF, diverging from JsonlPartWriter/RecordingSink and making the
+    same ``grackle trace -o`` produce different bytes per OS. On POSIX both
+    forms produce LF, so the Windows CI leg is what actually guards this.
+    """
+    dest = tmp_path / "out.jsonl"
+    write_jsonl(_events(3), dest)
+    raw = dest.read_bytes()
+    assert b"\r\n" not in raw
+    assert raw.count(b"\n") == 3
+    assert raw.endswith(b"}\n")
+
+
 def test_part_writer_byte_identical_to_write_jsonl(tmp_path: Path) -> None:
     events = _events(4)
     via_write_jsonl = tmp_path / "a.jsonl"
@@ -287,8 +303,65 @@ def test_part_writer_discard_removes_part(tmp_path: Path) -> None:
     assert not dest.exists()
 
 
+def test_part_writer_paths_are_pinned_to_construction_cwd(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A relative destination is anchored at construction, not at finalize.
+
+    The tracer runs the traced script in-process, so a script calling
+    os.chdir() moves the cwd out from under an in-flight writer. Both paths
+    must already be absolute or the finalize rename resolves against the wrong
+    directory.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    away = tmp_path / "away"
+    away.mkdir()
+    monkeypatch.chdir(home)
+
+    writer = JsonlPartWriter(Path("out.jsonl"))
+    assert writer.final_path.is_absolute()
+    assert writer.part_path.is_absolute()
+
+    writer.write(_events(1)[0])
+    monkeypatch.chdir(away)  # the traced script wanders off
+    writer.finalize()
+
+    assert (home / "out.jsonl").exists()
+    assert not (away / "out.jsonl").exists()
+    assert not (home / "out.jsonl.part").exists()
+
+
+def test_part_writer_discard_reports_whether_the_part_is_gone(tmp_path: Path) -> None:
+    """discard() returns False when the .part survives, so callers can log it.
+
+    An undeleted .part blocks the next exclusive-create at that path, so
+    RecordingSink needs to be able to say so rather than failing silently.
+    """
+    dest = tmp_path / "out.jsonl"
+    writer = JsonlPartWriter(dest)
+    writer.write(_events(1)[0])
+    assert writer.discard() is True
+
+    stuck = JsonlPartWriter(tmp_path / "stuck.jsonl")
+
+    def _explode(*_args: object, **_kwargs: object) -> None:
+        raise OSError("simulated undeletable file")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(Path, "unlink", _explode)
+        assert stuck.discard() is False
+    stuck.part_path.unlink(missing_ok=True)
+
+
 def test_part_writer_discard_never_raises_on_missing_file(tmp_path: Path) -> None:
     dest = tmp_path / "out.jsonl"
     writer = JsonlPartWriter(dest)
+    # Close the handle BEFORE unlinking: Windows refuses to delete a file that
+    # any process still holds open (WinError 32), so unlinking first would fail
+    # the test on the very platform it is meant to protect. discard() then hits
+    # both branches it exists to survive — a redundant close and a missing file.
+    writer._f.close()  # noqa: SLF001
     writer.part_path.unlink()  # simulate the file vanishing out from under it
     writer.discard()  # must not raise
+    assert not writer.part_path.exists()
