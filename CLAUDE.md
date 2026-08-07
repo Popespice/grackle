@@ -123,12 +123,32 @@ to `FILE.jsonl.part` with atomic truncate-close-rename finalize — a killed run
 also how two concurrent traces corrupt each other. Write failures are swallowed at the sink and
 reported from `writer.broken`, never propagated into the traced program via `sys.monitoring`. All
 JSONL emitters write binary LF (`write_jsonl` used text mode, so it emitted CRLF on Windows).
-ADR-0020 amendment (no new ADR — same precedent as `RecordingSink` itself). Then
-`nn/ml/`: a self-supervised hotspot-prediction engine trained from the session-store corpus via
-`grackle learn`, surfaced as a capability-gated `predicted_heat` `AnalysisRegistry` entry with
-**no wire-schema change**, plus a frontend predicted-vs-actual overlay and a NetworkViewPanel
-visualizing the NN itself (ADRs 0029–0030, `v0.12.0`). No new ADR numbers consumed yet for Phase
-12's ML chunks — 0029–0030 reserved only. Full plan:
+ADR-0020 amendment (no new ADR — same precedent as `RecordingSink` itself). **12.1** — ML pipeline
+(`packages/nn/src/grackle_nn/ml/`, blocks M0–M9) — **SHIPPED: [PR #77](https://github.com/Popespice/grackle/pull/77),
+squash-merged to main at `604e245`.** A self-supervised hotspot-prediction engine, standalone in
+the `nn` package: `features.py` extracts a 35-column structural feature vector from a raw static
+graph (degree buckets by edge kind, an independently-reimplemented iterative Tarjan SCC, BFS
+reachability from an entry set, name/path flags — never touches trace/heat data); `labels.py`
+mirrors the agent's `TraceAggregates` count-weighting exactly (pinned by a cross-check test against
+all 5 committed golden traces); `dataset.py` does graph-level (never node-level) train/val
+splitting; `metrics_rank.py` is pure-numpy Spearman + top-k overlap; `heat_model.py` trains the
+Phase-11 MLP architecture (`Linear(35,64)→ReLU→Linear(64,32)→ReLU→Linear(32,1)`, Adam+MSE) wired to
+the `record_epoch` trace beacon, with an atomic, two-pass-validated `heat-model.npz` checkpoint
+format. A synthetic-corpus acceptance test proves the trained model beats a raw-in-degree Spearman
+baseline on held-out graphs; a real-fixture integration test covers Python plus the polyglot
+Go/Rust/Node goldens; import-hygiene is enforced by a fresh-subprocess + AST-scan test pair
+(ADR-0028: `nn -> grackle` stays dev-only). **No agent/frontend/wire-schema change**
+(`check-parity` stays a no-op). An 8-angle, 58-agent adversarial code review found 25 raw findings,
+23 confirmed after independent re-verification and fixed pre-merge — including one real correctness
+bug (a self-recursive node with no other callers was wrongly excluded from the BFS entry set, an
+asymmetry between the in-degree count and the adjacency actually walked), three unguarded crashes
+on malformed input, `spearman` returning `NaN` on empty input instead of the documented `0.0`, and
+a duplicated tie-averaging algorithm extracted to a shared `_rank_utils` helper. CI was blocked
+twice by an unrelated active GitHub Actions platform outage (confirmed via githubstatus.com, jobs
+never acquired a runner) before landing green. Next: **12.2** — `grackle learn` CLI + a
+capability-gated `predicted_heat` `AnalysisRegistry` entry sourced from the session-store corpus,
+then 12.3 (frontend predicted-heat overlay + LossCurvePanel), 12.4 (NetworkViewPanel), and 12.H
+(ship, ADRs 0029–0030, `v0.12.0` — not yet consumed by 12.1, still reserved). Full plan:
 `~/.claude/plans/as-phase-10-is-snazzy-sedgewick.md`.
 
 Granular per-sub-chunk implementation detail (Phase 8.5, 9.1–9.3, 10.1–10.7) has moved out
