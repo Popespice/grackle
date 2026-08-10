@@ -48,10 +48,18 @@ def learn_available() -> bool:
     (``go_runtime.capability.go_runtime_available``, etc.). Tests that want to
     simulate a different environment monkeypatch the import machinery and
     call :func:`reset_cache`.
+
+    Catches every exception the import can raise, not just ``ImportError`` —
+    a broken editable install (e.g. a numpy ABI mismatch, or a mid-edit
+    ``SyntaxError`` in the actively-developed sibling package) must degrade
+    to "unavailable" exactly like "not installed", never propagate. Every
+    caller of this function (the server's static-graph push, the CLI's
+    gate check) depends on it never raising — that is the entire point of a
+    capability gate.
     """
     try:
         import grackle_nn.ml  # noqa: F401
-    except ImportError:
+    except Exception:
         return False
     return True
 

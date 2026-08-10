@@ -9,7 +9,6 @@ import asyncio
 import contextlib
 import json
 import os
-import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -48,6 +47,18 @@ def trained_model(tmp_path: Path) -> Path:
     return out
 
 
+def _bump_mtime_forward(path: Path, seconds: float = 5.0) -> None:
+    """Force ``path``'s mtime forward by ``seconds`` — guaranteed to differ
+    from whatever it was before, even on a filesystem/CI runner whose mtime
+    resolution is too coarse to distinguish two back-to-back writes (mirrors
+    ``tests/test_watcher.py``'s helper of the same name; see its docstring
+    for the specific Windows-CI hazard this avoids — a naive sleep()-then-
+    touch() was found flaky on at least one runner for exactly this cache)."""
+    current_ns = path.stat().st_mtime_ns
+    new_ns = current_ns + int(seconds * 1_000_000_000)
+    os.utime(path, ns=(new_ns, new_ns))
+
+
 def _free_port() -> int:
     """A second free port, independent of the `free_port` fixture (which can
     only be requested once per test via normal fixture injection)."""
@@ -64,8 +75,10 @@ async def _recv_json(ws: Any, timeout: float = 5.0) -> dict[str, Any]:
     return result
 
 
-async def _start_server(port: int, **kwargs: Any) -> asyncio.Task[None]:
-    task = asyncio.create_task(serve("127.0.0.1", port, root=_TINY_PYTHON_APP, **kwargs))
+async def _start_server(
+    port: int, root: Path = _TINY_PYTHON_APP, **kwargs: Any
+) -> asyncio.Task[None]:
+    task = asyncio.create_task(serve("127.0.0.1", port, root=root, **kwargs))
     await asyncio.sleep(0.05)
     return task
 
@@ -174,14 +187,67 @@ async def test_predicted_heat_cached_across_connects_recomputed_on_mtime_bump(
             await _recv_json(ws)
         assert len(calls) == 1, "second connect with an unchanged model must hit the cache"
 
-        time.sleep(0.05)
-        os.utime(trained_model, None)  # bump mtime without changing content
+        _bump_mtime_forward(trained_model)  # guaranteed-distinct mtime, not wall-clock drift
 
         async with connect(f"ws://127.0.0.1:{free_port}") as ws:
             await _recv_json(ws)
         assert len(calls) == 2, "an mtime bump must bust the cache and recompute"
     finally:
         await _stop_server(task)
+
+
+async def test_predicted_heat_invalidates_on_rename_with_unchanged_edge_topology(
+    free_port: int, tmp_path: Path, trained_model: Path
+) -> None:
+    """Regression: the predicted-heat cache key must be sensitive to node
+    identity, not just edge topology. A rename with no edges attached to the
+    renamed node leaves _graph_signature (edge-topology-only, used for
+    hub_score/cycles) unchanged — if predicted_heat's cache reused that
+    signature, a stale scores list referencing the OLD node_id would be
+    reattached to the new graph, which no longer has that node at all."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "a.py").write_text("def f():\n    pass\n", encoding="utf-8")
+
+    task = await _start_server(free_port, root=root, model_path=trained_model)
+    try:
+        async with connect(f"ws://127.0.0.1:{free_port}") as ws:
+            first = await _recv_json(ws)
+        first_ph = first["payload"]["metadata"]["predicted_heat"]
+        first_node_ids = {n["id"] for n in first["payload"]["nodes"]}
+        first_score_ids = {s["node_id"] for s in first_ph["scores"]}
+        assert first_score_ids == first_node_ids
+        assert "a.py:f" in first_node_ids
+
+        # Rename f -> g with a blank-line shift (line changes too) — zero
+        # edges before or after, so _graph_signature (edge-count/edge-hash
+        # only) is IDENTICAL for both graphs: (2 nodes, 0 edges, checksum 0).
+        (root / "a.py").write_text("\n\n\ndef g():\n    pass\n", encoding="utf-8")
+
+        # New server instance (not --watch) so this proves the bug reproduces
+        # on a plain reconnect after an edit, not only under watch mode.
+    finally:
+        await _stop_server(task)
+
+    port2 = _free_port()
+    task2 = await _start_server(port2, root=root, model_path=trained_model)
+    try:
+        async with connect(f"ws://127.0.0.1:{port2}") as ws:
+            second = await _recv_json(ws)
+    finally:
+        await _stop_server(task2)
+
+    second_ph = second["payload"]["metadata"]["predicted_heat"]
+    second_node_ids = {n["id"] for n in second["payload"]["nodes"]}
+    assert "a.py:g" in second_node_ids
+    assert "a.py:f" not in second_node_ids
+
+    second_score_ids = {s["node_id"] for s in second_ph["scores"]}
+    assert second_score_ids == second_node_ids, (
+        f"predicted_heat.scores must reference the CURRENT graph's node_ids, "
+        f"not stale ones from before the rename: got {second_score_ids}, "
+        f"expected {second_node_ids}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +271,31 @@ async def test_predicted_heat_corrupt_model_no_key_no_crash(
 
     out = capsys.readouterr().out
     assert "predicted_heat prediction failed" in out
+
+
+async def test_predicted_heat_gate_closed_with_model_warns_once_not_per_connect(
+    free_port: int,
+    trained_model: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Regression: a model configured against an unavailable/broken
+    grackle-nn install must log its warning ONCE, not on every connect —
+    mirroring the corrupt-model branch's caching of the (known-bad)
+    outcome, which this branch previously lacked."""
+    monkeypatch.setattr(ml_bridge, "learn_available", lambda: False)
+
+    task = await _start_server(free_port, model_path=trained_model)
+    try:
+        for _ in range(3):
+            async with connect(f"ws://127.0.0.1:{free_port}") as ws:
+                data = await _recv_json(ws)
+            assert "predicted_heat" not in data["payload"]["metadata"]
+    finally:
+        await _stop_server(task)
+
+    out = capsys.readouterr().out
+    assert out.count("predicted_heat unavailable") == 1
 
 
 async def test_predicted_heat_missing_model_file_no_key_no_warning(

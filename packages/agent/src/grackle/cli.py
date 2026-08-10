@@ -19,7 +19,7 @@ from grackle.logging import configure_logging
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
-    from grackle.adapters.base import RuntimeAdapter, TraceEvent
+    from grackle.adapters.base import RuntimeAdapter, StaticGraph, TraceEvent
     from grackle.python_runtime.writer import JsonlPartWriter
 
 # Maximum inter-event sleep when streaming a completed trace to a server.
@@ -71,6 +71,26 @@ def _resolve_runtime_adapter(script: Path, language: str | None) -> RuntimeAdapt
     if reason is not None:
         raise click.ClickException(reason)
     return adapter
+
+
+def _detect_and_parse(root: Path, patterns: tuple[str, ...]) -> StaticGraph:
+    """Auto-detect ROOT's language(s) and parse — shared by ``parse`` (its
+    no-``--language`` branch) and ``learn``. Raises ``click.UsageError`` on
+    no detection or an unregistered detected language, never a traceback.
+    """
+    from grackle.adapters import registry
+    from grackle.adapters.base import ParseOptions
+
+    detected = registry.detect(root)
+    if not detected:
+        raise click.UsageError(f"no static parser detected for project at: {root}")
+    if len(detected) > 1:
+        click.echo(f"detected languages: {detected}; merging polyglot graph", err=True)
+        return registry.parse_all(root, ParseOptions(exclude_patterns=patterns))
+    adapter = registry.get_static(detected[0])
+    if adapter is None:  # defensive — detect() only returns registered names
+        raise click.UsageError(f"no static parser registered for language: {detected[0]!r}")
+    return adapter.parse(root, ParseOptions(exclude_patterns=patterns))
 
 
 def _open_part_writer(output: Path) -> JsonlPartWriter:
@@ -193,26 +213,16 @@ def parse(
     patterns: tuple[str, ...],
 ) -> None:
     """Parse ROOT and emit a static graph as JSON."""
-    from grackle.adapters import registry
-    from grackle.adapters.base import ParseOptions
-
     if language is not None:
+        from grackle.adapters import registry
+        from grackle.adapters.base import ParseOptions
+
         adapter = registry.get_static(language)
         if adapter is None:
             raise click.UsageError(f"no static parser registered for language: {language!r}")
         graph = adapter.parse(root, ParseOptions(exclude_patterns=patterns))
     else:
-        detected = registry.detect(root)
-        if not detected:
-            raise click.UsageError(f"no static parser detected for project at: {root}")
-        if len(detected) > 1:
-            click.echo(f"detected languages: {detected}; merging polyglot graph", err=True)
-            graph = registry.parse_all(root, ParseOptions(exclude_patterns=patterns))
-        else:
-            adapter = registry.get_static(detected[0])
-            if adapter is None:  # defensive — detect() only returns registered names
-                raise click.UsageError(f"no static parser registered for language: {detected[0]!r}")
-            graph = adapter.parse(root, ParseOptions(exclude_patterns=patterns))
+        graph = _detect_and_parse(root, patterns)
     json_str = json.dumps(graph, indent=2)
 
     if output is not None:
@@ -935,7 +945,11 @@ def learn(
         try:
             for meta in session_store.list_sessions():
                 recording_path = Path(meta.source_path)
-                if recording_path.exists():
+                # is_file() (not exists()) — a session library is user data
+                # that could point at a FIFO/device file; TraceAggregates.build
+                # opens and line-iterates whatever path it's given, which can
+                # hang or grow memory unboundedly on a non-regular file.
+                if recording_path.is_file():
                     trace_paths.append(recording_path)
                 else:
                     click.echo(f"warning: skipping missing recording {recording_path}", err=True)
@@ -950,24 +964,14 @@ def learn(
             "accumulates traces automatically for --from-store to consume."
         )
 
-    from grackle.adapters import registry
-    from grackle.adapters.base import ParseOptions
+    from collections import Counter
+
     from grackle.python_runtime.aggregates import TraceAggregates
 
-    detected = registry.detect(root)
-    if not detected:
-        raise click.UsageError(f"no static parser detected for project at: {root}")
-    if len(detected) > 1:
-        click.echo(f"detected languages: {detected}; merging polyglot graph", err=True)
-        graph = registry.parse_all(root, ParseOptions(exclude_patterns=patterns))
-    else:
-        adapter = registry.get_static(detected[0])
-        if adapter is None:  # defensive — detect() only returns registered names
-            raise click.UsageError(f"no static parser registered for language: {detected[0]!r}")
-        graph = adapter.parse(root, ParseOptions(exclude_patterns=patterns))
+    graph = _detect_and_parse(root, patterns)
 
     node_ids = {n["id"] for n in graph["nodes"]}
-    merged_heat: dict[str, int] = {}
+    merged_heat: Counter[str] = Counter()
     for trace_path in trace_paths:
         agg = TraceAggregates.build(trace_path)
         heat = agg.cumulative_heat_all(len(agg))
@@ -979,8 +983,7 @@ def learn(
                 "different root?",
                 err=True,
             )
-        for nid, count in heat.items():
-            merged_heat[nid] = merged_heat.get(nid, 0) + count
+        merged_heat.update(heat)
 
     if not any(nid in node_ids for nid in merged_heat):
         raise click.ClickException(

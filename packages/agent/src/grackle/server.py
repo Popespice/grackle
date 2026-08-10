@@ -114,28 +114,65 @@ class _PredictedHeatContext:
             ``root/.grackle/heat-model.npz`` fresh on every build (so
             retraining is picked up without a server restart).
         root:       The server's project root, for the default-path lookup.
-        cache:      Keyed by ``(graph_sig, model_mtime_ns, model_size)``; a
-            cached ``None`` means "known-bad model", so a broken model isn't
-            re-attempted (and re-logged) on every connect.
+        cache:      Keyed by ``(heat_sig, model_mtime_ns, model_size)`` —
+            see :func:`_predicted_heat_signature` for why this is a
+            *different* signature from ``meta_cache``'s. A cached ``None``
+            means "known-bad model", so a broken model isn't re-attempted
+            (and re-logged) on every connect.
     """
 
     model_path: Path | None
     root: Path
-    cache: dict[tuple[tuple[int, int, int], int, int], dict[str, Any] | None]
+    cache: dict[tuple[int, int, int], dict[str, Any] | None]
+
+
+def _predicted_heat_signature(graph: StaticGraph) -> int:
+    """A signature sensitive to every field ``extract_features`` reads.
+
+    ``_graph_signature`` (used for ``meta_cache``) hashes edge topology
+    only — deliberately coarse, since hub-score/cycles depend only on
+    edges. ``predicted_heat`` is different: its cached payload bakes in
+    specific ``node_id``s, keyed off node identity/attributes
+    (``id``/``path``/``kind``/``name``/``line``/``is_async``/``decorators``,
+    per ``grackle_nn.ml.features.extract_features``), most of which never
+    touch an edge. Reusing the edge-only signature here would let a rename,
+    an added decorator, or an async-flag flip — none of which change edge
+    topology — hit a stale cache entry and reattach scores for node_ids
+    that no longer exist in the current graph. Order-independent (a tuple
+    of per-node tuples, but nodes are read in the graph's own fixed order
+    from ``extract_features``, so this only needs to change *whenever the
+    graph would*, not to be order-independent itself).
+    """
+    node_part = tuple(
+        (
+            n["id"],
+            n.get("path", ""),
+            n.get("kind", ""),
+            n.get("name", ""),
+            n.get("line", 0),
+            bool((n.get("metadata") or {}).get("is_async")),
+            bool((n.get("metadata") or {}).get("decorators")),
+        )
+        for n in graph["nodes"]
+    )
+    edge_part = tuple(sorted((e["source"], e["target"], e["kind"]) for e in graph["edges"]))
+    return hash((node_part, edge_part))
 
 
 def _maybe_inject_predicted_heat(
     graph: StaticGraph,
-    sig: tuple[int, int, int],
     ctx: _PredictedHeatContext,
 ) -> None:
     """Inject ``metadata.predicted_heat`` into *graph* in place, if available.
 
     Absence is byte-identical: when no model is configured/found, the ML
     gate is closed, or the model is broken, this adds NOTHING to
-    ``graph["metadata"]`` and returns silently. A warning is logged only for
-    the broken-model case — an unconfigured model is the common case, not a
-    fault, and must not spam the log on every connect.
+    ``graph["metadata"]`` and returns silently. No warning is logged when no
+    model is configured — that is the common case, not a fault. A model
+    that IS configured but unusable (gate closed, or broken/corrupt) logs
+    exactly one warning per ``(graph, model file)`` combination — cached in
+    ``ctx.cache`` alongside successful predictions — never re-logged on
+    every subsequent connect or watch-mode rebuild for the same combination.
 
     Called from :func:`_build_static_graph` on the RAW parsed graph, before
     the ``meta_cache``/``enrich_metadata`` block — ``extract_features``'s
@@ -154,14 +191,21 @@ def _maybe_inject_predicted_heat(
     except OSError:
         return  # no model configured/found — nothing to add, nothing to warn about
 
+    cache_key = (_predicted_heat_signature(graph), st.st_mtime_ns, st.st_size)
+
     if not ml_bridge.learn_available():
-        log.warning(
-            "predicted_heat unavailable — grackle-nn not installed",
-            model_path=str(model_path),
-        )
+        # Cache the (known-bad) outcome exactly like the corrupt-model branch
+        # below — a model configured against an unavailable/broken grackle-nn
+        # install would otherwise re-log this warning on every connect and
+        # every watch-mode rebuild for the rest of the server's life.
+        if cache_key not in ctx.cache:
+            log.warning(
+                "predicted_heat unavailable — grackle-nn not usable (not installed or broken)",
+                model_path=str(model_path),
+            )
+            ctx.cache[cache_key] = None
         return
 
-    cache_key = (sig, st.st_mtime_ns, st.st_size)
     if cache_key in ctx.cache:
         cached = ctx.cache[cache_key]
         if cached is not None:
@@ -233,7 +277,7 @@ def _build_static_graph(
 
     sig = _graph_signature(graph)
 
-    _maybe_inject_predicted_heat(graph, sig, predicted_ctx)
+    _maybe_inject_predicted_heat(graph, predicted_ctx)
 
     cached = meta_cache.get(sig)
     if cached is not None:

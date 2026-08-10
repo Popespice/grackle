@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -82,6 +83,34 @@ def test_learn_gate_closed_clean_error(tmp_path: Path, monkeypatch: pytest.Monke
     assert "grackle-nn" in result.output
 
 
+def test_learn_broken_grackle_nn_install_clean_error_not_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-ImportError failure importing grackle_nn.ml (e.g. a numpy ABI
+    mismatch) must close the gate cleanly, same as an absent install — never
+    a raw traceback. Exercises the real ml_bridge.learn_available() (not a
+    monkeypatched replacement) so this proves the actual fix, not just the
+    test's own assumption about it."""
+    import builtins
+
+    root = _copy_golden(tmp_path)
+    trace = root / "trace.golden.jsonl"
+
+    real_import = builtins.__import__
+
+    def _fake_import(name: str, *args: object, **kwargs: object) -> object:
+        if name == "grackle_nn.ml" or name.startswith("grackle_nn.ml."):
+            raise ValueError("simulated: numpy.dtype size changed, ABI mismatch")
+        return real_import(name, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(builtins, "__import__", _fake_import)
+
+    result = CliRunner().invoke(main, ["learn", str(trace), "--root", str(root)])
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+    assert "grackle-nn" in result.output
+
+
 def test_learn_zero_traces_is_usage_error(tmp_path: Path) -> None:
     root = _copy_golden(tmp_path)
     result = CliRunner().invoke(main, ["learn", "--root", str(root)])
@@ -144,7 +173,73 @@ def test_learn_from_store_with_missing_recording_warns_and_skips(tmp_path: Path)
     assert "from 1 trace(s)" in result.output
 
 
-def test_learn_zero_overlap_is_click_exception(tmp_path: Path) -> None:
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFOs are POSIX-only")
+def test_learn_from_store_skips_non_regular_file(tmp_path: Path) -> None:
+    """A session library is user data — a source_path pointing at a FIFO (or
+    any non-regular file) must be skipped, not opened. TraceAggregates.build
+    would otherwise line-iterate it and could hang indefinitely on a FIFO
+    with no writer."""
+    root = _copy_golden(tmp_path)
+    trace = root / "trace.golden.jsonl"
+    db_path = tmp_path / "sessions.db"
+    fifo_path = tmp_path / "suspicious.jsonl"
+    os.mkfifo(fifo_path)
+
+    store = SessionStore.open(db_path)
+    store.save_session(
+        SessionMeta(
+            id="present",
+            label="ok",
+            started_ns=0,
+            ended_ns=1,
+            source_path=str(trace),
+            event_count=1,
+            language="python",
+        )
+    )
+    store.save_session(
+        SessionMeta(
+            id="fifo",
+            label="suspicious",
+            started_ns=0,
+            ended_ns=1,
+            source_path=str(fifo_path),
+            event_count=1,
+            language="python",
+        )
+    )
+    store.close()
+
+    result = CliRunner().invoke(
+        main,
+        ["learn", "--root", str(root), "--from-store", str(db_path), "--epochs", "2"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "skipping missing recording" in result.output
+    assert "suspicious.jsonl" in result.output
+    assert "from 1 trace(s)" in result.output
+
+
+def test_learn_no_parser_detected_is_usage_error(tmp_path: Path) -> None:
+    """learn's --root parsing shares _detect_and_parse with `parse` — this
+    proves learn's own call site is wired correctly, not just the helper."""
+    empty_root = tmp_path / "empty"
+    empty_root.mkdir()
+    trace = tmp_path / "trace.jsonl"
+    trace.write_text('{"node_id": "x", "type": "call"}\n', encoding="utf-8")
+
+    result = CliRunner().invoke(main, ["learn", str(trace), "--root", str(empty_root)])
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+    assert "no static parser detected" in result.output
+
+
+def test_learn_empty_trace_is_click_exception(tmp_path: Path) -> None:
+    """A trace with zero events (heat={}) — a distinct degenerate case from
+    a trace with real events whose node_ids don't overlap (see the test
+    below); both must raise the same error, but they exercise different
+    code paths (the per-trace "has no overlap" warning at cli.py's `if heat
+    and not any(...)` is only reachable by the latter)."""
     root = _copy_golden(tmp_path)
     empty_trace = tmp_path / "empty.jsonl"
     empty_trace.write_text("", encoding="utf-8")
@@ -154,6 +249,31 @@ def test_learn_zero_overlap_is_click_exception(tmp_path: Path) -> None:
     )
     assert result.exit_code != 0
     assert "Traceback" not in result.output
+    assert "nothing to learn from" in result.output
+
+
+def test_learn_nonoverlapping_trace_is_click_exception(tmp_path: Path) -> None:
+    """A trace with real events whose node_ids don't match --root's parsed
+    graph at all (as opposed to an empty trace) — this is the scenario the
+    error message and the per-trace warning are actually written to
+    describe: 'was it captured against a different root?'. A mutation from
+    the correct `not any(nid in node_ids for nid in merged_heat)` check to
+    the naive `not merged_heat` would pass the empty-trace test above but
+    fail (wrongly accept) this one."""
+    root = _copy_golden(tmp_path)
+    foreign_trace = tmp_path / "foreign.jsonl"
+    foreign_trace.write_text(
+        '{"node_id": "unrelated_project/other.py:some_function"}\n'
+        '{"node_id": "unrelated_project/other.py:some_function"}\n',
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        main, ["learn", str(foreign_trace), "--root", str(root), "--epochs", "2"]
+    )
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+    assert "has no overlap with the parsed graph" in result.output
     assert "nothing to learn from" in result.output
 
 

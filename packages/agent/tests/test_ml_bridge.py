@@ -69,6 +69,24 @@ def test_learn_available_false_when_import_fails(monkeypatch: pytest.MonkeyPatch
     assert ml_bridge.learn_available() is False
 
 
+def test_learn_available_false_on_non_import_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A broken editable install (e.g. a numpy ABI mismatch, or a mid-edit
+    SyntaxError in the actively-developed sibling package) must degrade to
+    "unavailable" exactly like "not installed" — never propagate. Every
+    caller (the server's static-graph push, the CLI's gate check) depends on
+    this function never raising."""
+    real_import = builtins.__import__
+
+    def _fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "grackle_nn.ml" or name.startswith("grackle_nn.ml."):
+            raise ValueError("simulated: numpy.dtype size changed, ABI mismatch")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _fake_import)
+    ml_bridge.reset_cache()
+    assert ml_bridge.learn_available() is False  # must not raise ValueError
+
+
 def test_remediation_message_names_the_package() -> None:
     msg = ml_bridge.remediation_message()
     assert "grackle-nn" in msg

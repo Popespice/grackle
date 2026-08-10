@@ -31,18 +31,46 @@ def _is_grackle_nn(module: str) -> bool:
 
 
 def _find_module_level_grackle_nn_imports(source: str) -> list[str]:
-    """Only ``tree.body`` (top-level statements) — function-local imports,
-    which ``ml_bridge.py`` uses deliberately, are out of scope for this scan.
+    """Every import that executes at module *scope* — including one nested
+    inside a module-scope ``if``/``try``/``with``/``for``/``while`` — but
+    NOT inside a function or class body (function-local imports, which
+    ``ml_bridge.py`` uses deliberately, are out of scope for this scan; a
+    plain ``tree.body``-only scan would also miss the same import guarded by
+    a module-scope ``if``/``try``, which is why this recurses into compound
+    statements while still stopping at def/class boundaries).
     """
     tree = ast.parse(source)
-    offenders = []
-    for node in tree.body:
-        if isinstance(node, ast.Import):
-            offenders += [
-                f"line {node.lineno}: import {a.name}" for a in node.names if _is_grackle_nn(a.name)
-            ]
-        elif isinstance(node, ast.ImportFrom) and node.module and _is_grackle_nn(node.module):
-            offenders.append(f"line {node.lineno}: from {node.module} import ...")
+    offenders: list[str] = []
+
+    def _visit(body: list[ast.stmt]) -> None:
+        for node in body:
+            if isinstance(node, ast.Import):
+                offenders.extend(
+                    f"line {node.lineno}: import {a.name}"
+                    for a in node.names
+                    if _is_grackle_nn(a.name)
+                )
+            elif isinstance(node, ast.ImportFrom) and node.module and _is_grackle_nn(node.module):
+                offenders.append(f"line {node.lineno}: from {node.module} import ...")
+            elif isinstance(node, ast.If):
+                _visit(node.body)
+                _visit(node.orelse)
+            elif isinstance(node, ast.Try):
+                _visit(node.body)
+                for handler in node.handlers:
+                    _visit(handler.body)
+                _visit(node.orelse)
+                _visit(node.finalbody)
+            elif isinstance(node, ast.With | ast.AsyncWith):
+                _visit(node.body)
+            elif isinstance(node, ast.For | ast.AsyncFor | ast.While):
+                _visit(node.body)
+                _visit(node.orelse)
+            # FunctionDef/AsyncFunctionDef/ClassDef: deliberately NOT
+            # recursed into — that's exactly the function-local-imports-are-
+            # fine boundary this scan exists to respect.
+
+    _visit(tree.body)
     return offenders
 
 
@@ -87,6 +115,17 @@ def test_find_module_level_imports_catches_comma_and_alias_forms() -> None:
     assert _find_module_level_grackle_nn_imports("import grackle_nn as nn\n")
     assert _find_module_level_grackle_nn_imports("from grackle_nn.ml import HeatModel\n")
     assert not _find_module_level_grackle_nn_imports("import numpy as np\n")
+
+
+def test_module_scope_guarded_import_is_caught() -> None:
+    """Regression: a plain tree.body-only scan would miss an import guarded
+    by a module-scope if/try, since ast.parse nests it inside an ast.If/
+    ast.Try node rather than making it a direct top-level ast.Import."""
+    assert _find_module_level_grackle_nn_imports("if True:\n    import grackle_nn\n")
+    assert _find_module_level_grackle_nn_imports(
+        "try:\n    import grackle_nn\nexcept ImportError:\n    pass\n"
+    )
+    assert _find_module_level_grackle_nn_imports("with open('x') as f:\n    import grackle_nn\n")
 
 
 def test_function_local_imports_are_not_flagged() -> None:
