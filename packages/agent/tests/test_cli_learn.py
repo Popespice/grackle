@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -173,7 +174,7 @@ def test_learn_from_store_with_missing_recording_warns_and_skips(tmp_path: Path)
     assert "from 1 trace(s)" in result.output
 
 
-@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFOs are POSIX-only")
+@pytest.mark.skipif(sys.platform == "win32", reason="FIFOs are POSIX-only")
 def test_learn_from_store_skips_non_regular_file(tmp_path: Path) -> None:
     """A session library is user data — a source_path pointing at a FIFO (or
     any non-regular file) must be skipped, not opened. TraceAggregates.build
@@ -183,7 +184,12 @@ def test_learn_from_store_skips_non_regular_file(tmp_path: Path) -> None:
     trace = root / "trace.golden.jsonl"
     db_path = tmp_path / "sessions.db"
     fifo_path = tmp_path / "suspicious.jsonl"
-    os.mkfifo(fifo_path)
+    if sys.platform != "win32":
+        # os.mkfifo is POSIX-only — absent from typeshed's Windows stubs, so
+        # this guard also keeps `mypy --strict` green on the Windows CI leg
+        # (which never reaches this branch, so never resolves the attribute),
+        # mirroring cache.py's sys.platform-gated msvcrt/fcntl split.
+        os.mkfifo(fifo_path)
 
     store = SessionStore.open(db_path)
     store.save_session(
