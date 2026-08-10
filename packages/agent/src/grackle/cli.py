@@ -689,6 +689,18 @@ def trace(
     default=False,
     help="Force the stdlib mtime-poller even if watchfiles is installed. Ignored without --watch.",
 )
+@click.option(
+    "--model",
+    "model_path",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help=(
+        "Path to a heat-model.npz checkpoint (Phase 12.2, `grackle learn`). "
+        "When omitted, each graph build resolves --root/.grackle/heat-model.npz "
+        "fresh, so retraining is picked up without a restart. Absent/broken "
+        "model or a closed ML gate both degrade to no predicted_heat key."
+    ),
+)
 def serve(
     host: str,
     port: int,
@@ -699,6 +711,7 @@ def serve(
     watch: bool,
     watch_interval: float,
     watch_poll: bool,
+    model_path: Path | None,
 ) -> None:
     """Start the grackle agent WebSocket server."""
     configure_logging()
@@ -727,6 +740,7 @@ def serve(
             watch=watch,
             watch_interval=watch_interval,
             watch_poll=watch_poll,
+            model_path=model_path,
         )
     )
 
@@ -834,6 +848,161 @@ def diff(
 
     if has_regression(entries):
         raise SystemExit(1)
+
+
+@main.command()
+@click.argument(
+    "traces",
+    nargs=-1,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--root",
+    "-r",
+    required=True,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="Project root — every trace must have been captured against this same root.",
+)
+@click.option(
+    "--output",
+    "-o",
+    "output",
+    default=None,
+    type=click.Path(dir_okay=False, writable=True, path_type=Path),
+    help="Write the trained model to FILE (default: ROOT/.grackle/heat-model.npz).",
+)
+@click.option(
+    "--from-store",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help=(
+        "Also train on every trace recorded in this SQLite session library "
+        "(missing recording files are warned and skipped, not an error)."
+    ),
+)
+@click.option(
+    "--epochs",
+    default=200,
+    show_default=True,
+    type=click.IntRange(min=1),
+    help="Training epochs.",
+)
+@click.option("--seed", default=0, show_default=True, help="RNG seed for training determinism.")
+@click.option(
+    "--exclude",
+    "-e",
+    "patterns",
+    multiple=True,
+    help="Exclude glob patterns when parsing --root (repeatable).",
+)
+def learn(
+    traces: tuple[Path, ...],
+    root: Path,
+    output: Path | None,
+    from_store: Path | None,
+    epochs: int,
+    seed: int,
+    patterns: tuple[str, ...],
+) -> None:
+    """Train a hotspot-prediction model (Phase 12.2) from one or more traces.
+
+    Every trace must have been captured against the SAME --root — per-trace
+    roots are not supported (retrace against a shared root if needed). All
+    given traces are merged (heat counts summed) into one training example,
+    since one --root means one graph: there is no second graph to hold out,
+    so the reported Spearman numbers are train-set metrics, not validation.
+    The resulting model powers `predicted_heat` for `grackle serve --model`.
+
+    The recommended standing workflow is to always serve with a session
+    library (`grackle serve --root R --store .grackle/sessions.db`), so
+    traces accumulate automatically, then periodically re-run this command
+    with `--from-store` to retrain on everything captured so far.
+
+    \b
+        grackle learn run-a.jsonl run-b.jsonl --root .
+        grackle learn --from-store .grackle/sessions.db --root .
+    """
+    from grackle import ml_bridge
+
+    if not ml_bridge.learn_available():
+        raise click.ClickException(ml_bridge.remediation_message())
+
+    trace_paths: list[Path] = list(traces)
+    if from_store is not None:
+        from grackle.session_store import SessionStore as _SessionStore
+
+        session_store = _SessionStore.open(from_store)
+        try:
+            for meta in session_store.list_sessions():
+                recording_path = Path(meta.source_path)
+                if recording_path.exists():
+                    trace_paths.append(recording_path)
+                else:
+                    click.echo(f"warning: skipping missing recording {recording_path}", err=True)
+        finally:
+            session_store.close()
+
+    if not trace_paths:
+        raise click.UsageError(
+            "no traces given. Pass trace files positionally, or --from-store "
+            "a session library. The recommended standing workflow is "
+            "`grackle serve --root R --store .grackle/sessions.db`, which "
+            "accumulates traces automatically for --from-store to consume."
+        )
+
+    from grackle.adapters import registry
+    from grackle.adapters.base import ParseOptions
+    from grackle.python_runtime.aggregates import TraceAggregates
+
+    detected = registry.detect(root)
+    if not detected:
+        raise click.UsageError(f"no static parser detected for project at: {root}")
+    if len(detected) > 1:
+        click.echo(f"detected languages: {detected}; merging polyglot graph", err=True)
+        graph = registry.parse_all(root, ParseOptions(exclude_patterns=patterns))
+    else:
+        adapter = registry.get_static(detected[0])
+        if adapter is None:  # defensive — detect() only returns registered names
+            raise click.UsageError(f"no static parser registered for language: {detected[0]!r}")
+        graph = adapter.parse(root, ParseOptions(exclude_patterns=patterns))
+
+    node_ids = {n["id"] for n in graph["nodes"]}
+    merged_heat: dict[str, int] = {}
+    for trace_path in trace_paths:
+        agg = TraceAggregates.build(trace_path)
+        heat = agg.cumulative_heat_all(len(agg))
+        heat.pop("<unresolved>", None)
+        if heat and not any(nid in node_ids for nid in heat):
+            click.echo(
+                f"warning: {trace_path} has no overlap with the parsed graph "
+                "at --root (0 matching node_ids) — was it captured against a "
+                "different root?",
+                err=True,
+            )
+        for nid, count in heat.items():
+            merged_heat[nid] = merged_heat.get(nid, 0) + count
+
+    if not any(nid in node_ids for nid in merged_heat):
+        raise click.ClickException(
+            "none of the given traces overlap with the parsed graph at --root "
+            "— nothing to learn from. Check that --root matches what the "
+            "trace(s) were captured against."
+        )
+
+    out = output if output is not None else root / ".grackle" / "heat-model.npz"
+
+    try:
+        summary = ml_bridge.train_and_save(graph, merged_heat, epochs=epochs, seed=seed, out=out)
+    except ml_bridge.MLBridgeError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo(
+        f"trained on {summary.nodes} nodes from {len(trace_paths)} trace(s) "
+        f"({epochs} epochs, seed={seed}): final_loss={summary.final_loss:.4f}, "
+        f"train_spearman={summary.train_spearman:.3f} vs. "
+        f"baseline_spearman={summary.baseline_spearman:.3f}"
+    )
+    click.echo(f"wrote model → {out}")
 
 
 async def _stream_events_to_server(

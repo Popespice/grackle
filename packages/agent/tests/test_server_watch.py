@@ -194,10 +194,10 @@ async def test_watch_rebuild_cancellation_does_not_block_shutdown(
     real_build = server_module._build_static_graph
     rebuild_done = threading.Event()
 
-    def _slow_build(root: Any, meta_cache: Any) -> Any:
+    def _slow_build(root: Any, meta_cache: Any, predicted_ctx: Any) -> Any:
         try:
             time.sleep(2.0)
-            return real_build(root, meta_cache)
+            return real_build(root, meta_cache, predicted_ctx)
         finally:
             # Signals the background thread has actually finished, so this
             # test can wait for it before returning — otherwise the orphaned

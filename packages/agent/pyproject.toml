@@ -42,7 +42,15 @@ dev = [
     # Present in dev so CI exercises + type-checks the optional watchfiles
     # backend; the *product* dependency stays opt-in via [watch] above.
     "watchfiles>=0.24,<2",
+    # Editable dev-only dependency on the sibling nn package (Phase 12.2,
+    # ADR-0030) so ml_bridge.py can be tested against a real implementation.
+    # The *product* stays gated behind ml_bridge.learn_available() — the
+    # agent's runtime hard dependencies stay numpy-free.
+    "grackle-nn",
 ]
+
+[tool.uv.sources]
+grackle-nn = { path = "../nn", editable = true }
 
 [tool.ruff]
 line-length = 100
@@ -60,6 +68,13 @@ exclude = ["src/grackle/_generated/"]
 # (e.g. a trimmed environment) — the dev-group install above normally gives
 # mypy real stubs, so this override is a no-op most of the time.
 module = "watchfiles"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# grackle_nn ships its own py.typed marker, so with the dev group synced
+# this override is a no-op and ml_bridge.py is checked against real types —
+# same defense-in-depth rationale as the watchfiles override above.
+module = "grackle_nn.*"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

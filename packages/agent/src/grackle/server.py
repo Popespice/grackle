@@ -6,6 +6,7 @@ import concurrent.futures
 import contextlib
 import os
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -96,6 +97,88 @@ def _read_source(root_real: Path, posix_path: str) -> tuple[str | None, str]:
         return (None, "not_found")
 
 
+@dataclass(frozen=True, slots=True)
+class _PredictedHeatContext:
+    """State needed to inject ``metadata.predicted_heat`` into a pushed graph.
+
+    Deliberately a separate object from ``meta_cache`` — the hub-score/cycles
+    cache hardcodes exactly those two keys (see ``_build_static_graph``) and
+    would silently drop a third key on every cache hit, so predicted_heat
+    must never ride inside it. ``cache`` is a plain dict (no lock): its only
+    race is two threads (the connect-time inline path and the watch-mode
+    executor thread) redundantly computing the same value for the same key —
+    the identical benign race ``meta_cache`` already documents and accepts.
+
+    Attributes:
+        model_path: Explicit ``--model`` path, or ``None`` to resolve
+            ``root/.grackle/heat-model.npz`` fresh on every build (so
+            retraining is picked up without a server restart).
+        root:       The server's project root, for the default-path lookup.
+        cache:      Keyed by ``(graph_sig, model_mtime_ns, model_size)``; a
+            cached ``None`` means "known-bad model", so a broken model isn't
+            re-attempted (and re-logged) on every connect.
+    """
+
+    model_path: Path | None
+    root: Path
+    cache: dict[tuple[tuple[int, int, int], int, int], dict[str, Any] | None]
+
+
+def _maybe_inject_predicted_heat(
+    graph: StaticGraph,
+    sig: tuple[int, int, int],
+    ctx: _PredictedHeatContext,
+) -> None:
+    """Inject ``metadata.predicted_heat`` into *graph* in place, if available.
+
+    Absence is byte-identical: when no model is configured/found, the ML
+    gate is closed, or the model is broken, this adds NOTHING to
+    ``graph["metadata"]`` and returns silently. A warning is logged only for
+    the broken-model case — an unconfigured model is the common case, not a
+    fault, and must not spam the log on every connect.
+
+    Called from :func:`_build_static_graph` on the RAW parsed graph, before
+    the ``meta_cache``/``enrich_metadata`` block — ``extract_features``'s
+    contract is the bare parse output, and writing this key first means the
+    cache-hit branch's ``.update(cached)`` (which only ever contains
+    ``hub_score``/``cycles``) can never clobber it.
+    """
+    from grackle import ml_bridge
+
+    model_path = ctx.model_path
+    if model_path is None:
+        model_path = ctx.root / ".grackle" / "heat-model.npz"
+
+    try:
+        st = model_path.stat()
+    except OSError:
+        return  # no model configured/found — nothing to add, nothing to warn about
+
+    if not ml_bridge.learn_available():
+        log.warning(
+            "predicted_heat unavailable — grackle-nn not installed",
+            model_path=str(model_path),
+        )
+        return
+
+    cache_key = (sig, st.st_mtime_ns, st.st_size)
+    if cache_key in ctx.cache:
+        cached = ctx.cache[cache_key]
+        if cached is not None:
+            graph.setdefault("metadata", {})["predicted_heat"] = cached
+        return
+
+    try:
+        predicted = ml_bridge.predict_scores(graph, model_path)
+    except ml_bridge.MLBridgeError as exc:
+        log.warning("predicted_heat prediction failed", model_path=str(model_path), error=str(exc))
+        ctx.cache[cache_key] = None
+        return
+
+    ctx.cache[cache_key] = predicted
+    graph.setdefault("metadata", {})["predicted_heat"] = predicted
+
+
 def _graph_signature(graph: StaticGraph) -> tuple[int, int, int]:
     """Cheap order-independent signature of a graph's topology.
 
@@ -114,6 +197,7 @@ def _graph_signature(graph: StaticGraph) -> tuple[int, int, int]:
 def _build_static_graph(
     root: Path,
     meta_cache: dict[tuple[int, int, int], dict[str, Any]],
+    predicted_ctx: _PredictedHeatContext,
 ) -> StaticGraph | None:
     """Detect language(s), parse the project, and return the enriched graph.
 
@@ -122,6 +206,11 @@ def _build_static_graph(
     across connects (or watch-mode rebuilds, ADR-0027) do not recompute Tarjan
     SCC. Returns ``None`` if no language is detected or parsing fails — callers
     must treat that as "nothing to push", not an error.
+
+    ``predicted_heat`` (Phase 12.2) is injected on the raw parsed graph,
+    before the ``meta_cache``/``enrich_metadata`` block — see
+    :func:`_maybe_inject_predicted_heat`'s docstring for why the ordering
+    matters.
     """
     from grackle.adapters import registry
     from grackle.adapters.base import ParseOptions
@@ -143,6 +232,9 @@ def _build_static_graph(
         return None
 
     sig = _graph_signature(graph)
+
+    _maybe_inject_predicted_heat(graph, sig, predicted_ctx)
+
     cached = meta_cache.get(sig)
     if cached is not None:
         graph.setdefault("metadata", {}).update(cached)
@@ -162,9 +254,10 @@ async def _push_static_graph(
     ws: ServerConnection,
     root: Path,
     meta_cache: dict[tuple[int, int, int], dict[str, Any]],
+    predicted_ctx: _PredictedHeatContext,
 ) -> None:
     """Build the static graph (if supported) and push it to one connection."""
-    graph = _build_static_graph(root, meta_cache)
+    graph = _build_static_graph(root, meta_cache, predicted_ctx)
     if graph is None:
         return
 
@@ -181,6 +274,7 @@ async def _watch_loop(
     root: Path,
     connections: set[ServerConnection],
     meta_cache: dict[tuple[int, int, int], dict[str, Any]],
+    predicted_ctx: _PredictedHeatContext,
     interval: float,
     *,
     executor: concurrent.futures.ThreadPoolExecutor,
@@ -241,7 +335,9 @@ async def _watch_loop(
             if not connections:
                 continue
 
-            graph = await loop.run_in_executor(executor, _build_static_graph, root, meta_cache)
+            graph = await loop.run_in_executor(
+                executor, _build_static_graph, root, meta_cache, predicted_ctx
+            )
             if graph is None:
                 continue
 
@@ -548,6 +644,7 @@ async def serve(
     watch: bool = False,
     watch_interval: float = 0.3,
     watch_poll: bool = False,
+    model_path: Path | None = None,
 ) -> None:
     """Start the WebSocket server and run until cancelled.
 
@@ -576,6 +673,12 @@ async def serve(
                         ``watchfiles`` backend. Ignored when ``watch`` is False.
         watch_poll:     Force the stdlib mtime-poller even when ``watchfiles``
                         is installed. Ignored when ``watch`` is False.
+        model_path:     Explicit path to a ``heat-model.npz`` checkpoint
+                        (Phase 12.2). When ``None`` (default), each graph
+                        build resolves ``root/.grackle/heat-model.npz``
+                        fresh, so retraining is picked up without a restart.
+                        Absent/broken/gate-closed all degrade to no
+                        ``predicted_heat`` key — never a crash.
     """
     root_real = root.resolve()
 
@@ -590,6 +693,10 @@ async def serve(
     # Agent-side analysis cache (hub-score + cycles), shared across connects so
     # the Tarjan SCC pass runs once per distinct graph topology, not per tab.
     meta_cache: dict[tuple[int, int, int], dict[str, Any]] = {}
+
+    # predicted_heat context (Phase 12.2) — deliberately separate from
+    # meta_cache; see _PredictedHeatContext's docstring for why.
+    predicted_ctx = _PredictedHeatContext(model_path=model_path, root=root_real, cache={})
 
     # Registry of seekable/queryable sessions, keyed by session id.  Shared
     # across connections so a session loaded by one tab is queryable by all.
@@ -642,7 +749,7 @@ async def serve(
         tasks: list[asyncio.Task[None]] = []
         try:
             # Static graph first — guaranteed to arrive before any trace messages.
-            await _push_static_graph(ws, root_real, meta_cache)
+            await _push_static_graph(ws, root_real, meta_cache, predicted_ctx)
 
             # Flush ring-buffer history to late joiners (live mode only).
             if trace_source is None:
@@ -726,6 +833,7 @@ async def serve(
                         root_real,
                         connections,
                         meta_cache,
+                        predicted_ctx,
                         watch_interval,
                         executor=watch_executor,
                         force_poll=watch_poll,
