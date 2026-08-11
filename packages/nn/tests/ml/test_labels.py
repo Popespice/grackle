@@ -65,6 +65,25 @@ def test_make_targets_exact_values() -> None:
     assert y.tolist() == pytest.approx(expected, abs=1e-12)
 
 
+@pytest.mark.parametrize("max_count", [1, 2, 3, 5, 7, 10, 42, 99, 1000, 65535])
+def test_make_targets_hottest_node_is_exactly_one(max_count: int) -> None:
+    """D12.2 bounds y to [0, 1], so the hottest node must be EXACTLY 1.0 —
+    not 1.0 within tolerance.
+
+    Regression: the numerator used ``np.log1p`` and the denominator
+    ``math.log1p``. Those are different implementations (numpy's own vs. the
+    platform libm) and disagree by 1 ULP on some platforms, so the hottest
+    node normalized to 1.0000000000000002 — breaking the upper bound on one
+    CI runner while passing everywhere else. Swept across magnitudes because
+    which inputs diverge is libm-specific; the all-numpy form cancels exactly
+    (``a / a == 1.0``) for every one of them on every platform.
+    """
+    y = make_targets(["hot", "cold"], {"hot": max_count})
+    assert y.max() == 1.0
+    assert y.tolist()[0] == 1.0
+    assert (y <= 1.0).all(), "no target may exceed the documented upper bound"
+
+
 def test_make_targets_all_zero_heat_returns_zeros() -> None:
     node_ids = ["a", "b"]
     y = make_targets(node_ids, {})
