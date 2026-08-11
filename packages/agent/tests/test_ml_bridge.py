@@ -145,7 +145,6 @@ def test_train_and_save_writes_report_card(tmp_path: Path) -> None:
     record = json.loads(lines[0])
     assert record.keys() == {
         "ts",
-        "model_version",
         "feature_version",
         "examples",
         "nodes",
@@ -158,6 +157,56 @@ def test_train_and_save_writes_report_card(tmp_path: Path) -> None:
     }
     assert record["val_spearman"] is None
     assert record["examples"] == 1
+
+
+def test_learn_history_is_lf_terminated_bytes(tmp_path: Path) -> None:
+    """CLAUDE.md: "All JSONL emitters write binary LF". Asserted on RAW BYTES
+    because every text-level idiom hides the bug — ``splitlines()`` treats
+    ``\\r\\n`` as one boundary and ``strip()`` eats a trailing ``\\r``, so a
+    text-mode emitter (which emits CRLF on Windows) passes them all."""
+    graph, heat = _parsed_graph_and_heat()
+    out = tmp_path / "heat-model.npz"
+
+    ml_bridge.train_and_save(graph, heat, epochs=2, seed=0, out=out)
+    ml_bridge.train_and_save(graph, heat, epochs=2, seed=1, out=out)
+
+    raw = (out.parent / "learn-history.jsonl").read_bytes()
+    assert b"\r" not in raw, "learn-history.jsonl must be LF-only on every platform"
+    assert raw.endswith(b"}\n")
+    assert raw.count(b"\n") == 2
+
+
+def test_learn_history_is_valid_strict_json_for_non_finite_metrics(tmp_path: Path) -> None:
+    """A non-finite metric must serialize as ``null``, not a bare ``NaN``
+    token. ``NaN`` is accepted by Python's reader but rejected by every
+    strict RFC-8259 parser (e.g. JavaScript's ``JSON.parse``), and one such
+    line would permanently break the intended downstream consumer of this
+    append-only file."""
+    import json as _json
+
+    out = tmp_path / "heat-model.npz"
+
+    # Force a non-finite metric through the record builder.
+    summary = ml_bridge.LearnSummary(
+        examples=1,
+        nodes=3,
+        epochs=1,
+        seed=0,
+        final_loss=float("nan"),
+        train_spearman=float("inf"),
+        baseline_spearman=0.5,
+        model_path=str(out),
+    )
+    out.parent.mkdir(parents=True, exist_ok=True)
+    ml_bridge._append_learn_history(out, summary)
+
+    raw = (out.parent / "learn-history.jsonl").read_text(encoding="utf-8").strip()
+    assert "NaN" not in raw and "Infinity" not in raw
+    # strict=... is not enough; parse_constant fires on the bare tokens.
+    record = _json.loads(raw, parse_constant=lambda c: pytest.fail(f"non-JSON constant: {c}"))
+    assert record["final_loss"] is None
+    assert record["train_spearman"] is None
+    assert record["baseline_spearman"] == 0.5
 
 
 def test_train_and_save_appends_across_runs(tmp_path: Path) -> None:

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import functools
 import json
+import math
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -167,34 +168,55 @@ def train_and_save(
         raise MLBridgeError(f"training failed: {exc}") from exc
 
 
+def _finite_or_none(value: float) -> float | None:
+    """Map a non-finite float to ``None`` so the record stays valid JSON.
+
+    ``json.dumps`` would otherwise emit bare ``NaN``/``Infinity`` tokens,
+    which Python's own reader accepts but every strict RFC-8259 parser
+    (notably JavaScript's ``JSON.parse``) rejects — and this file exists to
+    be machine-read later. One such line would permanently break that
+    consumer with no way to skip it in an append-only file.
+    """
+    return value if math.isfinite(value) else None
+
+
 def _append_learn_history(model_path: Path, summary: LearnSummary) -> None:
     """Append one report-card line to ``<model dir>/learn-history.jsonl``.
 
-    Append-only (``open("a")``) — a local single-writer file, same durability
-    posture as the model artifact itself (see the persistence matrix in the
-    Phase 12 plan). Never raises: a report-card write failure must not turn a
-    successful ``learn`` run into a CLI error.
+    Append-only — a local single-writer file, same durability posture as the
+    model artifact itself (see the persistence matrix in the Phase 12 plan).
+    Never raises: a report-card write failure must not turn a successful
+    ``learn`` run into a CLI error.
+
+    Written in **binary** with an explicit ``\\n``, matching every other
+    JSONL emitter in the package (``write_jsonl``, ``JsonlPartWriter``).
+    Text mode would apply universal-newline translation and emit CRLF on
+    Windows, making the same run produce different bytes per platform.
     """
     from grackle_nn.ml import FEATURE_VERSION
 
     history_path = model_path.parent / "learn-history.jsonl"
     record = {
         "ts": time.time_ns(),
-        "model_version": FEATURE_VERSION,
+        # One version field only: it describes the FEATURE schema the row's
+        # metrics were produced under. A second key holding the identical
+        # value would silently become wrong the day a model-architecture
+        # version is introduced separately.
         "feature_version": FEATURE_VERSION,
         "examples": summary.examples,
         "nodes": summary.nodes,
         "epochs": summary.epochs,
         "seed": summary.seed,
-        "final_loss": summary.final_loss,
-        "train_spearman": summary.train_spearman,
-        "baseline_spearman": summary.baseline_spearman,
+        "final_loss": _finite_or_none(summary.final_loss),
+        "train_spearman": _finite_or_none(summary.train_spearman),
+        "baseline_spearman": _finite_or_none(summary.baseline_spearman),
         "val_spearman": None,
     }
     try:
-        with history_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(record) + "\n")
-    except OSError:
+        line = json.dumps(record, allow_nan=False) + "\n"
+        with history_path.open("ab") as f:
+            f.write(line.encode("utf-8"))
+    except (OSError, ValueError):
         pass
 
 

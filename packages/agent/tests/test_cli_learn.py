@@ -221,7 +221,10 @@ def test_learn_from_store_skips_non_regular_file(tmp_path: Path) -> None:
         ["learn", "--root", str(root), "--from-store", str(db_path), "--epochs", "2"],
     )
     assert result.exit_code == 0, result.output
-    assert "skipping missing recording" in result.output
+    # A FIFO exists — reporting it as "missing" would send the user to debug
+    # the wrong thing, so the two skip reasons must read differently.
+    assert "not a regular file" in result.output
+    assert "skipping missing recording" not in result.output
     assert "suspicious.jsonl" in result.output
     assert "from 1 trace(s)" in result.output
 
@@ -284,6 +287,28 @@ def test_learn_nonoverlapping_trace_is_click_exception(tmp_path: Path) -> None:
 
 
 def test_learn_two_traces_of_same_root_merge_into_one_example(tmp_path: Path) -> None:
+    """Two DISTINCT traces against one --root merge into a single Example
+    (one root means one graph, so there is nothing to hold out)."""
+    root = _copy_golden(tmp_path)
+    trace_a = root / "trace.golden.jsonl"
+    trace_b = tmp_path / "trace-b.jsonl"
+    trace_b.write_bytes(trace_a.read_bytes())
+
+    result = CliRunner().invoke(
+        main,
+        ["learn", str(trace_a), str(trace_b), "--root", str(root), "--epochs", "2"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "from 2 trace(s)" in result.output
+
+    history_path = root / ".grackle" / "learn-history.jsonl"
+    record = json.loads(history_path.read_text(encoding="utf-8").strip())
+    assert record["examples"] == 1
+
+
+def test_learn_deduplicates_the_same_trace_given_twice(tmp_path: Path) -> None:
+    """Regression: the same trace reaching the merge twice would have its
+    counts summed twice, over-weighting it against every other trace."""
     root = _copy_golden(tmp_path)
     trace = root / "trace.golden.jsonl"
 
@@ -292,11 +317,72 @@ def test_learn_two_traces_of_same_root_merge_into_one_example(tmp_path: Path) ->
         ["learn", str(trace), str(trace), "--root", str(root), "--epochs", "2"],
     )
     assert result.exit_code == 0, result.output
-    assert "from 2 trace(s)" in result.output
+    assert "from 1 trace(s)" in result.output
 
-    history_path = root / ".grackle" / "learn-history.jsonl"
-    record = json.loads(history_path.read_text(encoding="utf-8").strip())
-    assert record["examples"] == 1
+
+def test_learn_deduplicates_positional_trace_also_in_store(tmp_path: Path) -> None:
+    """Regression: the documented workflow encourages --from-store, so a user
+    combining it with an ad-hoc file that the store also knows about is a
+    realistic path to double-counted heat."""
+    root = _copy_golden(tmp_path)
+    trace = root / "trace.golden.jsonl"
+    db_path = tmp_path / "sessions.db"
+
+    store = SessionStore.open(db_path)
+    store.save_session(
+        SessionMeta(
+            id="same",
+            label="same trace as the positional arg",
+            started_ns=0,
+            ended_ns=1,
+            source_path=str(trace),
+            event_count=1,
+            language="python",
+        )
+    )
+    store.close()
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "learn",
+            str(trace),
+            "--root",
+            str(root),
+            "--from-store",
+            str(db_path),
+            "--epochs",
+            "2",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "from 1 trace(s)" in result.output
+
+
+def test_learn_exclude_warns_about_train_serve_skew(tmp_path: Path) -> None:
+    """`grackle serve` has no --exclude, so a model trained on an excluded
+    subset is served against the full graph — structural features shift.
+    That must be surfaced, not silent."""
+    root = _copy_golden(tmp_path)
+    trace = root / "trace.golden.jsonl"
+
+    result = CliRunner().invoke(
+        main,
+        ["learn", str(trace), "--root", str(root), "--epochs", "2", "--exclude", "nothing_*.py"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "--exclude" in result.output
+    assert "will not match at inference" in result.output
+
+
+def test_learn_without_exclude_does_not_warn(tmp_path: Path) -> None:
+    """Non-vacuity guard for the test above: the warning must be conditional."""
+    root = _copy_golden(tmp_path)
+    trace = root / "trace.golden.jsonl"
+
+    result = CliRunner().invoke(main, ["learn", str(trace), "--root", str(root), "--epochs", "2"])
+    assert result.exit_code == 0, result.output
+    assert "will not match at inference" not in result.output
 
 
 def test_learn_help_documents_shared_root_and_train_only_metrics() -> None:

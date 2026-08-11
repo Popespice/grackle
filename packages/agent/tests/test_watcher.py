@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from conftest import bump_mtime_forward as _bump_mtime_forward
 
 from grackle import watcher
 from grackle.paths import to_posix
@@ -20,23 +21,6 @@ if TYPE_CHECKING:
 
 def _write(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
-
-
-def _bump_mtime_forward(path: Path, seconds: float = 5.0) -> None:
-    """Force ``path``'s mtime forward by ``seconds``, guaranteeing it differs
-    from whatever it was before this call — even on a filesystem/CI runner
-    whose mtime resolution is too coarse to distinguish two back-to-back
-    writes (observed in CI: a same-byte-length edit written immediately
-    after priming a snapshot can land in the same mtime bucket on at least
-    one Windows runner, which would otherwise make a "detect this edit"
-    test flaky for an environment reason unrelated to the code under test —
-    exactly the coarse-mtime gap ADR-0027 documents as an accepted
-    limitation for real users, but not one this test suite should trip over
-    by accident).
-    """
-    current_ns = path.stat().st_mtime_ns
-    new_ns = current_ns + int(seconds * 1_000_000_000)
-    os.utime(path, ns=(new_ns, new_ns))
 
 
 def _to_agen(it: AsyncIterator[set[Path]]) -> AsyncGenerator[set[Path], None]:

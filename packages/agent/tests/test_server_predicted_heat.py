@@ -8,11 +8,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from conftest import bump_mtime_forward
 from websockets.asyncio.client import connect
 
 from grackle import ml_bridge
@@ -45,18 +45,6 @@ def trained_model(tmp_path: Path) -> Path:
     out = tmp_path / "heat-model.npz"
     ml_bridge.train_and_save(graph, heat, epochs=3, seed=0, out=out)
     return out
-
-
-def _bump_mtime_forward(path: Path, seconds: float = 5.0) -> None:
-    """Force ``path``'s mtime forward by ``seconds`` — guaranteed to differ
-    from whatever it was before, even on a filesystem/CI runner whose mtime
-    resolution is too coarse to distinguish two back-to-back writes (mirrors
-    ``tests/test_watcher.py``'s helper of the same name; see its docstring
-    for the specific Windows-CI hazard this avoids — a naive sleep()-then-
-    touch() was found flaky on at least one runner for exactly this cache)."""
-    current_ns = path.stat().st_mtime_ns
-    new_ns = current_ns + int(seconds * 1_000_000_000)
-    os.utime(path, ns=(new_ns, new_ns))
 
 
 def _free_port() -> int:
@@ -149,16 +137,36 @@ async def test_predicted_heat_byte_identity_absent_vs_gate_closed_with_model(
     )
 
 
-def test_byte_identity_comparison_is_discriminating() -> None:
-    """Mutation check: proves the sort_keys=True payload comparison above
-    would actually catch a leaked predicted_heat key, not pass vacuously."""
-    baseline = {"metadata": {"hub_score": [], "cycles": []}, "nodes": [], "edges": []}
-    leaked = {
-        "metadata": {"hub_score": [], "cycles": [], "predicted_heat": None},
-        "nodes": [],
-        "edges": [],
-    }
-    assert json.dumps(baseline, sort_keys=True) != json.dumps(leaked, sort_keys=True)
+async def test_byte_identity_comparison_is_discriminating(
+    free_port: int, trained_model: Path
+) -> None:
+    """Mutation check for the byte-identity test above.
+
+    Runs the SAME payload comparison through the real server path with the
+    model actually working, and asserts it FAILS. That is what proves the
+    assertion above is sensitive to a genuine predicted_heat injection rather
+    than vacuously true — comparing two hand-written literal dicts would only
+    have re-tested ``json.dumps``, not any code in this package.
+    """
+    task_absent = await _start_server(free_port)
+    try:
+        async with connect(f"ws://127.0.0.1:{free_port}") as ws:
+            absent = await _recv_json(ws)
+    finally:
+        await _stop_server(task_absent)
+
+    port2 = _free_port()
+    task_present = await _start_server(port2, model_path=trained_model)
+    try:
+        async with connect(f"ws://127.0.0.1:{port2}") as ws:
+            present = await _recv_json(ws)
+    finally:
+        await _stop_server(task_present)
+
+    assert "predicted_heat" in present["payload"]["metadata"]
+    assert json.dumps(absent["payload"], sort_keys=True) != json.dumps(
+        present["payload"], sort_keys=True
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +195,7 @@ async def test_predicted_heat_cached_across_connects_recomputed_on_mtime_bump(
             await _recv_json(ws)
         assert len(calls) == 1, "second connect with an unchanged model must hit the cache"
 
-        _bump_mtime_forward(trained_model)  # guaranteed-distinct mtime, not wall-clock drift
+        bump_mtime_forward(trained_model)  # guaranteed-distinct mtime, not wall-clock drift
 
         async with connect(f"ws://127.0.0.1:{free_port}") as ws:
             await _recv_json(ws)
@@ -250,6 +258,42 @@ async def test_predicted_heat_invalidates_on_rename_with_unchanged_edge_topology
     )
 
 
+def test_meta_cache_does_not_serve_stale_node_ids_after_rename(tmp_path: Path) -> None:
+    """Regression: hub_score/cycles must not survive a rename either.
+
+    ``_graph_signature`` originally hashed edge topology alone, so a rename
+    that touches no edge (``def f`` -> ``def g`` on an uncalled function)
+    produced an identical signature and the meta_cache re-attached the OLD
+    hub_score — naming a node that no longer exists in the pushed graph.
+    Exercised directly against ``_build_static_graph`` (not over a socket)
+    so it pins the cache behaviour rather than one connection's payload.
+    """
+    import grackle.server as server_module
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "a.py").write_text("def f():\n    pass\n", encoding="utf-8")
+
+    ctx = server_module._PredictedHeatContext(model_path=None, root=root, cache={})
+    meta_cache: dict[tuple[int, int, int], dict[str, Any]] = {}
+
+    first = server_module._build_static_graph(root, meta_cache, ctx)
+    assert first is not None
+    assert {e["node_id"] for e in first["metadata"]["hub_score"]} == {"a.py", "a.py:f"}
+
+    # Zero edges before and after, so the edge-only signature is unchanged.
+    (root / "a.py").write_text("\n\n\ndef g():\n    pass\n", encoding="utf-8")
+    second = server_module._build_static_graph(root, meta_cache, ctx)
+    assert second is not None
+
+    real_ids = {n["id"] for n in second["nodes"]}
+    hub_ids = {e["node_id"] for e in second["metadata"]["hub_score"]}
+    cycle_ids = {nid for c in second["metadata"]["cycles"] for nid in c["nodes"]}
+    assert "a.py:g" in real_ids and "a.py:f" not in real_ids
+    assert hub_ids - real_ids == set(), f"stale hub_score node_ids: {hub_ids - real_ids}"
+    assert cycle_ids - real_ids == set(), f"stale cycles node_ids: {cycle_ids - real_ids}"
+
+
 # ---------------------------------------------------------------------------
 # broken model
 # ---------------------------------------------------------------------------
@@ -296,6 +340,79 @@ async def test_predicted_heat_gate_closed_with_model_warns_once_not_per_connect(
 
     out = capsys.readouterr().out
     assert out.count("predicted_heat unavailable") == 1
+
+
+async def test_gate_closed_warns_once_even_as_the_graph_changes(
+    free_port: int,
+    tmp_path: Path,
+    trained_model: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Regression: the gate-closed warning is per-SERVER, not per-graph.
+
+    learn_available() is a process-level constant, so keying its outcome by
+    graph signature meant every watch-mode edit minted a new key and re-logged
+    — the exact scenario the dedup exists to prevent — while pinning a dead
+    cache entry per edit.
+    """
+    monkeypatch.setattr(ml_bridge, "learn_available", lambda: False)
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "a.py").write_text("def f():\n    pass\n", encoding="utf-8")
+
+    task = asyncio.create_task(
+        serve(
+            "127.0.0.1",
+            free_port,
+            root=root,
+            watch=True,
+            watch_interval=0.1,
+            watch_poll=True,
+            model_path=trained_model,
+        )
+    )
+    await asyncio.sleep(0.05)
+    try:
+        async with connect(f"ws://127.0.0.1:{free_port}") as ws:
+            await _recv_json(ws)
+            for name in ("b.py", "c.py", "d.py"):
+                (root / name).write_text(f"def {name[0]}():\n    pass\n", encoding="utf-8")
+                await _recv_json(ws, timeout=5.0)
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    out = capsys.readouterr().out
+    assert out.count("predicted_heat unavailable") == 1
+
+
+async def test_predicted_heat_cache_is_bounded_under_repeated_edits(
+    free_port: int, tmp_path: Path, trained_model: Path
+) -> None:
+    """Regression: the prediction cache must not grow without bound.
+
+    Each entry holds a scores list for EVERY node, and watch mode mints a
+    fresh key on every edit — unbounded, that is a monotonic leak for the
+    server's whole lifetime.
+    """
+    import grackle.server as server_module
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "a.py").write_text("def f():\n    pass\n", encoding="utf-8")
+
+    ctx = server_module._PredictedHeatContext(model_path=trained_model, root=root, cache={})
+    meta_cache: dict[tuple[int, int, int], dict[str, Any]] = {}
+
+    for i in range(server_module._PREDICTED_CACHE_MAX * 3):
+        (root / "a.py").write_text(f"def f{i}():\n    pass\n", encoding="utf-8")
+        graph = server_module._build_static_graph(root, meta_cache, ctx)
+        assert graph is not None
+        assert "predicted_heat" in graph["metadata"]
+
+    assert len(ctx.cache) <= server_module._PREDICTED_CACHE_MAX
 
 
 async def test_predicted_heat_missing_model_file_no_key_no_warning(

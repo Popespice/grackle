@@ -903,7 +903,11 @@ def diff(
     "-e",
     "patterns",
     multiple=True,
-    help="Exclude glob patterns when parsing --root (repeatable).",
+    help=(
+        "Exclude glob patterns when parsing --root (repeatable). NOTE: "
+        "`grackle serve` has no --exclude, so a model trained with these "
+        "is served against the full graph — see the warning this emits."
+    ),
 )
 def learn(
     traces: tuple[Path, ...],
@@ -937,7 +941,25 @@ def learn(
     if not ml_bridge.learn_available():
         raise click.ClickException(ml_bridge.remediation_message())
 
-    trace_paths: list[Path] = list(traces)
+    # Deduplicate by resolved path. The same trace reaching the merge twice
+    # (passed positionally AND registered in --from-store, or simply listed
+    # twice) would have its counts summed twice, silently over-weighting it
+    # relative to every other trace in the corpus.
+    seen: set[Path] = set()
+    trace_paths: list[Path] = []
+
+    def _add(path: Path) -> None:
+        try:
+            key = path.resolve()
+        except OSError:  # pragma: no cover — unresolvable path, dedup by literal
+            key = path
+        if key not in seen:
+            seen.add(key)
+            trace_paths.append(path)
+
+    for positional in traces:
+        _add(positional)
+
     if from_store is not None:
         from grackle.session_store import SessionStore as _SessionStore
 
@@ -950,7 +972,12 @@ def learn(
                 # opens and line-iterates whatever path it's given, which can
                 # hang or grow memory unboundedly on a non-regular file.
                 if recording_path.is_file():
-                    trace_paths.append(recording_path)
+                    _add(recording_path)
+                elif recording_path.exists():
+                    click.echo(
+                        f"warning: skipping recording {recording_path} — not a regular file",
+                        err=True,
+                    )
                 else:
                     click.echo(f"warning: skipping missing recording {recording_path}", err=True)
         finally:
@@ -962,6 +989,21 @@ def learn(
             "a session library. The recommended standing workflow is "
             "`grackle serve --root R --store .grackle/sessions.db`, which "
             "accumulates traces automatically for --from-store to consume."
+        )
+
+    if patterns:
+        # `grackle serve` always parses --root with a bare ParseOptions(), so
+        # a model trained on an excluded subset is applied at inference time
+        # to the FULL graph. The features are structural (degree buckets, SCC
+        # size, BFS depth, degree percentiles), so dropping nodes shifts every
+        # surviving node's vector — a silent train/serve skew. Surfaced rather
+        # than silently tolerated; `serve --exclude` is Phase 13.0 scope.
+        click.echo(
+            "warning: --exclude changes the graph this model is trained on, but "
+            "`grackle serve` parses --root with no excludes — the served graph "
+            "will differ, so structural features will not match at inference "
+            "time. Prefer training without --exclude.",
+            err=True,
         )
 
     from collections import Counter
