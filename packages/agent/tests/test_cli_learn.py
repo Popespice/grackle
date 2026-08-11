@@ -359,6 +359,44 @@ def test_learn_deduplicates_positional_trace_also_in_store(tmp_path: Path) -> No
     assert "from 1 trace(s)" in result.output
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="os.link semantics differ on Windows")
+def test_learn_dedups_hardlinks_and_does_not_double_count_heat(tmp_path: Path) -> None:
+    """Regression: dedup keyed on Path.resolve() normalizes symlinks and
+    relative spellings but NOT hardlinks — two names for one inode were
+    treated as two traces and their heat summed twice. Asserts on the heat
+    actually handed to training, not just the printed count, since the count
+    alone would pass with the data still doubled."""
+    root = _copy_golden(tmp_path)
+    trace = root / "trace.golden.jsonl"
+    hardlink = tmp_path / "hardlink.jsonl"
+    os.link(trace, hardlink)
+    assert trace.stat().st_ino == hardlink.stat().st_ino
+
+    captured: dict[str, dict[str, int]] = {}
+    real = ml_bridge.train_and_save
+
+    def _spy(graph: Any, heat: Any, **kwargs: Any) -> Any:
+        captured["heat"] = dict(heat)
+        return real(graph, heat, **kwargs)
+
+    runner = CliRunner()
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(ml_bridge, "train_and_save", _spy)
+        single = runner.invoke(main, ["learn", str(trace), "--root", str(root), "--epochs", "2"])
+        assert single.exit_code == 0, single.output
+        baseline = captured["heat"]
+
+        both = runner.invoke(
+            main,
+            ["learn", str(trace), str(hardlink), "--root", str(root), "--epochs", "2"],
+        )
+        assert both.exit_code == 0, both.output
+        deduped = captured["heat"]
+
+    assert "from 1 trace(s)" in both.output
+    assert deduped == baseline, "hardlinked duplicate must not double the merged heat"
+
+
 def test_learn_exclude_warns_about_train_serve_skew(tmp_path: Path) -> None:
     """`grackle serve` has no --exclude, so a model trained on an excluded
     subset is served against the full graph — structural features shift.

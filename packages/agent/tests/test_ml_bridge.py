@@ -176,6 +176,52 @@ def test_learn_history_is_lf_terminated_bytes(tmp_path: Path) -> None:
     assert raw.count(b"\n") == 2
 
 
+def test_learn_history_write_failure_is_logged_not_silent(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Regression: the swallow was fully silent, so a dropped report-card row
+    was invisible — train_and_save still returned a successful summary and
+    the CLI reported success. Non-fatal is the intent; silent is not."""
+    summary = ml_bridge.LearnSummary(
+        examples=1,
+        nodes=3,
+        epochs=1,
+        seed=0,
+        final_loss=0.1,
+        train_spearman=0.2,
+        baseline_spearman=0.3,
+        model_path="m.npz",
+    )
+    missing_dir = tmp_path / "nope" / "deeper"
+    ml_bridge._append_learn_history(missing_dir / "heat-model.npz", summary)
+
+    assert not (missing_dir / "learn-history.jsonl").exists()
+    assert "learn-history append failed" in capsys.readouterr().out
+
+
+def test_learn_history_unserializable_record_is_logged_not_silent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The `allow_nan=False` guard raises ValueError — exactly what the same
+    commit's `except` was swallowing. Simulates a future field added without
+    going through `_finite_or_none`."""
+    monkeypatch.setattr(ml_bridge, "_finite_or_none", lambda v: v)
+    summary = ml_bridge.LearnSummary(
+        examples=1,
+        nodes=3,
+        epochs=1,
+        seed=0,
+        final_loss=float("nan"),
+        train_spearman=0.2,
+        baseline_spearman=0.3,
+        model_path="m.npz",
+    )
+    ml_bridge._append_learn_history(tmp_path / "heat-model.npz", summary)
+
+    assert not (tmp_path / "learn-history.jsonl").exists()
+    assert "not serializable" in capsys.readouterr().out
+
+
 def test_learn_history_is_valid_strict_json_for_non_finite_metrics(tmp_path: Path) -> None:
     """A non-finite metric must serialize as ``null``, not a bare ``NaN``
     token. ``NaN`` is accepted by Python's reader but rejected by every

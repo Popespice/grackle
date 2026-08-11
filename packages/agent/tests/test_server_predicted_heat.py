@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from conftest import bump_mtime_forward
 from websockets.asyncio.client import connect
 
 from grackle import ml_bridge
@@ -22,7 +21,7 @@ from grackle.python_runtime.aggregates import TraceAggregates
 from grackle.server import serve
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
 _TINY_PYTHON_APP = Path(__file__).parent.parent.parent.parent / "fixtures" / "tiny-python-app"
 
@@ -175,7 +174,10 @@ async def test_byte_identity_comparison_is_discriminating(
 
 
 async def test_predicted_heat_cached_across_connects_recomputed_on_mtime_bump(
-    free_port: int, trained_model: Path, monkeypatch: pytest.MonkeyPatch
+    free_port: int,
+    trained_model: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    bump_mtime_forward: Callable[..., None],
 ) -> None:
     calls: list[Path] = []
     real_predict = ml_bridge.predict_scores
@@ -256,6 +258,123 @@ async def test_predicted_heat_invalidates_on_rename_with_unchanged_edge_topology
         f"not stale ones from before the rename: got {second_score_ids}, "
         f"expected {second_node_ids}"
     )
+
+
+def test_graph_signature_distinguishes_retargeted_duplicate_edges(tmp_path: Path) -> None:
+    """Regression: an XOR fold cancels even-multiplicity duplicates.
+
+    ``x(); x()`` emits the same (source, target, kind) twice, so retargeting
+    BOTH copies to ``y()`` left an XOR checksum unchanged — meta_cache then
+    served hub_score naming the wrong node. stress-2k has 26 such edges, so
+    this is a reachable class of edit, not a contrivance.
+    """
+    import grackle.server as server_module
+    from grackle.adapters import registry
+    from grackle.adapters.base import ParseOptions
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    parser = registry.get_static("python")
+    assert parser is not None
+
+    (root / "a.py").write_text(
+        "def x():\n    pass\n\ndef y():\n    pass\n\ndef caller():\n    x()\n    x()\n",
+        encoding="utf-8",
+    )
+    sig_a = server_module._graph_signature(parser.parse(root, ParseOptions()))
+
+    (root / "a.py").write_text(
+        "def x():\n    pass\n\ndef y():\n    pass\n\ndef caller():\n    y()\n    y()\n",
+        encoding="utf-8",
+    )
+    sig_b = server_module._graph_signature(parser.parse(root, ParseOptions()))
+
+    assert sig_a != sig_b, "retargeting both duplicate edges must change the signature"
+
+
+def test_graph_signature_stable_across_cosmetic_edits(tmp_path: Path) -> None:
+    """Non-vacuity guard for the two signature-sensitivity tests: folding node
+    ids in must NOT make meta_cache miss on edits the analyses don't care
+    about, or every comment change would needlessly re-run Tarjan."""
+    import grackle.server as server_module
+    from grackle.adapters import registry
+    from grackle.adapters.base import ParseOptions
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    parser = registry.get_static("python")
+    assert parser is not None
+
+    (root / "a.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    before = server_module._graph_signature(parser.parse(root, ParseOptions()))
+
+    (root / "a.py").write_text("# a new comment\n\n\ndef f():\n    return 1\n", encoding="utf-8")
+    after = server_module._graph_signature(parser.parse(root, ParseOptions()))
+
+    assert before == after, "a comment/line-shift edit must still hit meta_cache"
+
+
+def test_signatures_never_stricter_than_the_feature_extractor(tmp_path: Path) -> None:
+    """Both signatures run on adapter output, and ADR-0004 keeps adapters an
+    open surface. Neither may reject a graph shape the feature extractor
+    tolerates — and neither may raise, since `_graph_signature` runs outside
+    `_build_static_graph`'s containment."""
+    import grackle.server as server_module
+
+    malformed: list[Any] = [
+        {"nodes": [{"path": "a.py", "kind": "function"}], "edges": []},  # no id
+        {"nodes": [{"id": "a"}]},  # no edges key
+        {"edges": []},  # no nodes key
+        {"nodes": None, "edges": []},
+        {"nodes": [{"id": "a", "metadata": ["not", "a", "dict"]}], "edges": [{"source": "a"}]},
+    ]
+    for graph in malformed:
+        assert isinstance(server_module._graph_signature(graph), tuple)
+        assert isinstance(server_module._predicted_heat_signature(graph), int)
+
+
+def test_broken_model_does_not_flood_the_prediction_cache(tmp_path: Path) -> None:
+    """Regression: a corrupt checkpoint used to pin one dead memo per graph.
+
+    Once the cache became bounded, that meant a single truncated
+    heat-model.npz (a realistic interrupted `grackle learn`) evicted every
+    live prediction payload. A broken model is broken for every graph, so it
+    is now tracked by file identity and never enters the payload cache.
+    """
+    import grackle.server as server_module
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    bad = tmp_path / "heat-model.npz"
+    bad.write_bytes(b"not a real npz file")
+
+    ctx = server_module._PredictedHeatContext(model_path=bad, root=root, cache={})
+    meta_cache: dict[tuple[int, int, int], dict[str, Any]] = {}
+
+    for i in range(server_module._PREDICTED_CACHE_MAX * 2):
+        (root / "a.py").write_text(f"def f{i}():\n    pass\n", encoding="utf-8")
+        assert server_module._build_static_graph(root, meta_cache, ctx) is not None
+
+    assert ctx.cache == {}, "a broken model must never occupy the payload cache"
+    assert len(ctx.broken_models) == 1
+
+
+def test_meta_cache_is_bounded_under_repeated_renames(tmp_path: Path) -> None:
+    """Regression: making `_graph_signature` node-sensitive widened meta_cache's
+    key churn to every rename, while it was still unbounded — the same
+    monotonic growth the prediction cache had just been capped for."""
+    import grackle.server as server_module
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    ctx = server_module._PredictedHeatContext(model_path=None, root=root, cache={})
+    meta_cache: dict[tuple[int, int, int], dict[str, Any]] = {}
+
+    for i in range(server_module._META_CACHE_MAX + 12):
+        (root / "a.py").write_text(f"def f{i}():\n    pass\n", encoding="utf-8")
+        assert server_module._build_static_graph(root, meta_cache, ctx) is not None
+
+    assert len(meta_cache) <= server_module._META_CACHE_MAX
 
 
 def test_meta_cache_does_not_serve_stale_node_ids_after_rename(tmp_path: Path) -> None:

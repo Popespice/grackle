@@ -30,11 +30,16 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+import structlog
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
     from pathlib import Path
 
     from grackle.adapters.base import StaticGraph
+
+
+log = structlog.get_logger()
 
 
 class MLBridgeError(Exception):
@@ -214,10 +219,22 @@ def _append_learn_history(model_path: Path, summary: LearnSummary) -> None:
     }
     try:
         line = json.dumps(record, allow_nan=False) + "\n"
+    except ValueError as exc:
+        # allow_nan=False raises here. Unreachable while every float in the
+        # record goes through _finite_or_none — which is exactly why it is
+        # logged rather than passed over: reaching it means a later field was
+        # added without that guard, and a silently-dropped row would be the
+        # only symptom.
+        log.warning("learn-history row not serializable — dropped", error=str(exc))
+        return
+    try:
         with history_path.open("ab") as f:
             f.write(line.encode("utf-8"))
-    except (OSError, ValueError):
-        pass
+    except OSError as exc:
+        # Deliberately non-fatal: the model is already durably saved, and a
+        # report-card write failure must not turn a successful learn into a
+        # CLI error. Logged so it is not invisible.
+        log.warning("learn-history append failed", path=str(history_path), error=str(exc))
 
 
 def predict_scores(graph: StaticGraph, model_path: Path) -> dict[str, Any]:

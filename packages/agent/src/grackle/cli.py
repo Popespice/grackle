@@ -941,18 +941,29 @@ def learn(
     if not ml_bridge.learn_available():
         raise click.ClickException(ml_bridge.remediation_message())
 
-    # Deduplicate by resolved path. The same trace reaching the merge twice
+    # Deduplicate by file IDENTITY. The same trace reaching the merge twice
     # (passed positionally AND registered in --from-store, or simply listed
     # twice) would have its counts summed twice, silently over-weighting it
     # relative to every other trace in the corpus.
-    seen: set[Path] = set()
+    #
+    # (st_dev, st_ino) rather than Path.resolve(): resolve() normalizes
+    # symlinks and relative spellings but not hardlinks, and not case on the
+    # two case-insensitive platforms this ships on (macOS APFS, Windows) —
+    # both of which are the same file and would still be double-counted.
+    # resolve() remains the fallback for a path we cannot stat.
+    seen: set[object] = set()
     trace_paths: list[Path] = []
 
     def _add(path: Path) -> None:
+        key: object
         try:
-            key = path.resolve()
-        except OSError:  # pragma: no cover — unresolvable path, dedup by literal
-            key = path
+            st = path.stat()
+            key = (st.st_dev, st.st_ino)
+        except OSError:
+            try:
+                key = path.resolve()
+            except OSError:  # pragma: no cover — unresolvable, dedup by literal
+                key = path
         if key not in seen:
             seen.add(key)
             trace_paths.append(path)
@@ -1047,6 +1058,24 @@ def learn(
         f"train_spearman={summary.train_spearman:.3f} vs. "
         f"baseline_spearman={summary.baseline_spearman:.3f}"
     )
+
+    # A diverged run still saves a model and exits 0, and its metrics land in
+    # the report card as `null` — indistinguishable there from the always-null
+    # `val_spearman` that means "not computed". Say so once, here, where the
+    # user can actually see it.
+    import math
+
+    if not all(
+        math.isfinite(v)
+        for v in (summary.final_loss, summary.train_spearman, summary.baseline_spearman)
+    ):
+        click.echo(
+            "warning: at least one metric is not finite (nan/inf) — training likely "
+            "diverged. The model was still written; consider a lower --epochs or a "
+            "different --seed, and treat this run's report-card metrics as unusable.",
+            err=True,
+        )
+
     click.echo(f"wrote model → {out}")
 
 
