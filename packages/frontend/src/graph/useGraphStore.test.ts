@@ -583,4 +583,60 @@ describe("useGraphStore", () => {
     expect(state.selectedEdge).toBeNull();
     expect(state.sourceViewerTarget).toBeNull();
   });
+
+  // -------------------------------------------------------------------------
+  // predictedOverlay (Phase 12.3)
+  // -------------------------------------------------------------------------
+
+  it("has null predictedOverlay initially", () => {
+    expect(useGraphStore.getState().predictedOverlay).toBeNull();
+  });
+
+  it("setPredictedOverlay stores a scores-mode overlay", () => {
+    const overlay = {
+      kind: "scores" as const,
+      scores: new Map([["a.py:App", 0.8]]),
+      max: 0.8,
+    };
+    useGraphStore.getState().setPredictedOverlay(overlay);
+    expect(useGraphStore.getState().predictedOverlay).toBe(overlay);
+  });
+
+  it("setPredictedOverlay stores a status-mode overlay", () => {
+    const overlay = {
+      kind: "status" as const,
+      statuses: new Map([["a.py:App", "over" as const]]),
+    };
+    useGraphStore.getState().setPredictedOverlay(overlay);
+    expect(useGraphStore.getState().predictedOverlay).toBe(overlay);
+  });
+
+  it("clearPredictedOverlay resets to null", () => {
+    useGraphStore.getState().setPredictedOverlay({
+      kind: "scores",
+      scores: new Map([["a.py:App", 0.5]]),
+      max: 0.5,
+    });
+    useGraphStore.getState().clearPredictedOverlay();
+    expect(useGraphStore.getState().predictedOverlay).toBeNull();
+  });
+
+  it("setGraph clears predictedOverlay", () => {
+    useGraphStore.getState().setPredictedOverlay({
+      kind: "scores",
+      scores: new Map([["a.py:App", 0.5]]),
+      max: 0.5,
+    });
+    useGraphStore.getState().setGraph(MOCK_GRAPH);
+    expect(useGraphStore.getState().predictedOverlay).toBeNull();
+  });
+
+  it("startTraceSession clears predictedOverlay", () => {
+    useGraphStore.getState().setPredictedOverlay({
+      kind: "status",
+      statuses: new Map([["a.py:App", "under"]]),
+    });
+    useGraphStore.getState().startTraceSession("s1");
+    expect(useGraphStore.getState().predictedOverlay).toBeNull();
+  });
 });

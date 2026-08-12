@@ -6,7 +6,9 @@ import { EdgeEvidencePanel } from "./EdgeEvidencePanel";
 import { FlameGraphPanel } from "./FlameGraphPanel";
 import { GraphLegendPanel } from "./GraphLegendPanel";
 import { HeaderChrome } from "./HeaderChrome";
+import { LossCurvePanel } from "./LossCurvePanel";
 import { NodeInspectorPanel } from "./NodeInspectorPanel";
+import { PredictedHeatPanel } from "./PredictedHeatPanel";
 import { panels } from "./registry";
 import { SearchFilterPanel } from "./SearchFilterPanel";
 import { SessionLibraryPanel } from "./SessionLibraryPanel";
@@ -77,6 +79,12 @@ panels.register({
 });
 panels.register({
   slot: "right-sidebar",
+  id: "predicted-heat-panel",
+  component: PredictedHeatPanel,
+  order: 32,
+});
+panels.register({
+  slot: "right-sidebar",
   id: "diff-panel",
   component: DiffPanel,
   order: 35,
@@ -92,6 +100,12 @@ panels.register({
   id: "timeline-panel",
   component: TimelinePanel,
   order: 0,
+});
+panels.register({
+  slot: "bottom-dock",
+  id: "loss-curve-panel",
+  component: LossCurvePanel,
+  order: 5,
 });
 panels.register({
   slot: "bottom-dock",

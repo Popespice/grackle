@@ -35,6 +35,10 @@ import {
 } from "./graphAnimation";
 import { COLD_HEX, heatColor } from "./heatColor";
 import { isNodeVisible } from "./matching";
+import {
+  PREDICTION_STATUS_COLORS,
+  type PredictionStatus,
+} from "./predictedHeat";
 import { useGraphStore } from "./useGraphStore";
 import { useHeatmap } from "./useHeatmap";
 
@@ -103,6 +107,10 @@ function makeNodeReducer(
   maxHeat: number,
   heatActive: boolean,
   diffOverlay: Map<string, DiffStatus> | null,
+  predictedOverlay:
+    | { kind: "scores"; scores: Map<string, number>; max: number }
+    | { kind: "status"; statuses: Map<string, PredictionStatus> }
+    | null,
   animRef: RefObject<AnimationState>
 ) {
   return (node: string, data: NodeAttributes): Partial<NodeDisplayData> => {
@@ -129,7 +137,8 @@ function makeNodeReducer(
       (!highlightActive && selectedNodeId !== null && node !== selectedNodeId);
 
     // Color cascade:
-    //   highlighted → dimmed → diff overlay (if active) → heat (if active + data) → resolved kind color
+    //   highlighted → dimmed → diff overlay (if active) → predicted-heat overlay
+    //   (if active) → heat (if active + data) → resolved kind color
     // All colors passed to Sigma must be hex/rgb — never oklch/hsl/CSS-var.
     // See ADR-0015: Sigma 3.x parseColor silently maps unknown formats to black.
     let color: string;
@@ -143,6 +152,19 @@ function makeNodeReducer(
       const diffColor = status ? DIFF_STATUS_COLORS[status] : "";
       // Fall through to kind color when status is "same" or node not in overlay.
       color = diffColor || resolveNodeColor(data.kind, container);
+    } else if (predictedOverlay !== null) {
+      if (predictedOverlay.kind === "scores") {
+        const score = predictedOverlay.scores.get(node);
+        color =
+          score !== undefined && predictedOverlay.max > 0
+            ? heatColor(score / predictedOverlay.max)
+            : COLD_HEX;
+      } else {
+        const st = predictedOverlay.statuses.get(node);
+        const predictedColor = st ? PREDICTION_STATUS_COLORS[st] : "";
+        // Fall through to kind color when on-target or node not in overlay.
+        color = predictedColor || resolveNodeColor(data.kind, container);
+      }
     } else if (heatActive && maxHeat > 0) {
       const count = heat.get(node) ?? 0;
       color = count > 0 ? heatColor(count / maxHeat) : COLD_HEX;
@@ -234,6 +256,7 @@ export function GraphCanvas(): JSX.Element {
   const highlightedNodeIds = useGraphStore((s) => s.highlightedNodeIds);
   const traceSessionId = useGraphStore((s) => s.traceSessionId);
   const diffOverlay = useGraphStore((s) => s.diffOverlay);
+  const predictedOverlay = useGraphStore((s) => s.predictedOverlay);
   const selectNode = useGraphStore((s) => s.selectNode);
   const selectEdge = useGraphStore((s) => s.selectEdge);
   const jumpToSourceLine = useGraphStore((s) => s.jumpToSourceLine);
@@ -308,6 +331,7 @@ export function GraphCanvas(): JSX.Element {
           maxHeat,
           heatActive,
           diffOverlay,
+          predictedOverlay,
           animRef
         ),
         edgeReducer: makeEdgeReducer(container, animRef),
@@ -487,6 +511,7 @@ export function GraphCanvas(): JSX.Element {
         maxHeat,
         heatActive,
         diffOverlay,
+        predictedOverlay,
         animRef
       )
     );
@@ -503,6 +528,7 @@ export function GraphCanvas(): JSX.Element {
     maxHeat,
     heatActive,
     diffOverlay,
+    predictedOverlay,
     theme,
   ]);
 
