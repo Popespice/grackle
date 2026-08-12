@@ -2,6 +2,26 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Code review — HARD BLOCKER, read this first
+
+**Never initiate a code review. Only the repo owner starts one.** This is not a preference to
+weigh against thoroughness — it overrides the standing subagent-autonomy grant and ultracode
+mode's "adversarially verify your findings" guidance, both of which have repeatedly been read as
+licence to launch reviews unprompted.
+
+It covers every form, however labelled: the `/code-review` skill, `/ultrareview`, and any
+`Workflow`/`Agent` fan-out whose purpose is reviewing, auditing, critiquing, or adversarially
+verifying code — including reviewing your own diff before opening a PR, and including anything
+dressed up as a "sanity check", "pre-merge pass", or "verification pass over the fixes".
+
+Running the project's normal gate (`pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm check-parity`,
+the per-package ruff/mypy/pytest blocks) is **not** code review and remains expected on every
+chunk.
+
+If you believe a review would genuinely help, say so in one sentence and let the owner decide. A
+green gate, an open PR, ultracode being on, or a review ordered earlier in the same session are
+**not** authorization for the next one.
+
 ## What this is
 
 grackle is a local-first live code visualizer for Python: static graph from `ast`, runtime overlay via `sys.monitoring` (Python 3.12+) over a `127.0.0.1` WebSocket, React + Sigma.js frontend.
@@ -145,10 +165,32 @@ asymmetry between the in-degree count and the adjacency actually walked), three 
 on malformed input, `spearman` returning `NaN` on empty input instead of the documented `0.0`, and
 a duplicated tie-averaging algorithm extracted to a shared `_rank_utils` helper. CI was blocked
 twice by an unrelated active GitHub Actions platform outage (confirmed via githubstatus.com, jobs
-never acquired a runner) before landing green. Next: **12.2** — `grackle learn` CLI + a
-capability-gated `predicted_heat` `AnalysisRegistry` entry sourced from the session-store corpus,
-then 12.3 (frontend predicted-heat overlay + LossCurvePanel), 12.4 (NetworkViewPanel), and 12.H
-(ship, ADRs 0029–0030, `v0.12.0` — not yet consumed by 12.1, still reserved). Full plan:
+never acquired a runner) before landing green. **12.2** — `grackle learn` CLI + capability-gated
+`predicted_heat` (blocks A0–A4) — **SHIPPED: [PR #79](https://github.com/Popespice/grackle/pull/79),
+squash-merged to main at `d55dc18`.** New `src/grackle/ml_bridge.py` is the agent's only
+`grackle_nn` importer and does it exclusively inside function bodies, so importing `grackle.cli` /
+`grackle.server` never pulls in numpy (enforced by a fresh-subprocess + module-scope AST scan in
+`tests/test_ml_bridge_import_hygiene.py` — the mirror of 12.1's nn-side hygiene test). `grackle
+learn [TRACES...] --root R` merges every trace's heat into ONE example (one root ⇒ one graph, so
+there is no held-out graph and the reported Spearman numbers are train-set metrics, never
+mislabeled as validation); `serve --model` injects `metadata.predicted_heat` from inside
+`_build_static_graph`, so watch-mode re-broadcasts carry it too. Absence is byte-identical —
+model missing, gate closed, or model broken all add NO key. No wire-schema change;
+`check-parity` a no-op; agent runtime deps unchanged (grackle-nn is an editable **dev** dep).
+**Non-obvious invariants worth not re-deriving:** `meta_cache` and `predicted_heat` need
+*different* signatures — the former tracks node ids + edges (so a cosmetic edit still hits and
+Tarjan is not re-run), the latter must additionally track name/line/kind/decorators/async because
+its payload bakes in node_ids; both use sorted, multiplicity-preserving tuples because an XOR fold
+cancels duplicate edge triples (`x(); x()`) and stress-2k has 26 of them; both caches are bounded
+(watch mode mints a key per edit); a broken checkpoint is tracked by *file* identity, not per
+graph, or one corrupt model evicts every live payload. Also fixed here, though it is 12.1 code:
+`ml/labels.py::make_targets` mixed `np.log1p` with `math.log1p` — different implementations that
+disagree by 1 ULP on some platforms, so the hottest node normalized to `1.0000000000000002`,
+breaking D12.2's `y ∈ [0,1]` bound on Linux only (macOS's libm agrees with numpy, so it never
+reproduced locally and read as a flake). Next: 12.3 (frontend predicted-heat overlay +
+LossCurvePanel), 12.4 (NetworkViewPanel), and 12.H (ship, ADRs 0029–0030, `v0.12.0` — still
+reserved, unconsumed). **Deferred to 13.0:** `serve --exclude` — `learn --exclude` currently warns
+about the resulting train/serve feature skew rather than fixing it. Full plan:
 `~/.claude/plans/as-phase-10-is-snazzy-sedgewick.md`.
 
 Granular per-sub-chunk implementation detail (Phase 8.5, 9.1–9.3, 10.1–10.7) has moved out
