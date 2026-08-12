@@ -17,7 +17,7 @@ dependencies = [
     "tree-sitter>=0.25,<0.26",
     "tree-sitter-typescript>=0.23,<0.24",
     "tree-sitter-go>=0.23,<0.24",
-    "tree-sitter-rust>=0.23,<0.24",
+    "tree-sitter-rust>=0.24.2,<0.25",
 ]
 
 [project.optional-dependencies]
