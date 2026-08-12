@@ -15,28 +15,11 @@ from grackle.paths import to_posix
 from grackle.watcher import _diff, _snapshot, watch_changes
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator
+    from collections.abc import AsyncGenerator, AsyncIterator, Callable
 
 
 def _write(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
-
-
-def _bump_mtime_forward(path: Path, seconds: float = 5.0) -> None:
-    """Force ``path``'s mtime forward by ``seconds``, guaranteeing it differs
-    from whatever it was before this call — even on a filesystem/CI runner
-    whose mtime resolution is too coarse to distinguish two back-to-back
-    writes (observed in CI: a same-byte-length edit written immediately
-    after priming a snapshot can land in the same mtime bucket on at least
-    one Windows runner, which would otherwise make a "detect this edit"
-    test flaky for an environment reason unrelated to the code under test —
-    exactly the coarse-mtime gap ADR-0027 documents as an accepted
-    limitation for real users, but not one this test suite should trip over
-    by accident).
-    """
-    current_ns = path.stat().st_mtime_ns
-    new_ns = current_ns + int(seconds * 1_000_000_000)
-    os.utime(path, ns=(new_ns, new_ns))
 
 
 def _to_agen(it: AsyncIterator[set[Path]]) -> AsyncGenerator[set[Path], None]:
@@ -69,7 +52,7 @@ def test_hash_gate_noop_on_identical_rewrite(tmp_path: Path) -> None:
     assert _diff(snap1, snap2) == set()
 
 
-def test_detect_modify(tmp_path: Path) -> None:
+def test_detect_modify(tmp_path: Path, bump_mtime_forward: Callable[..., None]) -> None:
     f = tmp_path / "a.py"
     _write(f, "x = 1\n")
     snap1 = _snapshot(tmp_path)
@@ -79,7 +62,7 @@ def test_detect_modify(tmp_path: Path) -> None:
     # resolution being fine enough to distinguish two back-to-back writes
     # (observed flaky on at least one Windows CI runner otherwise).
     _write(f, "x = 2\n")
-    _bump_mtime_forward(f)
+    bump_mtime_forward(f)
     snap2 = _snapshot(tmp_path, snap1)
 
     assert _diff(snap1, snap2) == {"a.py"}
@@ -309,16 +292,18 @@ def test_stat_failure_falls_back_to_prior_entry(
 # ---------------------------------------------------------------------------
 
 
-async def test_watch_poll_yields_a_batch_on_real_change(tmp_path: Path) -> None:
+async def test_watch_poll_yields_a_batch_on_real_change(
+    tmp_path: Path, bump_mtime_forward: Callable[..., None]
+) -> None:
     f = tmp_path / "a.py"
     _write(f, "x = 1\n")
 
     gen = _to_agen(watcher._watch_poll(tmp_path, interval=0.1))
     task = asyncio.create_task(gen.__anext__())
     await asyncio.sleep(0.03)  # let the initial snapshot prime before editing
-    # Same byte length as the original -- see _bump_mtime_forward's docstring.
+    # Same byte length as the original -- see the bump_mtime_forward fixture's docstring.
     _write(f, "x = 2\n")
-    _bump_mtime_forward(f)
+    bump_mtime_forward(f)
 
     try:
         batch = await asyncio.wait_for(task, timeout=5.0)
@@ -363,7 +348,9 @@ async def test_watch_poll_cancellation_does_not_hang(tmp_path: Path) -> None:
 
 
 async def test_watch_changes_falls_back_to_poll_when_watchfiles_unavailable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    bump_mtime_forward: Callable[..., None],
 ) -> None:
     monkeypatch.setattr(watcher, "watchfiles_available", lambda: False)
     f = tmp_path / "a.py"
@@ -372,9 +359,9 @@ async def test_watch_changes_falls_back_to_poll_when_watchfiles_unavailable(
     gen = _to_agen(watch_changes(tmp_path, interval=0.1))
     task = asyncio.create_task(gen.__anext__())
     await asyncio.sleep(0.03)
-    # Same byte length as the original -- see _bump_mtime_forward's docstring.
+    # Same byte length as the original -- see the bump_mtime_forward fixture's docstring.
     _write(f, "x = 2\n")
-    _bump_mtime_forward(f)
+    bump_mtime_forward(f)
 
     try:
         batch = await asyncio.wait_for(task, timeout=5.0)
@@ -406,7 +393,9 @@ async def test_watch_changes_forces_poll_when_requested(
     assert calls == ["poll"]
 
 
-async def test_watch_watchfiles_detects_change(tmp_path: Path) -> None:
+async def test_watch_watchfiles_detects_change(
+    tmp_path: Path, bump_mtime_forward: Callable[..., None]
+) -> None:
     pytest.importorskip("watchfiles")
     assert watcher.watchfiles_available()
 
@@ -416,9 +405,9 @@ async def test_watch_watchfiles_detects_change(tmp_path: Path) -> None:
     gen = _to_agen(watcher._watch_watchfiles(tmp_path, interval=0.1))
     task = asyncio.create_task(gen.__anext__())
     await asyncio.sleep(0.3)  # give the OS-level watcher time to start
-    # Same byte length as the original -- see _bump_mtime_forward's docstring.
+    # Same byte length as the original -- see the bump_mtime_forward fixture's docstring.
     _write(f, "x = 2\n")
-    _bump_mtime_forward(f)
+    bump_mtime_forward(f)
 
     try:
         batch = await asyncio.wait_for(task, timeout=10.0)
@@ -455,7 +444,9 @@ async def test_watch_watchfiles_ignores_excluded_dir_under_root(tmp_path: Path) 
         await gen.aclose()
 
 
-async def test_watch_watchfiles_root_under_excluded_ancestor_name(tmp_path: Path) -> None:
+async def test_watch_watchfiles_root_under_excluded_ancestor_name(
+    tmp_path: Path, bump_mtime_forward: Callable[..., None]
+) -> None:
     """Regression: root sitting under an ancestor literally named e.g. 'build' must not
     silently exclude every file. watchfiles reports absolute paths; matching
     _EXCLUDED_DIRS against every component of the absolute path (rather than only the
@@ -473,9 +464,9 @@ async def test_watch_watchfiles_root_under_excluded_ancestor_name(tmp_path: Path
     gen = _to_agen(watcher._watch_watchfiles(root, interval=0.1))
     task = asyncio.create_task(gen.__anext__())
     await asyncio.sleep(0.3)  # give the OS-level watcher time to start
-    # Same byte length as the original -- see _bump_mtime_forward's docstring.
+    # Same byte length as the original -- see the bump_mtime_forward fixture's docstring.
     _write(f, "x = 2\n")
-    _bump_mtime_forward(f)
+    bump_mtime_forward(f)
 
     try:
         batch = await asyncio.wait_for(task, timeout=10.0)

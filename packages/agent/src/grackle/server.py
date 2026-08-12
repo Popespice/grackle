@@ -6,6 +6,7 @@ import concurrent.futures
 import contextlib
 import os
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -96,6 +97,214 @@ def _read_source(root_real: Path, posix_path: str) -> tuple[str | None, str]:
         return (None, "not_found")
 
 
+# Upper bound on retained prediction payloads. Each entry holds scores for
+# EVERY node (~110 KB serialized on the stress-2k fixture, several times that
+# live), and watch mode mints a fresh key on every source edit — so without a
+# bound this grows monotonically for the server's whole lifetime. Only the
+# current graph's entry is normally live; the slack absorbs several browser
+# tabs mid-edit.
+_PREDICTED_CACHE_MAX = 16
+
+# Same rationale for the hub-score/cycles cache. Entries are far smaller
+# (top-50 hub + top-100 cycles, ~2.5 KB on stress-2k) but the key churn is
+# now HIGHER than the prediction cache's: any rename mints a new signature,
+# and this one previously had no bound at all. Larger cap because the entries
+# are cheap and re-filling one costs a Tarjan SCC pass.
+_META_CACHE_MAX = 64
+
+
+def _cache_bounded(cache: dict[Any, Any], key: Any, value: Any, limit: int) -> None:
+    """Insert into *cache*, evicting oldest-first once it exceeds *limit*.
+
+    Insertion-ordered dict + ``pop(next(iter(...)))`` is a FIFO eviction.
+    The connect path and the watch executor thread both reach this without a
+    lock, so ``RuntimeError`` ("dictionary changed size during iteration") is
+    caught alongside ``StopIteration``: either means another thread raced us
+    to the eviction, which is exactly the benign outcome — the cap is a
+    memory bound, not an invariant worth a lock, and a redundant or skipped
+    eviction is harmless. What is NOT acceptable is raising out of a graph
+    build, which is why both are swallowed rather than left to escape.
+    """
+    cache[key] = value
+    while len(cache) > limit:
+        try:
+            oldest = next(iter(cache))
+        except (StopIteration, RuntimeError):  # raced by the other thread
+            break
+        cache.pop(oldest, None)
+
+
+@dataclass(slots=True)
+class _PredictedHeatContext:
+    """State needed to inject ``metadata.predicted_heat`` into a pushed graph.
+
+    Deliberately a separate object from ``meta_cache`` — the hub-score/cycles
+    cache hardcodes exactly those two keys (see ``_build_static_graph``) and
+    would silently drop a third key on every cache hit, so predicted_heat
+    must never ride inside it. ``cache`` is a plain dict (no lock): its only
+    race is two threads (the connect-time inline path and the watch-mode
+    executor thread) redundantly computing the same value for the same key —
+    the identical benign race ``meta_cache`` already documents and accepts.
+
+    Not ``frozen``: ``gate_warned`` is mutated in place. (It never was
+    meaningfully frozen — the ``cache`` dict was always mutable.)
+
+    Attributes:
+        model_path:    Explicit ``--model`` path, or ``None`` to resolve
+            ``root/.grackle/heat-model.npz`` fresh on every build (so
+            retraining is picked up without a server restart).
+        root:          The server's project root, for the default-path lookup.
+        cache:         Keyed by ``(heat_sig, model_mtime_ns, model_size)`` —
+            see :func:`_predicted_heat_signature` for why this is a
+            *different* signature from ``meta_cache``'s. Holds only
+            SUCCESSFUL predictions; bounded by ``_PREDICTED_CACHE_MAX``,
+            oldest-first.
+        gate_warned:   Whether the "grackle-nn not usable" warning has already
+            been emitted for this server. ``learn_available()`` is a
+            process-level constant, so this state belongs here and NOT in
+            ``cache`` — keying it by graph would re-log on every watch-mode
+            edit (a new graph ⇒ a new key) and pin a dead entry per edit.
+        broken_models: ``(mtime_ns, size)`` of model files already known to
+            fail. A broken checkpoint is broken for EVERY graph, so this is
+            keyed by the file — not the graph. Keying it by graph (as a
+            ``None`` in ``cache``) re-logged on every watch edit and, once
+            ``cache`` became bounded, let a single corrupt model evict every
+            live prediction payload with dead memos.
+    """
+
+    model_path: Path | None
+    root: Path
+    cache: dict[tuple[int, int, int], dict[str, Any]]
+    gate_warned: bool = False
+    broken_models: set[tuple[int, int]] = field(default_factory=set)
+
+
+def _edge_multiset(graph: StaticGraph) -> tuple[tuple[str, str, str], ...]:
+    """Order-independent, multiplicity-preserving view of a graph's edges.
+
+    ``sorted`` (not an XOR fold) because duplicate edge triples are real —
+    ``def caller(): x(); x()`` emits the same ``(source, target, kind)``
+    twice, and ``fixtures/stress-2k`` has 26 such edges. An XOR accumulator
+    silently cancels every even-multiplicity duplicate, so retargeting both
+    copies (``x(); x()`` → ``y(); y()``) produced an identical checksum and
+    served a stale cache entry. Reads defensively so it can never be what
+    rejects a graph the feature extractor would accept.
+    """
+    return tuple(
+        sorted(
+            (str(e.get("source", "")), str(e.get("target", "")), str(e.get("kind", "")))
+            for e in graph.get("edges") or ()
+        )
+    )
+
+
+def _predicted_heat_signature(graph: StaticGraph) -> int:
+    """A signature sensitive to every field ``extract_features`` reads.
+
+    ``_graph_signature`` (used for ``meta_cache``) tracks node **ids** plus
+    edges — deliberately coarser, since hub-score/cycles depend on nothing
+    else. ``predicted_heat`` is different: its cached payload bakes in
+    specific ``node_id``s, keyed off node identity/attributes
+    (``id``/``path``/``kind``/``name``/``line``/``is_async``/``decorators``,
+    per ``grackle_nn.ml.features.extract_features``), most of which never
+    touch an edge. Reusing the edge-only signature here would let a rename,
+    an added decorator, or an async-flag flip — none of which change edge
+    topology — hit a stale cache entry and reattach scores for node_ids
+    that no longer exist in the current graph.
+
+    Node order is significant (``extract_features`` returns node_ids in the
+    graph's own order, so a reorder changes the payload); edge order is not,
+    hence the ``sorted``. Reads defensively — ``.get`` throughout, non-dict
+    ``metadata`` tolerated, values coerced to ``str`` — to match
+    ``extract_features``'s own hardening against malformed nodes, so this
+    function can never be the thing that rejects a graph the feature
+    extractor would happily accept.
+    """
+    node_part = tuple(
+        (
+            str(n.get("id", "")),
+            str(n.get("path", "") or ""),
+            str(n.get("kind", "") or ""),
+            str(n.get("name", "") or ""),
+            str(n.get("line", 0)),
+            bool(meta.get("is_async")) if isinstance(meta := n.get("metadata"), dict) else False,
+            bool(meta.get("decorators")) if isinstance(meta, dict) else False,
+        )
+        for n in graph.get("nodes") or ()
+    )
+    return hash((node_part, _edge_multiset(graph)))
+
+
+def _maybe_inject_predicted_heat(
+    graph: StaticGraph,
+    ctx: _PredictedHeatContext,
+) -> None:
+    """Inject ``metadata.predicted_heat`` into *graph* in place, if available.
+
+    Absence is byte-identical: when no model is configured/found, the ML
+    gate is closed, or the model is broken, this adds NOTHING to
+    ``graph["metadata"]`` and returns silently. No warning is logged when no
+    model is configured — that is the common case, not a fault. A closed ML
+    gate logs exactly once per server (``ctx.gate_warned``); a broken/corrupt
+    model logs once per ``(graph, model file)`` combination, memoized as a
+    ``None`` in ``ctx.cache`` so it is not re-attempted on every connect.
+
+    Called from :func:`_build_static_graph` on the RAW parsed graph, before
+    the ``meta_cache``/``enrich_metadata`` block — ``extract_features``'s
+    contract is the bare parse output, and writing this key first means the
+    cache-hit branch's ``.update(cached)`` (which only ever contains
+    ``hub_score``/``cycles``) can never clobber it.
+    """
+    from grackle import ml_bridge
+
+    model_path = ctx.model_path
+    if model_path is None:
+        model_path = ctx.root / ".grackle" / "heat-model.npz"
+
+    try:
+        st = model_path.stat()
+    except OSError:
+        return  # no model configured/found — nothing to add, nothing to warn about
+
+    # Gate FIRST: learn_available() is a process-level constant, so when it is
+    # False there is nothing graph-specific to remember and no reason to pay
+    # for a signature (an O(V + E log E) pass) on every build for the rest of
+    # the server's life. One warning per server, not per graph.
+    if not ml_bridge.learn_available():
+        if not ctx.gate_warned:
+            ctx.gate_warned = True
+            log.warning(
+                "predicted_heat unavailable — grackle-nn not usable (not installed or broken)",
+                model_path=str(model_path),
+            )
+        return
+
+    # A broken checkpoint is broken for every graph, so short-circuit on the
+    # FILE identity before paying for a signature. Keyed here rather than as a
+    # None in `cache` so a corrupt model neither re-logs per watch edit nor
+    # evicts live prediction payloads out of the bounded cache.
+    model_key = (st.st_mtime_ns, st.st_size)
+    if model_key in ctx.broken_models:
+        return
+
+    cache_key = (_predicted_heat_signature(graph), *model_key)
+
+    cached = ctx.cache.get(cache_key)
+    if cached is not None:
+        graph.setdefault("metadata", {})["predicted_heat"] = cached
+        return
+
+    try:
+        predicted = ml_bridge.predict_scores(graph, model_path)
+    except ml_bridge.MLBridgeError as exc:
+        ctx.broken_models.add(model_key)
+        log.warning("predicted_heat prediction failed", model_path=str(model_path), error=str(exc))
+        return
+
+    _cache_bounded(ctx.cache, cache_key, predicted, _PREDICTED_CACHE_MAX)
+    graph.setdefault("metadata", {})["predicted_heat"] = predicted
+
+
 def _graph_signature(graph: StaticGraph) -> tuple[int, int, int]:
     """Cheap order-independent signature of a graph's topology.
 
@@ -104,16 +313,38 @@ def _graph_signature(graph: StaticGraph) -> tuple[int, int, int]:
     expensive Tarjan SCC pass runs once instead of once per browser tab.  An
     edit that changes the topology changes the signature, so live-reparse still
     refreshes the analysis.
+
+    Node **ids** are tracked alongside the edges because both cached analyses
+    bake ids into their payloads (``hub_score`` entries carry a ``node_id``;
+    ``cycles`` entries carry a ``nodes`` list). Tracking edges alone made a
+    rename that touches no edge — e.g. ``def f`` → ``def g`` on an uncalled
+    function — collide with the pre-rename graph, so the cache re-attached
+    ``hub_score``/``cycles`` naming a node that no longer exists.
+
+    Sorted tuples rather than an XOR fold: XOR cancels any even-multiplicity
+    duplicate, and duplicate edge triples are real (``x(); x()`` emits one
+    twice). Retargeting both copies therefore left the checksum unchanged and
+    served a stale entry — the same defect class, one layer down. Node ids and
+    edges are hashed as separate members of the outer tuple, so they cannot
+    alias each other either.
+
+    Attributes the analyses ignore (name, line, decorators) are deliberately
+    NOT included — folding those in would evict on cosmetic edits and re-run
+    Tarjan for no reason. That is also why this stays separate from
+    :func:`_predicted_heat_signature`, which must be sensitive to exactly
+    those attributes. Reads defensively for the same reason its sibling does:
+    this runs on adapter output, and ADR-0004 keeps adapters an open surface.
     """
-    checksum = 0
-    for e in graph["edges"]:
-        checksum ^= hash((e["source"], e["target"], e["kind"]))
-    return (len(graph["nodes"]), len(graph["edges"]), checksum)
+    nodes = graph.get("nodes") or ()
+    edges = graph.get("edges") or ()
+    node_part = tuple(sorted(str(n.get("id", "")) for n in nodes))
+    return (len(nodes), len(edges), hash((node_part, _edge_multiset(graph))))
 
 
 def _build_static_graph(
     root: Path,
     meta_cache: dict[tuple[int, int, int], dict[str, Any]],
+    predicted_ctx: _PredictedHeatContext,
 ) -> StaticGraph | None:
     """Detect language(s), parse the project, and return the enriched graph.
 
@@ -122,6 +353,11 @@ def _build_static_graph(
     across connects (or watch-mode rebuilds, ADR-0027) do not recompute Tarjan
     SCC. Returns ``None`` if no language is detected or parsing fails — callers
     must treat that as "nothing to push", not an error.
+
+    ``predicted_heat`` (Phase 12.2) is injected on the raw parsed graph,
+    before the ``meta_cache``/``enrich_metadata`` block — see
+    :func:`_maybe_inject_predicted_heat`'s docstring for why the ordering
+    matters.
     """
     from grackle.adapters import registry
     from grackle.adapters.base import ParseOptions
@@ -143,6 +379,17 @@ def _build_static_graph(
         return None
 
     sig = _graph_signature(graph)
+
+    # Belt-and-braces containment. _maybe_inject_predicted_heat contains the
+    # ML package's failures itself (MLBridgeError), but it also does its own
+    # dict/hashing work on adapter-supplied nodes; nothing about an optional
+    # overlay may take down the static-graph push (or, via _watch_loop's
+    # outer handler, permanently stop watch mode).
+    try:
+        _maybe_inject_predicted_heat(graph, predicted_ctx)
+    except Exception as exc:  # pragma: no cover — defensive, see docstring
+        log.warning("predicted_heat injection failed", error=str(exc), root=str(root))
+
     cached = meta_cache.get(sig)
     if cached is not None:
         graph.setdefault("metadata", {}).update(cached)
@@ -150,10 +397,15 @@ def _build_static_graph(
         from grackle.graph_analysis import enrich_metadata
 
         enrich_metadata(graph)
-        meta_cache[sig] = {
-            "hub_score": graph["metadata"]["hub_score"],
-            "cycles": graph["metadata"]["cycles"],
-        }
+        _cache_bounded(
+            meta_cache,
+            sig,
+            {
+                "hub_score": graph["metadata"]["hub_score"],
+                "cycles": graph["metadata"]["cycles"],
+            },
+            _META_CACHE_MAX,
+        )
 
     return graph
 
@@ -162,9 +414,10 @@ async def _push_static_graph(
     ws: ServerConnection,
     root: Path,
     meta_cache: dict[tuple[int, int, int], dict[str, Any]],
+    predicted_ctx: _PredictedHeatContext,
 ) -> None:
     """Build the static graph (if supported) and push it to one connection."""
-    graph = _build_static_graph(root, meta_cache)
+    graph = _build_static_graph(root, meta_cache, predicted_ctx)
     if graph is None:
         return
 
@@ -181,6 +434,7 @@ async def _watch_loop(
     root: Path,
     connections: set[ServerConnection],
     meta_cache: dict[tuple[int, int, int], dict[str, Any]],
+    predicted_ctx: _PredictedHeatContext,
     interval: float,
     *,
     executor: concurrent.futures.ThreadPoolExecutor,
@@ -241,7 +495,9 @@ async def _watch_loop(
             if not connections:
                 continue
 
-            graph = await loop.run_in_executor(executor, _build_static_graph, root, meta_cache)
+            graph = await loop.run_in_executor(
+                executor, _build_static_graph, root, meta_cache, predicted_ctx
+            )
             if graph is None:
                 continue
 
@@ -548,6 +804,7 @@ async def serve(
     watch: bool = False,
     watch_interval: float = 0.3,
     watch_poll: bool = False,
+    model_path: Path | None = None,
 ) -> None:
     """Start the WebSocket server and run until cancelled.
 
@@ -576,6 +833,12 @@ async def serve(
                         ``watchfiles`` backend. Ignored when ``watch`` is False.
         watch_poll:     Force the stdlib mtime-poller even when ``watchfiles``
                         is installed. Ignored when ``watch`` is False.
+        model_path:     Explicit path to a ``heat-model.npz`` checkpoint
+                        (Phase 12.2). When ``None`` (default), each graph
+                        build resolves ``root/.grackle/heat-model.npz``
+                        fresh, so retraining is picked up without a restart.
+                        Absent/broken/gate-closed all degrade to no
+                        ``predicted_heat`` key — never a crash.
     """
     root_real = root.resolve()
 
@@ -590,6 +853,10 @@ async def serve(
     # Agent-side analysis cache (hub-score + cycles), shared across connects so
     # the Tarjan SCC pass runs once per distinct graph topology, not per tab.
     meta_cache: dict[tuple[int, int, int], dict[str, Any]] = {}
+
+    # predicted_heat context (Phase 12.2) — deliberately separate from
+    # meta_cache; see _PredictedHeatContext's docstring for why.
+    predicted_ctx = _PredictedHeatContext(model_path=model_path, root=root_real, cache={})
 
     # Registry of seekable/queryable sessions, keyed by session id.  Shared
     # across connections so a session loaded by one tab is queryable by all.
@@ -642,7 +909,7 @@ async def serve(
         tasks: list[asyncio.Task[None]] = []
         try:
             # Static graph first — guaranteed to arrive before any trace messages.
-            await _push_static_graph(ws, root_real, meta_cache)
+            await _push_static_graph(ws, root_real, meta_cache, predicted_ctx)
 
             # Flush ring-buffer history to late joiners (live mode only).
             if trace_source is None:
@@ -726,6 +993,7 @@ async def serve(
                         root_real,
                         connections,
                         meta_cache,
+                        predicted_ctx,
                         watch_interval,
                         executor=watch_executor,
                         force_poll=watch_poll,

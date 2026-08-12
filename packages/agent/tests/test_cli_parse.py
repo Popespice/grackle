@@ -72,3 +72,29 @@ def test_languages_shows_python() -> None:
     result = CliRunner().invoke(main, ["languages"])
     assert result.exit_code == 0
     assert "python" in result.output
+
+
+# ---------------------------------------------------------------------------
+# _detect_and_parse (shared by `parse`'s auto-detect branch and `learn`) —
+# neither command exercised the auto-detect no-match / multi-language paths
+# before this suite; covering it once here proves both callers correctly.
+# ---------------------------------------------------------------------------
+
+
+def test_parse_no_language_detected_is_usage_error(tmp_path: Path) -> None:
+    result = CliRunner().invoke(main, ["parse", str(tmp_path)])
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+    assert "no static parser detected" in result.output
+
+
+def test_parse_multi_language_merges_polyglot_graph(tmp_path: Path) -> None:
+    _write(tmp_path, "mod.py", "class Foo:\n    pass\n")
+    _write(tmp_path, "mod.ts", "class Bar {}\n")
+    result = CliRunner().invoke(main, ["parse", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert "merging polyglot graph" in result.stderr
+    graph = json.loads(result.stdout)
+    ids = {n["id"] for n in graph["nodes"]}
+    assert "mod.py:Foo" in ids
+    assert "mod.ts:Bar" in ids

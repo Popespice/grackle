@@ -84,10 +84,19 @@ def make_targets(node_ids: Sequence[str], heat: Mapping[str, int]) -> Array:
 
     All-zero (or empty) heat returns an all-zero array — there is nothing to
     normalize against.
+
+    Numerator and denominator both go through ``np.log1p`` — never
+    ``math.log1p`` for one of them. They are different implementations
+    (numpy's own vs. the platform libm) and may disagree by 1 ULP, which on
+    at least one Linux CI runner made the hottest node normalize to
+    ``1.0000000000000002`` — breaking the documented ``[0, 1]`` upper bound,
+    and only on that platform. Using one implementation for both makes the
+    max element cancel to exactly ``1.0`` by IEEE-754 construction
+    (``a / a == 1.0`` for any finite non-zero ``a``) on every platform.
     """
     counts = np.array([heat.get(nid, 0) for nid in node_ids], dtype=np.float64)
     max_count = float(counts.max()) if counts.size else 0.0
     if max_count <= 0.0:
         return np.zeros(counts.shape, dtype=np.float64)
-    result: Array = np.log1p(counts) / math.log1p(max_count)
+    result: Array = np.log1p(counts) / np.log1p(max_count)
     return result
