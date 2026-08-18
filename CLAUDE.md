@@ -187,10 +187,36 @@ graph, or one corrupt model evicts every live payload. Also fixed here, though i
 `ml/labels.py::make_targets` mixed `np.log1p` with `math.log1p` — different implementations that
 disagree by 1 ULP on some platforms, so the hottest node normalized to `1.0000000000000002`,
 breaking D12.2's `y ∈ [0,1]` bound on Linux only (macOS's libm agrees with numpy, so it never
-reproduced locally and read as a flake). Next: 12.3 (frontend predicted-heat overlay +
-LossCurvePanel), 12.4 (NetworkViewPanel), and 12.H (ship, ADRs 0029–0030, `v0.12.0` — still
-reserved, unconsumed). **Deferred to 13.0:** `serve --exclude` — `learn --exclude` currently warns
-about the resulting train/serve feature skew rather than fixing it. Full plan:
+reproduced locally and read as a flake). **12.3** — frontend: predicted-heat overlay +
+`LossCurvePanel` (blocks F0–F7) — **SHIPPED: [PR #81](https://github.com/Popespice/grackle/pull/81),
+squash-merged to main at `c3a21bf`.** Frontend-only consumer of 12.2's `metadata.predicted_heat`:
+a right-sidebar `PredictedHeatPanel` (Off/Predicted/Vs-actual modes, top-10 lists, vs-actual
+status chips) paints the graph via a new `predictedOverlay` cascade branch in `GraphCanvas`
+(inserted after `diffOverlay`, before the runtime heat-map — diff always wins); a bottom-dock
+`LossCurvePanel` extracts the NN's per-epoch loss/accuracy curve from `record_epoch` trace-beacon
+events (new pure modules `epochSeries.ts` + `lossCurveLayout.ts`, the `flameLayout.ts` split
+precedent) with hover tooltips and click-to-seek. `predictedHeat.ts`'s vs-actual classification
+mirrors `ml/labels.py`'s log1p normalization (JS `Math.log1p` treated as a third, slightly-
+divergent implementation absorbed by a ±0.25 threshold rather than chased to exact equality — the
+same lesson 12.2's `make_targets` fix already taught). **No wire-schema change; `check-parity`
+stays a no-op.** A user-run `/code-review PR 81` (13 findings — 2 real correctness bugs plus
+efficiency/reuse/cleanup) landed in a same-day follow-up commit before merge: (1)
+`PredictedHeatPanel`'s debounced overlay-push effect depended on `statusOverlay` unconditionally,
+so in "Predicted" mode a live-streaming session's per-batch churn kept re-arming the 150ms timer
+and the overlay never actually painted — fixed by selecting the mode's `activeOverlay` outside the
+effect so the dependency array only tracks what's actually pushed; (2) `lossCurveLayout.ts`'s
+accuracy axis was unclamped — `record_epoch`'s third field is accuracy in `[0,1]` for `train.py`'s
+classification loop but an unbounded validation loss for `heat_model.py`'s regression loop
+(`ml/heat_model.py:231`), both sharing the same beacon/axis, so an out-of-range value rendered
+off-canvas — fixed by clamping to the plot band. Also landed in the same commit: an incremental
+scan cache for `LossCurvePanel` (was O(N²) per live-streaming session), `countEvents`/`EpochPoint`
+deduped into shared modules, and `LossCurvePanel` now hides entirely for non-NN traces instead of
+a permanent dead row. CI saw two Windows-only flakes during the merge sequence
+(`CausalPathPanel.test.tsx` timeout, then the known pre-existing `test_two_sessions_back_to_back`
+race from 9.3) — both unrelated to the diff and confirmed transient via reruns; all four legs
+green before merge. Next: 12.4 (NetworkViewPanel), and 12.H (ship, ADRs 0029–0030, `v0.12.0` —
+still reserved, unconsumed). **Deferred to 13.0:** `serve --exclude` — `learn --exclude` currently
+warns about the resulting train/serve feature skew rather than fixing it. Full plan:
 `~/.claude/plans/as-phase-10-is-snazzy-sedgewick.md`.
 
 Granular per-sub-chunk implementation detail (Phase 8.5, 9.1–9.3, 10.1–10.7) has moved out
