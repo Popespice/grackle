@@ -7,6 +7,7 @@ import {
   screen,
 } from "@testing-library/react";
 import {
+  afterAll,
   afterEach,
   beforeAll,
   beforeEach,
@@ -22,12 +23,33 @@ import { FlameGraphPanel } from "./FlameGraphPanel";
 // clickable rectangles. getContext is stubbed to null (jsdom otherwise logs a
 // noisy "not implemented" error) so the draw effect no-ops — we test the
 // data/controls layer, not canvas pixels (same as GraphCanvas, untested).
+// Restored in afterAll — these patch shared jsdom prototypes (LossCurvePanel
+// precedent).
+let originalClientWidth: PropertyDescriptor | undefined;
+let originalGetContext: typeof HTMLCanvasElement.prototype.getContext;
+
 beforeAll(() => {
+  originalClientWidth = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "clientWidth"
+  );
+  originalGetContext = HTMLCanvasElement.prototype.getContext;
   Object.defineProperty(HTMLElement.prototype, "clientWidth", {
     configurable: true,
     get: () => 800,
   });
   HTMLCanvasElement.prototype.getContext = vi.fn(() => null);
+});
+
+afterAll(() => {
+  if (originalClientWidth) {
+    Object.defineProperty(
+      HTMLElement.prototype,
+      "clientWidth",
+      originalClientWidth
+    );
+  }
+  HTMLCanvasElement.prototype.getContext = originalGetContext;
 });
 
 afterEach(cleanup);

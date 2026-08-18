@@ -5,6 +5,7 @@ import type {
 } from "@grackle/shared-types";
 import { create } from "zustand";
 import type { DiffStatus } from "./diff";
+import type { PredictionStatus } from "./predictedHeat";
 
 interface GraphStoreState {
   graph: Graph | null;
@@ -67,6 +68,17 @@ interface GraphStoreState {
    * the user dismisses the overlay.
    */
   diffOverlay: Map<string, DiffStatus> | null;
+  /**
+   * Model-predicted per-node heat overlay for GraphCanvas (Phase 12.3).
+   * `null` = no overlay active. Set by PredictedHeatPanel when the user picks
+   * a mode other than "off"; cleared on graph change (node-id-scoped, same
+   * as `diffOverlay`), on a new trace session (vs-actual depends on the
+   * session's trace counts), or when the panel dismisses it.
+   */
+  predictedOverlay:
+    | { kind: "scores"; scores: Map<string, number>; max: number }
+    | { kind: "status"; statuses: Map<string, PredictionStatus> }
+    | null;
   // Graph actions
   setGraph: (graph: Graph) => void;
   selectNode: (nodeId: string | null) => void;
@@ -113,6 +125,12 @@ interface GraphStoreState {
   clearDiffBaseline: () => void;
   setDiffOverlay: (overlay: Map<string, DiffStatus>) => void;
   clearDiffOverlay: () => void;
+  setPredictedOverlay: (
+    overlay:
+      | { kind: "scores"; scores: Map<string, number>; max: number }
+      | { kind: "status"; statuses: Map<string, PredictionStatus> }
+  ) => void;
+  clearPredictedOverlay: () => void;
 }
 
 export const useGraphStore = create<GraphStoreState>()((set) => ({
@@ -139,6 +157,7 @@ export const useGraphStore = create<GraphStoreState>()((set) => ({
   agentHeat: null,
   diffBaseline: null,
   diffOverlay: null,
+  predictedOverlay: null,
   setGraph: (graph) =>
     set((state) => {
       // Preserve the selected node across a watch-mode re-push (10.6/10.7)
@@ -165,6 +184,10 @@ export const useGraphStore = create<GraphStoreState>()((set) => ({
         // on the same graph — that is the trace-vs-trace compare feature.)
         diffOverlay: null,
         diffBaseline: null,
+        // Same node-id-scoped reasoning as diffOverlay: a predicted overlay
+        // from the PRIOR graph would paint nodes that may no longer exist (or
+        // have shifted meaning) under the new one.
+        predictedOverlay: null,
       };
     }),
   selectNode: (nodeId) =>
@@ -214,6 +237,9 @@ export const useGraphStore = create<GraphStoreState>()((set) => ({
       agentHeat: null,
       // Clear diff overlay on new session — it will be recomputed by DiffPanel.
       diffOverlay: null,
+      // Vs-actual mode depends on the session's trace counts — mirrors the
+      // diffOverlay clear above, DiffPanel precedent.
+      predictedOverlay: null,
     }),
   addTraceEvent: (ev) =>
     set((state) => ({ traceEvents: state.traceEvents.concat([ev]) })),
@@ -278,4 +304,6 @@ export const useGraphStore = create<GraphStoreState>()((set) => ({
   clearDiffBaseline: () => set({ diffBaseline: null }),
   setDiffOverlay: (overlay) => set({ diffOverlay: overlay }),
   clearDiffOverlay: () => set({ diffOverlay: null }),
+  setPredictedOverlay: (overlay) => set({ predictedOverlay: overlay }),
+  clearPredictedOverlay: () => set({ predictedOverlay: null }),
 }));

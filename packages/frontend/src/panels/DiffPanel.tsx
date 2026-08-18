@@ -37,6 +37,7 @@ import {
   persistBaseline,
   restoreBaseline,
 } from "../graph/diffBaselinePersistence";
+import { countEvents } from "../graph/eventCounts";
 import { useGraphStore } from "../graph/useGraphStore";
 import { useRuntimeCoverage } from "../graph/useRuntimeCoverage";
 
@@ -107,17 +108,6 @@ const BTN: React.CSSProperties = {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/** Build a node->count map from trace events. */
-function countEvents(
-  events: Array<{ node_id: string }>
-): Record<string, number> {
-  const counts: Record<string, number> = {};
-  for (const ev of events) {
-    counts[ev.node_id] = (counts[ev.node_id] ?? 0) + 1;
-  }
-  return counts;
-}
 
 // ---------------------------------------------------------------------------
 // DiffPanel
