@@ -48,7 +48,10 @@ export interface EpochScanResult {
 
 // Matches a Python repr() float/int token: ordinary decimal (optionally with
 // a fractional part and/or exponent) or the literal `inf` / `-inf` / `nan`.
-const FLOAT = String.raw`-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|-?inf|nan`;
+// Exported (Phase 12.4): layerStats.ts builds its own arity-parameterized
+// regex from this same fragment for the record_layer_stats beacon's flat
+// (1 + 2L)-tuple repr, so the float-token grammar has exactly one definition.
+export const FLOAT = String.raw`-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|-?inf|nan`;
 const EPOCH_RET_RE = new RegExp(`^\\((\\d+), (${FLOAT}), (${FLOAT})\\)$`);
 
 /** Parse a single matched float/int token from `EPOCH_RET_RE`. `Number("inf")`
