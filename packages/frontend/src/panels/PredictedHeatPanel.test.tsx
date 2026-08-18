@@ -1,4 +1,4 @@
-import type { Graph } from "@grackle/shared-types";
+import type { Graph, TraceEvent } from "@grackle/shared-types";
 import {
   cleanup,
   fireEvent,
@@ -9,6 +9,16 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useGraphStore } from "../graph/useGraphStore";
 import { PredictedHeatPanel } from "./PredictedHeatPanel";
+
+function callEvent(nodeId: string, tsNs: number): TraceEvent {
+  return {
+    event: "call",
+    node_id: nodeId,
+    ts_ns: tsNs,
+    thread_id: 1,
+    frame_depth: 0,
+  };
+}
 
 function graphWithPredictedHeat(
   scores: Array<{ node_id: string; score: number }>,
@@ -189,6 +199,35 @@ describe("PredictedHeatPanel", () => {
     expect(items).toHaveLength(2);
     expect(items[0]).toHaveAttribute("title", "surprise1");
     expect(items[1]).toHaveAttribute("title", "surprise2");
+  });
+
+  it("regression: predicted mode still paints while traceEvents keeps changing (streaming must not starve the debounce)", async () => {
+    // Before the fix, the push effect depended on BOTH scoresOverlay and
+    // statusOverlay unconditionally — so in "predicted" mode, a churning
+    // statusOverlay (driven by currentCounts, which used to recompute on
+    // every traceEvents change regardless of mode) re-armed the debounce
+    // timer every batch, and setPredictedOverlay never survived long
+    // enough to fire.
+    useGraphStore.setState({
+      graph: graphWithPredictedHeat([{ node_id: "a", score: 0.9 }]),
+      traceSessionId: "s1",
+    });
+    const { rerender } = render(<PredictedHeatPanel />);
+    fireEvent.click(screen.getByRole("button", { name: "Predicted" }));
+
+    for (let i = 0; i < 5; i++) {
+      useGraphStore.setState({ traceEvents: [callEvent(`n${i}`, i)] });
+      rerender(<PredictedHeatPanel />);
+      await new Promise((resolve) => setTimeout(resolve, 40)); // < 150ms debounce
+    }
+
+    await waitFor(
+      () => {
+        const overlay = useGraphStore.getState().predictedOverlay;
+        expect(overlay?.kind).toBe("scores");
+      },
+      { timeout: 1000 }
+    );
   });
 
   it("shows the top-predicted list with the highest score first", () => {

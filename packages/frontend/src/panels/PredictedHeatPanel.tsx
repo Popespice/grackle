@@ -30,6 +30,7 @@
 
 import type { JSX } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { countEvents } from "../graph/eventCounts";
 import { heatColor } from "../graph/heatColor";
 import {
   PREDICTION_STATUS_COLORS,
@@ -126,17 +127,10 @@ const LIST_ITEM_BUTTON_STYLE: React.CSSProperties = {
   textAlign: "left",
 };
 
-/** Build a node->count map from trace events — DiffPanel's local helper,
- *  copied verbatim (DiffPanel untouched; dedup noted as post-12.H cleanup). */
-function countEvents(
-  events: Array<{ node_id: string }>
-): Record<string, number> {
-  const counts: Record<string, number> = {};
-  for (const ev of events) {
-    counts[ev.node_id] = (counts[ev.node_id] ?? 0) + 1;
-  }
-  return counts;
-}
+/** Stable empty-object reference for the "not in vs-actual mode" case below —
+ *  keeps currentCounts' identity constant across renders instead of minting
+ *  a fresh `{}` every time, so downstream memos keyed on it don't churn. */
+const EMPTY_COUNTS: Record<string, number> = {};
 
 interface Swatch {
   nodeId: string;
@@ -206,11 +200,15 @@ export function PredictedHeatPanel(): JSX.Element | null {
   );
 
   // Current node->count snapshot: prefer agent heat, fall back to local event
-  // counting — DiffPanel's currentCounts, verbatim.
+  // counting — DiffPanel's currentCounts precedent. Only vs-actual mode
+  // reads this (statusOverlay, underTop10) — short-circuit to a stable
+  // empty object otherwise, so a live-streaming session doesn't pay a full
+  // O(events) scan every batch while the panel is off or in predicted mode.
   const currentCounts = useMemo<Record<string, number>>(() => {
+    if (mode !== "vs-actual") return EMPTY_COUNTS;
     if (agentHeat !== null) return agentHeat;
     return countEvents(traceEvents);
-  }, [agentHeat, traceEvents]);
+  }, [mode, agentHeat, traceEvents]);
 
   // Split memos so scores mode (which only depends on the static `parsed`
   // heat, not the live-streaming `currentCounts`) does not recompute — and
@@ -235,39 +233,46 @@ export function PredictedHeatPanel(): JSX.Element | null {
     [parsed, currentCounts]
   );
 
+  // The overlay this mode would push, selected OUTSIDE the effect so the
+  // effect's dependency array can key on this single value rather than both
+  // scoresOverlay and statusOverlay unconditionally. That distinction is
+  // load-bearing: scoresOverlay's identity is stable across live batches
+  // (it depends only on `parsed`, not `currentCounts` — the whole point of
+  // the split-memo guard above), but statusOverlay's identity churns every
+  // batch in vs-actual mode. Depending on both here would re-arm the
+  // debounce timer on every statusOverlay change EVEN IN PREDICTED MODE
+  // (mode === "predicted" reads scoresOverlay, but the effect still re-ran
+  // and rescheduled its timer because statusOverlay, an unused dependency,
+  // kept changing identity) — during streaming the timer would never
+  // survive long enough to fire, so setPredictedOverlay would never be
+  // called and the graph would never actually paint.
+  const activeOverlay =
+    mode === "off"
+      ? null
+      : mode === "predicted"
+        ? scoresOverlay
+        : statusOverlay;
+
   // Push the overlay to the graph only when the user has enabled it.
   // Debounced (OVERLAY_DEBOUNCE_MS) so live streaming — which recomputes
-  // currentCounts/statusOverlay every batch in vs-actual mode — does not
-  // reset Sigma's nodeReducer on every frame (DiffPanel precedent). This
-  // single null-check ALSO covers the "payload disappeared" case (a
-  // watch-mode re-push without a model): setGraph clears predictedOverlay
-  // (F0) and `parsed` recomputes to null in the same render, so
-  // scoresOverlay/statusOverlay both go null and this effect clears again —
-  // no separate effect needed.
+  // statusOverlay every batch in vs-actual mode — does not reset Sigma's
+  // nodeReducer on every frame (DiffPanel precedent). This single
+  // null-check ALSO covers the "payload disappeared" case (a watch-mode
+  // re-push without a model): setGraph clears predictedOverlay (F0) and
+  // `parsed` recomputes to null in the same render, so activeOverlay goes
+  // null and this effect clears again — no separate effect needed.
   useEffect(() => {
-    const overlay =
-      mode === "off"
-        ? null
-        : mode === "predicted"
-          ? scoresOverlay
-          : statusOverlay;
-    if (overlay === null) {
+    if (activeOverlay === null) {
       clearPredictedOverlay();
       return;
     }
     const timer = setTimeout(() => {
-      setPredictedOverlay(overlay);
+      setPredictedOverlay(activeOverlay);
     }, OVERLAY_DEBOUNCE_MS);
     return () => {
       clearTimeout(timer);
     };
-  }, [
-    mode,
-    scoresOverlay,
-    statusOverlay,
-    setPredictedOverlay,
-    clearPredictedOverlay,
-  ]);
+  }, [activeOverlay, setPredictedOverlay, clearPredictedOverlay]);
 
   // Ensure the overlay is removed when the panel unmounts.
   useEffect(() => {
@@ -294,7 +299,10 @@ export function PredictedHeatPanel(): JSX.Element | null {
       .slice(0, 10)
       .map(([nodeId, score]) => ({
         nodeId,
-        color: heatColor(parsed.max > 0 ? score / parsed.max : 0),
+        // parsePredictedHeat guarantees max > 0 for any non-null result
+        // (predictedHeat.ts), and `parsed` is that same result — no guard
+        // needed here.
+        color: heatColor(score / parsed.max),
         detail: score.toFixed(4),
       }));
   }, [parsed]);

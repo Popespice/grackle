@@ -12,12 +12,9 @@
  * same x-axis (epoch, linear) and the same plotted pixel band.
  */
 
-export interface EpochPoint {
-  epoch: number;
-  loss: number;
-  accuracy: number;
-  eventIndex: number;
-}
+import type { EpochPoint } from "./epochSeries";
+
+export type { EpochPoint } from "./epochSeries";
 
 export interface AxisTick {
   /** pixel coordinate (x for xTicks, y for lossTicks/accTicks) */
@@ -118,9 +115,17 @@ export function layoutLossCurve(
   };
 
   // Accuracy's range is the fixed [0, 1] proportion scale, independent of
-  // the loss axis — no flat-baseline special case needed here.
-  const yForAcc = (acc: number): number =>
-    plotBottom - acc * (plotBottom - plotTop);
+  // the loss axis — no flat-baseline special case needed here. Clamped:
+  // record_epoch's third field is "accuracy" (in [0,1]) for train.py's
+  // classification loop, but a raw, unbounded validation loss for
+  // heat_model.py's regression loop (packages/nn/src/grackle_nn/ml/
+  // heat_model.py:231) — both share this beacon and thus this axis. An
+  // out-of-range value must draw pinned to the boundary, not vanish off
+  // the canvas.
+  const yForAcc = (acc: number): number => {
+    const clamped = Math.max(0, Math.min(1, acc));
+    return plotBottom - clamped * (plotBottom - plotTop);
+  };
 
   const lossPoints = points.map((p) => ({
     x: xForEpoch(p.epoch),

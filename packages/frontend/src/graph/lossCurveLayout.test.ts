@@ -130,6 +130,25 @@ describe("layoutLossCurve — hitTest", () => {
   });
 });
 
+describe("layoutLossCurve — accPoints clamping", () => {
+  // record_epoch's third field is "accuracy" (in [0,1]) for train.py's
+  // classification loop, but a raw, unbounded validation loss for
+  // heat_model.py's regression loop — both share this beacon/axis. An
+  // out-of-range value must draw pinned to the plot boundary rather than
+  // rendering off-canvas.
+  it("clamps an accuracy value above 1 to the plot top", () => {
+    const points = [point(0, 1, 0.5), point(1, 0.5, 2.5)];
+    const layout = layoutLossCurve(points, WIDTH, HEIGHT);
+    expect(layout?.accPoints[1]).toEqual({ x: 200, y: PLOT_TOP });
+  });
+
+  it("clamps a negative accuracy value to the plot bottom", () => {
+    const points = [point(0, 1, 0.5), point(1, 0.5, -1)];
+    const layout = layoutLossCurve(points, WIDTH, HEIGHT);
+    expect(layout?.accPoints[1]).toEqual({ x: 200, y: PLOT_BOTTOM });
+  });
+});
+
 describe("layoutLossCurve — degenerate inputs", () => {
   it("returns null for zero points", () => {
     expect(layoutLossCurve([], WIDTH, HEIGHT)).toBeNull();

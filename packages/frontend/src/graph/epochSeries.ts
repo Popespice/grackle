@@ -37,6 +37,15 @@ export interface EpochSeries {
   dropped: number;
 }
 
+/** A single scan's raw findings, before the multi-run rule is applied —
+ *  the incremental-scan cache (LossCurvePanel) accumulates these across
+ *  calls; run-splitting is then re-derived cheaply from the full
+ *  accumulated list via `computeRunsFromCandidates`. */
+export interface EpochScanResult {
+  candidates: EpochPoint[];
+  dropped: number;
+}
+
 // Matches a Python repr() float/int token: ordinary decimal (optionally with
 // a fractional part and/or exponent) or the literal `inf` / `-inf` / `nan`.
 const FLOAT = String.raw`-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|-?inf|nan`;
@@ -53,14 +62,19 @@ function parseFloatToken(token: string): number {
 }
 
 /**
- * Extract the training-loss curve from a raw trace-event array (must be a
- * from-index-0 prefix — see EpochPoint.eventIndex doc).
+ * Scan `events` for record_epoch candidates starting at `startIndex`
+ * (inclusive), reported with ABSOLUTE indices into `events` regardless of
+ * where the scan started. Pure and stateless — callers that want an
+ * incremental scan own the accumulation (see LossCurvePanel's scan cache).
  */
-export function extractEpochSeries(events: readonly TraceEvent[]): EpochSeries {
+export function scanEpochCandidates(
+  events: readonly TraceEvent[],
+  startIndex = 0
+): EpochScanResult {
   let dropped = 0;
   const candidates: EpochPoint[] = [];
 
-  for (let i = 0; i < events.length; i++) {
+  for (let i = startIndex; i < events.length; i++) {
     const ev = events[i];
     if (!ev) continue; // noUncheckedIndexedAccess guard
 
@@ -104,17 +118,26 @@ export function extractEpochSeries(events: readonly TraceEvent[]): EpochSeries {
     candidates.push({ epoch, loss, accuracy, eventIndex: i });
   }
 
-  // Multi-run rule: walk survivors in order, splitting into a new run
-  // whenever an epoch does not strictly increase over the current run's
-  // previous point. Only the last run's points are returned.
+  return { candidates, dropped };
+}
+
+/**
+ * Multi-run rule: walk candidates in order, splitting into a new run
+ * whenever an epoch does not strictly increase over the current run's
+ * previous point. Only the last run's points are returned, alongside the
+ * total number of runs detected. Cheap (O(candidates), not O(events)) —
+ * safe to re-run on every incremental scan update.
+ */
+export function computeRunsFromCandidates(candidates: readonly EpochPoint[]): {
+  points: EpochPoint[];
+  runs: number;
+} {
   let runs = 0;
   let currentRun: EpochPoint[] = [];
-  let lastRun: EpochPoint[] = [];
   for (const point of candidates) {
     const prev = currentRun[currentRun.length - 1];
     if (prev && point.epoch <= prev.epoch) {
       runs += 1;
-      lastRun = currentRun;
       currentRun = [point];
     } else {
       currentRun.push(point);
@@ -122,8 +145,18 @@ export function extractEpochSeries(events: readonly TraceEvent[]): EpochSeries {
   }
   if (currentRun.length > 0) {
     runs += 1;
-    lastRun = currentRun;
   }
+  return { points: currentRun, runs };
+}
 
-  return { points: lastRun, runs, dropped };
+/**
+ * Extract the training-loss curve from a raw trace-event array (must be a
+ * from-index-0 prefix — see EpochPoint.eventIndex doc). A one-shot
+ * convenience over `scanEpochCandidates` + `computeRunsFromCandidates` for
+ * callers that don't need incremental scanning.
+ */
+export function extractEpochSeries(events: readonly TraceEvent[]): EpochSeries {
+  const { candidates, dropped } = scanEpochCandidates(events, 0);
+  const { points, runs } = computeRunsFromCandidates(candidates);
+  return { points, runs, dropped };
 }

@@ -1,6 +1,11 @@
+import type { TraceEvent } from "@grackle/shared-types";
 import type { JSX } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { extractEpochSeries } from "../graph/epochSeries";
+import {
+  computeRunsFromCandidates,
+  type EpochPoint,
+  scanEpochCandidates,
+} from "../graph/epochSeries";
 import {
   type CurveLayout,
   layoutLossCurve,
@@ -109,7 +114,54 @@ export function LossCurvePanel(): JSX.Element | null {
   const [width, setWidth] = useState(0);
   const [hover, setHover] = useState<HoverState | null>(null);
 
-  const series = useMemo(() => extractEpochSeries(full.events), [full.events]);
+  // Incremental scan cache: buffered (live-streaming) sessions grow
+  // `full.events` via append-only `.concat()` (useGraphStore.ts's
+  // addTraceEvents), so re-scanning the WHOLE array from scratch on every
+  // batch is O(events) work repeated every ~150ms for the entire session
+  // duration — wasted for the overwhelming majority of traces, which
+  // contain zero record_epoch events at all. Only the newly-appended tail
+  // is scanned; `computeRunsFromCandidates` is then cheaply re-derived
+  // (O(candidates), not O(events)) from the full accumulated candidate
+  // list every time.
+  //
+  // `scanCacheRef.lastEvent` guards against anything OTHER than pure
+  // append — a new trace session (full.events swaps to a different array)
+  // or a seekable reload — by checking that the event this cache last
+  // scanned up to is still the same object reference at the same index; a
+  // mismatch (or the array having shrunk below what was scanned) forces a
+  // full rescan from index 0.
+  const scanCacheRef = useRef<{
+    scanned: number;
+    candidates: EpochPoint[];
+    dropped: number;
+    lastEvent: TraceEvent | undefined;
+  }>({ scanned: 0, candidates: [], dropped: 0, lastEvent: undefined });
+
+  const series = useMemo(() => {
+    const events = full.events;
+    const cache = scanCacheRef.current;
+    const stillValid =
+      cache.scanned === 0 ||
+      (cache.scanned <= events.length &&
+        events[cache.scanned - 1] === cache.lastEvent);
+
+    const startIndex = stillValid ? cache.scanned : 0;
+    const scanned = scanEpochCandidates(events, startIndex);
+    const candidates = stillValid
+      ? cache.candidates.concat(scanned.candidates)
+      : scanned.candidates;
+    const dropped = (stillValid ? cache.dropped : 0) + scanned.dropped;
+
+    scanCacheRef.current = {
+      scanned: events.length,
+      candidates,
+      dropped,
+      lastEvent: events[events.length - 1],
+    };
+
+    const { points, runs } = computeRunsFromCandidates(candidates);
+    return { points, runs, dropped };
+  }, [full.events]);
 
   const layout: CurveLayout | null = useMemo(
     () => layoutLossCurve(series.points, width, CANVAS_HEIGHT),
@@ -243,6 +295,18 @@ export function LossCurvePanel(): JSX.Element | null {
   // ── EARLY RETURN (after all hooks) ──────────────────────────────────────
   if (traceSessionId === null) return null;
 
+  // Hide entirely, rather than showing a permanent "No learning-loop
+  // events" row, once we KNOW there are none — buffered mode always knows
+  // (full.events is the live trace), and seekable mode knows once its
+  // prefix has loaded. While a seekable prefix is still unloaded we
+  // genuinely don't know yet without paging it in, so the "Load loss
+  // curve" affordance below still shows (same load-to-find-out precedent
+  // as ValueInspector/CausalPath's own seekable panels).
+  const knowsThereAreNoEpochs =
+    (prefixState.status === "buffered" || prefixState.status === "ready") &&
+    series.points.length === 0;
+  if (knowsThereAreNoEpochs) return null;
+
   const hoverPoint =
     hover !== null ? (series.points[hover.index] ?? null) : null;
 
@@ -268,7 +332,18 @@ export function LossCurvePanel(): JSX.Element | null {
       );
     }
 
-    if (series.points.length < 2) {
+    if (series.points.length === 1) {
+      return (
+        <div style={MUTED}>
+          Only 1 epoch recorded so far — need at least 2 to draw a curve.
+        </div>
+      );
+    }
+    // series.points.length === 0 is handled by the top-level
+    // knowsThereAreNoEpochs early return once the status here (loading/
+    // error/unloaded already handled above) implies a "ready"/"buffered"
+    // state — unreachable here, kept only as a defensive fallback.
+    if (series.points.length === 0) {
       return (
         <div style={MUTED}>
           No learning-loop (record_epoch) events in this trace.
@@ -287,6 +362,14 @@ export function LossCurvePanel(): JSX.Element | null {
           </span>
           {series.runs > 1 && (
             <span style={MUTED}>showing latest of {series.runs} runs</span>
+          )}
+          {series.dropped > 0 && (
+            <span
+              style={{ color: "var(--color-warning)" }}
+              title="record_epoch events whose loss/accuracy was non-finite (inf/nan) — likely a diverged run"
+            >
+              {series.dropped} dropped (non-finite)
+            </span>
           )}
         </div>
         {traceSeekable && full.truncated && (
@@ -331,7 +414,7 @@ export function LossCurvePanel(): JSX.Element | null {
               }}
             >
               epoch {hoverPoint.epoch} · loss {hoverPoint.loss.toFixed(4)} · acc{" "}
-              {hoverPoint.accuracy.toFixed(4)}
+              {(hoverPoint.accuracy * 100).toFixed(1)}%
             </div>
           )}
         </div>

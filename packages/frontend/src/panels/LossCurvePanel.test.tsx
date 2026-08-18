@@ -1,6 +1,7 @@
 import type { TraceEvent } from "@grackle/shared-types";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import {
+  afterAll,
   afterEach,
   beforeAll,
   beforeEach,
@@ -31,13 +32,35 @@ function fullTrace(over: Partial<UseFullTraceResult> = {}): UseFullTraceResult {
 // jsdom reports clientWidth 0; give the container a fixed width so
 // layoutLossCurve yields a real, clickable layout. getContext is stubbed to
 // null (FlameGraphPanel precedent) so the paint effect no-ops — we test the
-// data/controls/interaction layer, not canvas pixels.
+// data/controls/interaction layer, not canvas pixels. Restored in afterAll:
+// these patch shared jsdom prototypes, and Vitest's default isolate:true is
+// what makes that safe today — a leaked patch would silently break layout
+// measurement in any other suite sharing the worker.
+let originalClientWidth: PropertyDescriptor | undefined;
+let originalGetContext: typeof HTMLCanvasElement.prototype.getContext;
+
 beforeAll(() => {
+  originalClientWidth = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "clientWidth"
+  );
+  originalGetContext = HTMLCanvasElement.prototype.getContext;
   Object.defineProperty(HTMLElement.prototype, "clientWidth", {
     configurable: true,
     get: () => 800,
   });
   HTMLCanvasElement.prototype.getContext = vi.fn(() => null);
+});
+
+afterAll(() => {
+  if (originalClientWidth) {
+    Object.defineProperty(
+      HTMLElement.prototype,
+      "clientWidth",
+      originalClientWidth
+    );
+  }
+  HTMLCanvasElement.prototype.getContext = originalGetContext;
 });
 
 function unrelated(id: string, tsNs: number): TraceEvent {
@@ -97,23 +120,23 @@ describe("LossCurvePanel", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("shows a placeholder when fewer than 2 epoch points are present (buffered)", () => {
+  it("renders nothing for a buffered session with zero record_epoch events (non-NN trace)", () => {
     mockUseFullTrace.mockReturnValue(fullTrace({ events: [], loaded: true }));
     useGraphStore.setState({ traceSessionId: "s1" });
-    render(<LossCurvePanel />);
-    expect(
-      screen.getByText("No learning-loop (record_epoch) events in this trace.")
-    ).toBeInTheDocument();
+    const { container } = render(<LossCurvePanel />);
+    expect(container.firstChild).toBeNull();
   });
 
-  it("shows a placeholder for a single record_epoch event (still < 2 points)", () => {
+  it("shows a distinct message for a single record_epoch event (still < 2 points, but not zero)", () => {
     mockUseFullTrace.mockReturnValue(
       fullTrace({ events: [epochRet(0, 1.0, 0.5)], loaded: true })
     );
     useGraphStore.setState({ traceSessionId: "s1" });
     render(<LossCurvePanel />);
     expect(
-      screen.getByText("No learning-loop (record_epoch) events in this trace.")
+      screen.getByText(
+        "Only 1 epoch recorded so far — need at least 2 to draw a curve."
+      )
     ).toBeInTheDocument();
   });
 
@@ -234,5 +257,95 @@ describe("LossCurvePanel", () => {
 
     // The epoch-1 return event is THREE_EPOCH_EVENTS[3].
     expect(useGraphStore.getState().tracePlayhead).toBe(3);
+  });
+
+  it("shows the dropped count when a record_epoch tuple had a non-finite value", () => {
+    const events = THREE_EPOCH_EVENTS.concat([
+      epochRet(3, Number.NaN, 0.9), // parses inf/nan tokens via the string form below
+    ]);
+    // epochRet's template renders NaN as the literal string "NaN", not the
+    // Python repr "nan" the regex expects — build the malformed-but-shaped
+    // event directly so it matches EPOCH_RET_RE and gets dropped as
+    // non-finite, exercising the same path epochSeries.test.ts pins.
+    events[events.length - 1] = {
+      event: "return",
+      node_id: "grackle_nn/metrics.py:record_epoch",
+      ts_ns: 3,
+      thread_id: 1,
+      frame_depth: 0,
+      values: { ret: "(3, inf, nan)" },
+    };
+    mockUseFullTrace.mockReturnValue(fullTrace({ events, loaded: true }));
+    useGraphStore.setState({ traceSessionId: "s1" });
+    render(<LossCurvePanel />);
+    expect(screen.getByText("1 dropped (non-finite)")).toBeInTheDocument();
+  });
+
+  it("does not show a dropped count when nothing was dropped", () => {
+    mockUseFullTrace.mockReturnValue(
+      fullTrace({ events: THREE_EPOCH_EVENTS, loaded: true })
+    );
+    useGraphStore.setState({ traceSessionId: "s1" });
+    render(<LossCurvePanel />);
+    expect(screen.queryByText(/dropped/)).toBeNull();
+  });
+
+  it("hover tooltip renders accuracy as a percentage, matching the axis units", () => {
+    mockUseFullTrace.mockReturnValue(
+      fullTrace({ events: THREE_EPOCH_EVENTS, loaded: true })
+    );
+    useGraphStore.setState({ traceSessionId: "s1" });
+    render(<LossCurvePanel />);
+
+    const canvas = screen.getByLabelText("Loss curve canvas");
+    // Epoch 1 (accuracy 0.7) sits at x=400, same geometry as the
+    // click-to-seek test above.
+    fireEvent.mouseMove(canvas, { clientX: 400, clientY: 50 });
+
+    expect(screen.getByText(/acc 70\.0%/)).toBeInTheDocument();
+  });
+
+  it("incremental scan across live-streaming growth matches a fresh full scan", () => {
+    // Mirrors buffered mode's append-only growth (traceEvents.concat(batch)
+    // — useGraphStore.ts's addTraceEvents): each stage's array is a literal
+    // prefix of the next, reusing the SAME element references, which is
+    // exactly what the scan cache's incremental fast path assumes. This is
+    // a correctness regression test for that cache, not a performance test.
+    const stage1 = THREE_EPOCH_EVENTS.slice(0, 4); // epoch0, epoch1 returns
+    mockUseFullTrace.mockReturnValue(
+      fullTrace({ events: stage1, loaded: true })
+    );
+    useGraphStore.setState({ traceSessionId: "s1" });
+    const { rerender } = render(<LossCurvePanel />);
+    expect(screen.getByText("2 epochs")).toBeInTheDocument();
+
+    const stage2 = stage1.concat(THREE_EPOCH_EVENTS.slice(4)); // + epoch2
+    mockUseFullTrace.mockReturnValue(
+      fullTrace({ events: stage2, loaded: true })
+    );
+    rerender(<LossCurvePanel />);
+    expect(screen.getByText("3 epochs")).toBeInTheDocument();
+  });
+
+  it("a new session after growth forces a full rescan instead of reusing the stale cache", () => {
+    const stage1 = THREE_EPOCH_EVENTS.slice(0, 4); // 2 epochs
+    mockUseFullTrace.mockReturnValue(
+      fullTrace({ events: stage1, loaded: true })
+    );
+    useGraphStore.setState({ traceSessionId: "s1" });
+    const { rerender } = render(<LossCurvePanel />);
+    expect(screen.getByText("2 epochs")).toBeInTheDocument();
+
+    // A brand-new session's events array is unrelated to the old one (not
+    // a grown prefix) — the cache's lastEvent check must detect this and
+    // rescan from scratch rather than blindly trusting `scanned` as a
+    // valid starting offset into the new array.
+    const newSessionEvents = [epochRet(0, 2.0, 0.1), epochRet(1, 1.5, 0.3)];
+    mockUseFullTrace.mockReturnValue(
+      fullTrace({ events: newSessionEvents, loaded: true })
+    );
+    useGraphStore.setState({ traceSessionId: "s2" });
+    rerender(<LossCurvePanel />);
+    expect(screen.getByText("2 epochs")).toBeInTheDocument();
   });
 });

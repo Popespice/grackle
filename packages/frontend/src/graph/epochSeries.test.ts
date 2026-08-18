@@ -1,6 +1,10 @@
 import type { TraceEvent } from "@grackle/shared-types";
 import { describe, expect, it } from "vitest";
-import { extractEpochSeries } from "./epochSeries";
+import {
+  computeRunsFromCandidates,
+  extractEpochSeries,
+  scanEpochCandidates,
+} from "./epochSeries";
 
 /** Build a `record_epoch`-shaped (or arbitrary) `"return"` event. `ret` is the
  *  raw `values.ret` repr string; `ret_truncated` defaults to absent (not
@@ -179,5 +183,69 @@ describe("extractEpochSeries — multi-run rule", () => {
     expect(series.runs).toBe(2);
     expect(series.points).toHaveLength(1);
     expect(series.points[0]?.loss).toBe(0.9);
+  });
+});
+
+describe("scanEpochCandidates — startIndex (incremental-scan support)", () => {
+  const events = [
+    otherEvent("call", "grackle_nn/train.py:fit"), // 0
+    retEvent("grackle_nn/metrics.py:record_epoch", "(0, 1.0, 0.1)"), // 1
+    otherEvent("call", "grackle_nn/train.py:fit"), // 2
+    retEvent("grackle_nn/metrics.py:record_epoch", "(1, 0.5, 0.5)"), // 3
+  ];
+
+  it("defaults to scanning from index 0", () => {
+    const { candidates, dropped } = scanEpochCandidates(events);
+    expect(candidates.map((p) => p.eventIndex)).toEqual([1, 3]);
+    expect(dropped).toBe(0);
+  });
+
+  it("scans only the tail starting at startIndex, keeping absolute eventIndex", () => {
+    const { candidates } = scanEpochCandidates(events, 2);
+    expect(candidates.map((p) => p.eventIndex)).toEqual([3]);
+    expect(candidates[0]?.epoch).toBe(1);
+  });
+
+  it("returns nothing when startIndex is past the end", () => {
+    const { candidates, dropped } = scanEpochCandidates(events, events.length);
+    expect(candidates).toEqual([]);
+    expect(dropped).toBe(0);
+  });
+
+  it("splitting a scan at any boundary and concatenating matches one full scan", () => {
+    // Mirrors LossCurvePanel's incremental cache: a prefix scan (indices
+    // 0..split-1, via a truncated array — slicing from 0 never shifts
+    // earlier indices) plus a tail scan of the ORIGINAL array starting at
+    // `split` (correct absolute indices by construction) must together
+    // equal one full scan, for every possible split point.
+    const full = scanEpochCandidates(events, 0);
+    for (let split = 0; split <= events.length; split++) {
+      const first = scanEpochCandidates(events.slice(0, split), 0);
+      const second = scanEpochCandidates(events, split);
+      const combined = first.candidates.concat(second.candidates);
+      expect(combined).toEqual(full.candidates);
+      expect(first.dropped + second.dropped).toBe(full.dropped);
+    }
+  });
+});
+
+describe("computeRunsFromCandidates", () => {
+  it("mirrors extractEpochSeries' multi-run rule directly", () => {
+    const events = [
+      retEvent("grackle_nn/metrics.py:record_epoch", "(0, 1.0, 0.1)"),
+      retEvent("grackle_nn/metrics.py:record_epoch", "(1, 0.9, 0.2)"),
+      retEvent("grackle_nn/metrics.py:record_epoch", "(0, 0.7, 0.4)"), // restart
+    ];
+    const { candidates } = scanEpochCandidates(events);
+    const { points, runs } = computeRunsFromCandidates(candidates);
+    expect(runs).toBe(2);
+    expect(points.map((p) => p.epoch)).toEqual([0]);
+    expect(points[0]?.loss).toBe(0.7);
+  });
+
+  it("returns zero runs and empty points for no candidates", () => {
+    const { points, runs } = computeRunsFromCandidates([]);
+    expect(points).toEqual([]);
+    expect(runs).toBe(0);
   });
 });
