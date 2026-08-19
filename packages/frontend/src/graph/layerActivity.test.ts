@@ -4,60 +4,63 @@ import {
   type ActivitySegment,
   activityAt,
   buildActivityIndex,
+  scanActivitySegments,
 } from "./layerActivity";
 
 /**
  * The golden 34-event `train_step` call shape, transcribed verbatim from
- * `packages/nn/tests/test_traceability.py::_GOLDEN_34` (Phase 11.1/11.H).
- * Drift in either the plan's golden or this module fails this test — that
- * IS the point: layerActivity.ts leans on the golden's structural
- * invariants (no recursion, 3 Linear + 2 ReLU layers) rather than
- * re-deriving them.
+ * `packages/nn/tests/test_traceability.py::_GOLDEN_34` (Phase 11.1/11.H),
+ * with the `frame_depth` each event actually carries — read off
+ * `packages/nn/run-a.jsonl`, not invented: `train_step` runs at depth 3,
+ * `Sequential.forward`/`backward` and the loss/optimizer calls at 4, and the
+ * per-layer calls at 5. Depth is load-bearing now: it is what tells the state
+ * machine a frame has exited, including the exception case where no `return`
+ * event is ever emitted.
  */
-const GOLDEN_34: [string, string][] = [
-  ["call", "grackle_nn/train.py:train_step"],
-  ["call", "grackle_nn/model.py:Sequential.forward"],
-  ["call", "grackle_nn/layers.py:Linear.forward"],
-  ["return", "grackle_nn/layers.py:Linear.forward"],
-  ["call", "grackle_nn/layers.py:ReLU.forward"],
-  ["return", "grackle_nn/layers.py:ReLU.forward"],
-  ["call", "grackle_nn/layers.py:Linear.forward"],
-  ["return", "grackle_nn/layers.py:Linear.forward"],
-  ["call", "grackle_nn/layers.py:ReLU.forward"],
-  ["return", "grackle_nn/layers.py:ReLU.forward"],
-  ["call", "grackle_nn/layers.py:Linear.forward"],
-  ["return", "grackle_nn/layers.py:Linear.forward"],
-  ["return", "grackle_nn/model.py:Sequential.forward"],
-  ["call", "grackle_nn/losses.py:SoftmaxCrossEntropy.forward"],
-  ["return", "grackle_nn/losses.py:SoftmaxCrossEntropy.forward"],
-  ["call", "grackle_nn/losses.py:SoftmaxCrossEntropy.backward"],
-  ["return", "grackle_nn/losses.py:SoftmaxCrossEntropy.backward"],
-  ["call", "grackle_nn/model.py:Sequential.backward"],
-  ["call", "grackle_nn/layers.py:Linear.backward"],
-  ["return", "grackle_nn/layers.py:Linear.backward"],
-  ["call", "grackle_nn/layers.py:ReLU.backward"],
-  ["return", "grackle_nn/layers.py:ReLU.backward"],
-  ["call", "grackle_nn/layers.py:Linear.backward"],
-  ["return", "grackle_nn/layers.py:Linear.backward"],
-  ["call", "grackle_nn/layers.py:ReLU.backward"],
-  ["return", "grackle_nn/layers.py:ReLU.backward"],
-  ["call", "grackle_nn/layers.py:Linear.backward"],
-  ["return", "grackle_nn/layers.py:Linear.backward"],
-  ["return", "grackle_nn/model.py:Sequential.backward"],
-  ["call", "grackle_nn/optim.py:SGD.step"],
-  ["return", "grackle_nn/optim.py:SGD.step"],
-  ["call", "grackle_nn/model.py:Sequential.zero_grad"],
-  ["return", "grackle_nn/model.py:Sequential.zero_grad"],
-  ["return", "grackle_nn/train.py:train_step"],
+const GOLDEN_34: [string, string, number][] = [
+  ["call", "grackle_nn/train.py:train_step", 3],
+  ["call", "grackle_nn/model.py:Sequential.forward", 4],
+  ["call", "grackle_nn/layers.py:Linear.forward", 5],
+  ["return", "grackle_nn/layers.py:Linear.forward", 5],
+  ["call", "grackle_nn/layers.py:ReLU.forward", 5],
+  ["return", "grackle_nn/layers.py:ReLU.forward", 5],
+  ["call", "grackle_nn/layers.py:Linear.forward", 5],
+  ["return", "grackle_nn/layers.py:Linear.forward", 5],
+  ["call", "grackle_nn/layers.py:ReLU.forward", 5],
+  ["return", "grackle_nn/layers.py:ReLU.forward", 5],
+  ["call", "grackle_nn/layers.py:Linear.forward", 5],
+  ["return", "grackle_nn/layers.py:Linear.forward", 5],
+  ["return", "grackle_nn/model.py:Sequential.forward", 4],
+  ["call", "grackle_nn/losses.py:SoftmaxCrossEntropy.forward", 4],
+  ["return", "grackle_nn/losses.py:SoftmaxCrossEntropy.forward", 4],
+  ["call", "grackle_nn/losses.py:SoftmaxCrossEntropy.backward", 4],
+  ["return", "grackle_nn/losses.py:SoftmaxCrossEntropy.backward", 4],
+  ["call", "grackle_nn/model.py:Sequential.backward", 4],
+  ["call", "grackle_nn/layers.py:Linear.backward", 5],
+  ["return", "grackle_nn/layers.py:Linear.backward", 5],
+  ["call", "grackle_nn/layers.py:ReLU.backward", 5],
+  ["return", "grackle_nn/layers.py:ReLU.backward", 5],
+  ["call", "grackle_nn/layers.py:Linear.backward", 5],
+  ["return", "grackle_nn/layers.py:Linear.backward", 5],
+  ["call", "grackle_nn/layers.py:ReLU.backward", 5],
+  ["return", "grackle_nn/layers.py:ReLU.backward", 5],
+  ["call", "grackle_nn/layers.py:Linear.backward", 5],
+  ["return", "grackle_nn/layers.py:Linear.backward", 5],
+  ["return", "grackle_nn/model.py:Sequential.backward", 4],
+  ["call", "grackle_nn/optim.py:SGD.step", 4],
+  ["return", "grackle_nn/optim.py:SGD.step", 4],
+  ["call", "grackle_nn/model.py:Sequential.zero_grad", 4],
+  ["return", "grackle_nn/model.py:Sequential.zero_grad", 4],
+  ["return", "grackle_nn/train.py:train_step", 3],
 ];
 
-function toEvents(pairs: readonly [string, string][]): TraceEvent[] {
-  return pairs.map(([event, node_id]) => ({
+function toEvents(pairs: readonly [string, string, number][]): TraceEvent[] {
+  return pairs.map(([event, node_id, frame_depth]) => ({
     event,
     node_id,
     ts_ns: 0,
     thread_id: 1,
-    frame_depth: 0,
+    frame_depth,
   }));
 }
 
@@ -97,20 +100,20 @@ describe("buildActivityIndex — one train_step (golden 34)", () => {
 describe("buildActivityIndex — evaluate block", () => {
   it("marks forward calls inside evaluate() as forward-eval, not forward-train", () => {
     const events = toEvents([
-      ["call", "grackle_nn/train.py:evaluate"],
-      ["call", "grackle_nn/model.py:Sequential.forward"],
-      ["call", "grackle_nn/layers.py:Linear.forward"],
-      ["return", "grackle_nn/layers.py:Linear.forward"],
-      ["call", "grackle_nn/layers.py:ReLU.forward"],
-      ["return", "grackle_nn/layers.py:ReLU.forward"],
-      ["call", "grackle_nn/layers.py:Linear.forward"],
-      ["return", "grackle_nn/layers.py:Linear.forward"],
-      ["return", "grackle_nn/model.py:Sequential.forward"],
-      ["call", "grackle_nn/losses.py:SoftmaxCrossEntropy.forward"],
-      ["return", "grackle_nn/losses.py:SoftmaxCrossEntropy.forward"],
-      ["call", "grackle_nn/metrics.py:accuracy"], // unmatched — ignored, not an error
-      ["return", "grackle_nn/metrics.py:accuracy"],
-      ["return", "grackle_nn/train.py:evaluate"],
+      ["call", "grackle_nn/train.py:evaluate", 3],
+      ["call", "grackle_nn/model.py:Sequential.forward", 4],
+      ["call", "grackle_nn/layers.py:Linear.forward", 5],
+      ["return", "grackle_nn/layers.py:Linear.forward", 5],
+      ["call", "grackle_nn/layers.py:ReLU.forward", 5],
+      ["return", "grackle_nn/layers.py:ReLU.forward", 5],
+      ["call", "grackle_nn/layers.py:Linear.forward", 5],
+      ["return", "grackle_nn/layers.py:Linear.forward", 5],
+      ["return", "grackle_nn/model.py:Sequential.forward", 4],
+      ["call", "grackle_nn/losses.py:SoftmaxCrossEntropy.forward", 4],
+      ["return", "grackle_nn/losses.py:SoftmaxCrossEntropy.forward", 4],
+      ["call", "grackle_nn/metrics.py:accuracy", 4], // unmatched — ignored, not an error
+      ["return", "grackle_nn/metrics.py:accuracy", 4],
+      ["return", "grackle_nn/train.py:evaluate", 3],
     ]);
     const segments = buildActivityIndex(events, 3);
     expect(segments.map((s) => [s.phase, s.activeToken])).toEqual([
@@ -123,22 +126,117 @@ describe("buildActivityIndex — evaluate block", () => {
 
   it("reverts to forward-train once evaluate() has returned", () => {
     const events = toEvents([
-      ["call", "grackle_nn/train.py:evaluate"],
-      ["call", "grackle_nn/model.py:Sequential.forward"],
-      ["call", "grackle_nn/layers.py:Linear.forward"],
-      ["return", "grackle_nn/layers.py:Linear.forward"],
-      ["return", "grackle_nn/model.py:Sequential.forward"],
-      ["return", "grackle_nn/train.py:evaluate"],
-      ["call", "grackle_nn/train.py:train_step"],
-      ["call", "grackle_nn/model.py:Sequential.forward"],
-      ["call", "grackle_nn/layers.py:Linear.forward"],
-      ["return", "grackle_nn/layers.py:Linear.forward"],
+      ["call", "grackle_nn/train.py:evaluate", 3],
+      ["call", "grackle_nn/model.py:Sequential.forward", 4],
+      ["call", "grackle_nn/layers.py:Linear.forward", 5],
+      ["return", "grackle_nn/layers.py:Linear.forward", 5],
+      ["return", "grackle_nn/model.py:Sequential.forward", 4],
+      ["return", "grackle_nn/train.py:evaluate", 3],
+      ["call", "grackle_nn/train.py:train_step", 3],
+      ["call", "grackle_nn/model.py:Sequential.forward", 4],
+      ["call", "grackle_nn/layers.py:Linear.forward", 5],
+      ["return", "grackle_nn/layers.py:Linear.forward", 5],
     ]);
     const segments = buildActivityIndex(events, 1);
     expect(segments.map((s) => s.phase)).toEqual([
       "forward-eval",
       "forward-train",
     ]);
+  });
+});
+
+describe("buildActivityIndex — a frame that exits via an exception", () => {
+  /**
+   * The discriminating case for keying on depth rather than on a `return`
+   * event. `tracer.py`'s PY_UNWIND callback does depth bookkeeping and emits
+   * NOTHING, so `evaluate` here never gets a `return`; the `"exception"` event
+   * RAISE emits cannot stand in for one either, since RAISE also fires for
+   * exceptions that are caught locally. Keyed on a boolean flag, `evaluate`
+   * would stay "open" forever and every later training forward would be
+   * mislabelled `forward-eval` for the rest of the trace.
+   */
+  const CRASHED = toEvents([
+    ["call", "grackle_nn/train.py:evaluate", 3],
+    ["call", "grackle_nn/model.py:Sequential.forward", 4],
+    ["call", "grackle_nn/layers.py:Linear.forward", 5],
+    ["exception", "grackle_nn/layers.py:Linear.forward", 5],
+    // No returns at all for Linear.forward / Sequential.forward / evaluate:
+    // the exception unwound all three. The next event is the caller resuming.
+    ["call", "grackle_nn/train.py:train_step", 3],
+    ["call", "grackle_nn/model.py:Sequential.forward", 4],
+    ["call", "grackle_nn/layers.py:Linear.forward", 5],
+    ["return", "grackle_nn/layers.py:Linear.forward", 5],
+  ]);
+
+  it("does not latch forward-eval past the unwound frame", () => {
+    const segments = buildActivityIndex(CRASHED, 1);
+    expect(segments.map((s) => [s.phase, s.activeToken])).toEqual([
+      ["forward-eval", 0],
+      ["forward-train", 0],
+    ]);
+  });
+
+  it("restarts the forward token counter for the post-crash pass", () => {
+    const segments = buildActivityIndex(CRASHED, 1);
+    // Not 1: `Sequential.forward` reopened, so this is the pass's FIRST layer.
+    expect(segments[1]?.activeToken).toBe(0);
+  });
+
+  it("ignores a depth signal from a different thread", () => {
+    const events: TraceEvent[] = [
+      {
+        event: "call",
+        node_id: "grackle_nn/train.py:evaluate",
+        ts_ns: 0,
+        thread_id: 1,
+        frame_depth: 3,
+      },
+      // A shallow event on ANOTHER thread says nothing about thread 1's stack.
+      {
+        event: "call",
+        node_id: "worker.py:tick",
+        ts_ns: 0,
+        thread_id: 2,
+        frame_depth: 0,
+      },
+      {
+        event: "call",
+        node_id: "grackle_nn/model.py:Sequential.forward",
+        ts_ns: 0,
+        thread_id: 1,
+        frame_depth: 4,
+      },
+      {
+        event: "call",
+        node_id: "grackle_nn/layers.py:Linear.forward",
+        ts_ns: 0,
+        thread_id: 1,
+        frame_depth: 5,
+      },
+    ];
+    expect(buildActivityIndex(events, 1)[0]?.phase).toBe("forward-eval");
+  });
+});
+
+describe("scanActivitySegments — incremental resume", () => {
+  it("matches a single full scan for every split point", () => {
+    const events = toEvents(GOLDEN_34);
+    const full = scanActivitySegments(events, TOKEN_COUNT, 0, undefined).items;
+    for (let split = 0; split <= events.length; split++) {
+      const first = scanActivitySegments(
+        events.slice(0, split),
+        TOKEN_COUNT,
+        0,
+        undefined
+      );
+      const second = scanActivitySegments(
+        events,
+        TOKEN_COUNT,
+        split,
+        first.carry
+      );
+      expect(first.items.concat(second.items)).toEqual(full);
+    }
   });
 });
 
@@ -176,11 +274,11 @@ describe("activityAt", () => {
     });
   });
 
-  it("binary-search boundary: fromIndex itself is excluded, fromIndex+1 includes it", () => {
+  it("boundary: fromIndex itself is INCLUDED (playheadLookup convention)", () => {
     // First forward segment fires at event index 2.
-    expect(activityAt(segments, 2)?.phase).toBe("idle"); // not yet active
-    expect(activityAt(segments, 3)?.phase).toBe("forward-train");
-    expect(activityAt(segments, 3)?.activeToken).toBe(0);
+    expect(activityAt(segments, 1)?.phase).toBe("idle"); // not yet
+    expect(activityAt(segments, 2)?.phase).toBe("forward-train");
+    expect(activityAt(segments, 2)?.activeToken).toBe(0);
   });
 
   it("tracks the segment forward through the whole sequence", () => {

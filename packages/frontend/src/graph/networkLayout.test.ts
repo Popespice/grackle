@@ -105,7 +105,9 @@ describe("layoutNetwork — the 64-neuron cap", () => {
     const col0 = layout?.columns[0];
     expect(col0?.count).toBe(100);
     expect(col0?.neurons).toHaveLength(MAX_NEURONS_PER_COLUMN);
-    expect(col0?.overflowLabel).toBe("×100");
+    // States what IS drawn: a bare "×100" read as "×100 not drawn" in the
+    // tooltip, claiming the whole column was omitted when 64 of it is shown.
+    expect(col0?.overflowLabel).toBe("64 of 100 shown");
   });
 
   it("does not cap a column at or under the limit", () => {
@@ -125,6 +127,27 @@ describe("layoutNetwork — the 64-neuron cap", () => {
     };
     const layout = layoutNetwork(spec, 400, 800);
     expect(layout?.bundles[0]?.pairs).toHaveLength(MAX_NEURONS_PER_COLUMN * 2);
+  });
+});
+
+describe("layoutNetwork — neuron radius", () => {
+  it("gives a lone neuron the full radius", () => {
+    const spec: NetworkSpec = {
+      tokens: [{ kind: "linear", inDim: 1, outDim: 1 }],
+      columns: [1, 1],
+    };
+    const layout = layoutNetwork(spec, 200, 300);
+    expect(layout?.columns[0]?.radius).toBe(7);
+  });
+
+  it("shrinks a multi-neuron column whose rows collapsed for want of height", () => {
+    // height < 2 * ROW_PADDING_Y leaves zero usable vertical room, so every
+    // neuron lands on the same y. Drawing those at the MAXIMUM radius (the
+    // lone-neuron case) would fuse the column into one solid blob.
+    const layout = layoutNetwork(TOY_SPEC, 200, 40);
+    expect(layout?.columns[0]?.neurons.map((n) => n.y)).toEqual([20, 20]);
+    expect(layout?.columns[0]?.radius).toBe(2);
+    expect(layout?.columns[1]?.radius).toBe(2);
   });
 });
 

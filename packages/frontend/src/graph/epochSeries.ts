@@ -1,4 +1,5 @@
 import type { TraceEvent } from "@grackle/shared-types";
+import { matchesBeaconNode } from "./beaconNode";
 
 /**
  * Training-loss curve extraction from a raw trace-event array (Phase 12.3).
@@ -54,10 +55,12 @@ export interface EpochScanResult {
 export const FLOAT = String.raw`-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|-?inf|nan`;
 const EPOCH_RET_RE = new RegExp(`^\\((\\d+), (${FLOAT}), (${FLOAT})\\)$`);
 
-/** Parse a single matched float/int token from `EPOCH_RET_RE`. `Number("inf")`
+/** Parse a single matched float/int token from a repr'd tuple. `Number("inf")`
  *  is `NaN` in JS, not `Infinity`, so the non-finite literals Python's repr()
- *  can produce must be special-cased before falling back to `Number()`. */
-function parseFloatToken(token: string): number {
+ *  can produce must be special-cased before falling back to `Number()`.
+ *  Exported alongside `FLOAT` (Phase 12.4) so the grammar and the decoder that
+ *  consumes it stay in one place — `layerStats.ts` parses the same tokens. */
+export function parseFloatToken(token: string): number {
   if (token === "inf") return Number.POSITIVE_INFINITY;
   if (token === "-inf") return Number.NEGATIVE_INFINITY;
   if (token === "nan") return Number.NaN;
@@ -83,13 +86,7 @@ export function scanEpochCandidates(
 
     if (ev.event !== "return") continue;
 
-    // Exact-or-slash-preceded match: a bare endsWith would also match a
-    // node_id like "pkg/mymetrics.py:record_epoch", which is NOT this beacon.
-    const nodeId = ev.node_id;
-    const isRecordEpoch =
-      nodeId === "metrics.py:record_epoch" ||
-      nodeId.endsWith("/metrics.py:record_epoch");
-    if (!isRecordEpoch) continue;
+    if (!matchesBeaconNode(ev.node_id, "metrics.py:record_epoch")) continue;
 
     const ret = ev.values?.ret;
     if (typeof ret !== "string") continue;
@@ -127,16 +124,21 @@ export function scanEpochCandidates(
 /**
  * Multi-run rule: walk candidates in order, splitting into a new run
  * whenever an epoch does not strictly increase over the current run's
- * previous point. Only the last run's points are returned, alongside the
+ * previous point. Generic over any `{epoch}`-bearing point (Phase 12.4:
+ * `layerStats.ts`'s per-epoch series is emitted by the same `train.fit` loop
+ * and must split runs identically, so it shares this function rather than
+ * carrying a second copy that could drift). Only the last run's points are returned, alongside the
  * total number of runs detected. Cheap (O(candidates), not O(events)) —
  * safe to re-run on every incremental scan update.
  */
-export function computeRunsFromCandidates(candidates: readonly EpochPoint[]): {
-  points: EpochPoint[];
+export function computeRunsFromCandidates<T extends { epoch: number }>(
+  candidates: readonly T[]
+): {
+  points: T[];
   runs: number;
 } {
   let runs = 0;
-  let currentRun: EpochPoint[] = [];
+  let currentRun: T[] = [];
   for (const point of candidates) {
     const prev = currentRun[currentRun.length - 1];
     if (prev && point.epoch <= prev.epoch) {

@@ -1,17 +1,23 @@
+import type { TraceEvent } from "@grackle/shared-types";
 import type { JSX } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { type EpochPoint, extractEpochSeries } from "../graph/epochSeries";
+import {
+  computeRunsFromCandidates,
+  type EpochPoint,
+  scanEpochCandidates,
+} from "../graph/epochSeries";
 import {
   type ActivityPhase,
+  type ActivityScanState,
   type ActivitySegment,
   activityAt,
-  buildActivityIndex,
+  scanActivitySegments,
 } from "../graph/layerActivity";
 import {
-  extractLayerStats,
   type LayerStatsMaxima,
   type LayerStatsPoint,
   maxima,
+  scanLayerStatsCandidates,
   statsAtPlayhead,
 } from "../graph/layerStats";
 import {
@@ -21,6 +27,8 @@ import {
   type NetworkLayout,
 } from "../graph/networkLayout";
 import { extractNetworkSpec, type NetworkSpec } from "../graph/networkSpec";
+import { lastAtOrBefore } from "../graph/playheadLookup";
+import { type Scanner, useAppendOnlyScan } from "../graph/useAppendOnlyScan";
 import { useFullTrace } from "../graph/useFullTrace";
 import { useGraphStore } from "../graph/useGraphStore";
 import { useSeekablePrefixState } from "../graph/useSeekablePrefixState";
@@ -104,22 +112,6 @@ function phaseLabel(phase: ActivityPhase): string {
   }
 }
 
-/** Last epoch point at or before `playhead` — same "last point reached"
- *  semantics as LossCurvePanel's playhead marker (`eventIndex <=
- *  playhead`), reading the SAME `extractEpochSeries` data for the header's
- *  `epoch N · loss … · acc …` readout. */
-function epochAtPlayhead(
-  points: readonly EpochPoint[],
-  playhead: number
-): EpochPoint | null {
-  let result: EpochPoint | null = null;
-  for (const p of points) {
-    if (p.eventIndex <= playhead) result = p;
-    else break;
-  }
-  return result;
-}
-
 function formatReadout(spec: NetworkSpec, epoch: EpochPoint | null): string {
   const model = `model: ${spec.columns.join("-")}`;
   if (!epoch) return model;
@@ -201,6 +193,11 @@ const BUTTON_STYLE: React.CSSProperties = {
   fontSize: "var(--text-xs)",
 };
 
+const CODE: React.CSSProperties = {
+  fontFamily: "var(--font-mono)",
+  color: "var(--color-accent)",
+};
+
 const LEGEND_ROW: React.CSSProperties = {
   display: "flex",
   flexWrap: "wrap",
@@ -254,7 +251,7 @@ function tooltipText(
     );
     if (!column) return "";
     return column.overflowLabel
-      ? `${column.caption} (${column.overflowLabel} not drawn)`
+      ? `${column.caption} (${column.overflowLabel})`
       : column.caption;
   }
   const bundleIndex = layout.bundles.findIndex(
@@ -262,8 +259,7 @@ function tooltipText(
   );
   const bundle = layout.bundles[bundleIndex];
   if (!bundle) return "";
-  const stat =
-    bundleIndex >= 0 ? statsPoint?.perLinear[bundleIndex] : undefined;
+  const stat = statsPoint?.perLinear[bundleIndex];
   if (!stat) return bundle.label;
   return `${bundle.label} · w ${stat.wRms.toFixed(3)} · dw ${stat.dwRms.toFixed(3)}`;
 }
@@ -439,30 +435,110 @@ export function NetworkViewPanel(): JSX.Element | null {
     return () => ro.disconnect();
   }, [containerEl]);
 
-  const spec = useMemo(() => extractNetworkSpec(full.events), [full.events]);
+  // Nothing below runs while the panel is a collapsed chip. Every scan here
+  // is O(total events) and buffered (live) sessions hand us a NEW array every
+  // rAF batch, so an ungated panel would re-scan the whole trace several times
+  // a second for a user who never opened it — on every session, including the
+  // overwhelming majority that contain no beacons at all.
+  const active = expanded && traceSessionId !== null;
 
+  // `record_architecture` is a one-shot beacon fired before training starts,
+  // so once found it can never change: latch it. That skips the rescan AND —
+  // the load-bearing part — keeps the object identity stable, without which
+  // the `layout` memo below would rebuild every bundle's full cartesian pair
+  // list (up to MAX_NEURONS_PER_COLUMN² objects per bundle) on every batch.
+  const specCacheRef = useRef<{
+    sessionId: string | null;
+    scanned: number;
+    lastEvent: TraceEvent | undefined;
+    spec: NetworkSpec | null;
+  }>({ sessionId: null, scanned: 0, lastEvent: undefined, spec: null });
+
+  const spec = useMemo(() => {
+    if (!active) {
+      specCacheRef.current = {
+        sessionId: null,
+        scanned: 0,
+        lastEvent: undefined,
+        spec: null,
+      };
+      return null;
+    }
+    const events = full.events;
+    const cache = specCacheRef.current;
+    // Same append-only validity check as useAppendOnlyScan: anything but a
+    // pure append (a new session, a seekable re-page) forces a rescan.
+    const appended =
+      cache.sessionId === traceSessionId &&
+      (cache.scanned === 0 ||
+        (cache.scanned <= events.length &&
+          events[cache.scanned - 1] === cache.lastEvent));
+    const found = appended
+      ? (cache.spec ?? extractNetworkSpec(events, cache.scanned))
+      : extractNetworkSpec(events, 0);
+    specCacheRef.current = {
+      sessionId: traceSessionId,
+      scanned: events.length,
+      lastEvent: events[events.length - 1],
+      spec: found,
+    };
+    return found;
+  }, [active, full.events, traceSessionId]);
+
+  const tokenCount = spec?.tokens.length ?? 0;
   const linearCount = useMemo(
     () => (spec ? spec.tokens.filter((t) => t.kind === "linear").length : 0),
     [spec]
   );
+  const scanning = active && spec !== null;
 
-  // Index/series/spec are memoized on the events array — an O(n) pass once
-  // per load; in buffered (live-streaming) mode this re-runs once per
-  // rAF-batched store update, which stays cheap at the trace sizes this
-  // panel targets (<=~25.8k events for the demo net) and is what makes live
-  // training visibly animate here without any bespoke animation loop.
-  const activitySegments = useMemo(
-    () => (spec ? buildActivityIndex(full.events, spec.tokens.length) : []),
-    [full.events, spec]
+  // Append-only incremental scans: only the newly-arrived tail is walked, so
+  // live training animates here without re-deriving the whole trace per frame.
+  const activityScan = useCallback<Scanner<ActivitySegment, ActivityScanState>>(
+    (events, startIndex, carry) =>
+      scanActivitySegments(events, tokenCount, startIndex, carry),
+    [tokenCount]
+  );
+  const { items: activitySegments } = useAppendOnlyScan(
+    full.events,
+    activityScan,
+    scanning
+  );
+
+  const statsScan = useCallback<Scanner<LayerStatsPoint, null>>(
+    (events, startIndex) =>
+      scanLayerStatsCandidates(events, linearCount, startIndex),
+    [linearCount]
+  );
+  const { items: statsCandidates } = useAppendOnlyScan(
+    full.events,
+    statsScan,
+    scanning
   );
   const statsSeries = useMemo(
-    () => (spec ? extractLayerStats(full.events, linearCount) : []),
-    [full.events, spec, linearCount]
+    () => computeRunsFromCandidates(statsCandidates).points,
+    [statsCandidates]
   );
   const statsMax = useMemo(() => maxima(statsSeries), [statsSeries]);
-  const epochSeries = useMemo(
-    () => extractEpochSeries(full.events),
-    [full.events]
+
+  const epochScan = useCallback<Scanner<EpochPoint, number>>(
+    (events, startIndex, carry) => {
+      const scanned = scanEpochCandidates(events, startIndex);
+      return {
+        items: scanned.candidates,
+        carry: (carry ?? 0) + scanned.dropped,
+      };
+    },
+    []
+  );
+  const { items: epochCandidates } = useAppendOnlyScan(
+    full.events,
+    epochScan,
+    scanning
+  );
+  const epochPoints = useMemo(
+    () => computeRunsFromCandidates(epochCandidates).points,
+    [epochCandidates]
   );
 
   const layout = useMemo(
@@ -482,8 +558,8 @@ export function NetworkViewPanel(): JSX.Element | null {
     [statsSeries, tracePlayhead]
   );
   const epochPoint = useMemo(
-    () => epochAtPlayhead(epochSeries.points, tracePlayhead),
-    [epochSeries.points, tracePlayhead]
+    () => lastAtOrBefore(epochPoints, tracePlayhead, (p) => p.eventIndex),
+    [epochPoints, tracePlayhead]
   );
 
   useEffect(() => {
@@ -518,6 +594,14 @@ export function NetworkViewPanel(): JSX.Element | null {
     [layout]
   );
   const onCanvasLeave = useCallback(() => setHover(null), []);
+
+  // Collapsing does not necessarily fire the canvas's mouseleave — closing the
+  // card from the keyboard leaves the pointer where it was — and `hover`
+  // survives the unmount, so a reopened card would paint a stale tooltip at a
+  // position the pointer is not at until the next mouse event.
+  useEffect(() => {
+    if (!expanded) setHover(null);
+  }, [expanded]);
 
   // ── EARLY RETURN (after all hooks) ──────────────────────────────────────
   if (traceSessionId === null) return null;
@@ -584,7 +668,20 @@ export function NetworkViewPanel(): JSX.Element | null {
 
       {(prefixState.status === "buffered" || prefixState.status === "ready") &&
         (spec === null ? (
-          <div>No network beacons (record_architecture) in this trace.</div>
+          prefixState.captureSeen ? (
+            <div>No network beacons (record_architecture) in this trace.</div>
+          ) : (
+            // The panel is built entirely out of captured return values, so
+            // "no beacons" is the wrong diagnosis when the run simply wasn't
+            // traced with values on — the beacons fired, they just carry no
+            // payload. Same hint ValueInspectorPanel/CausalPathPanel show.
+            <div>
+              No captured values in this trace — re-run with{" "}
+              <code style={CODE}>--capture-values</code> so the{" "}
+              <code style={CODE}>record_architecture</code> beacon carries the
+              model shape.
+            </div>
+          )
         ) : (
           <>
             {traceSeekable && full.truncated && (

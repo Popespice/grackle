@@ -76,112 +76,72 @@ afterAll(() => {
   HTMLCanvasElement.prototype.getContext = originalGetContext;
 });
 
-function retEvent(node_id: string, ret: string, index: number): TraceEvent {
-  return {
-    event: "return",
-    node_id,
-    ts_ns: index,
-    thread_id: 1,
-    frame_depth: 0,
-    values: { ret },
-  };
-}
-
-function callEvent(node_id: string, index: number): TraceEvent {
-  return { event: "call", node_id, ts_ns: index, thread_id: 1, frame_depth: 0 };
-}
-
 /**
  * A minimal single-Linear-layer "demo net" trace: one record_architecture
  * beacon, one train_step (forward -> loss -> loss-grad -> backward -> update
  * -> reset -> idle), one record_epoch return, one record_layer_stats return.
- * Indices below are absolute positions in this array — used directly by the
- * playhead tests rather than re-deriving them from layerActivity.test.ts's
- * golden-34 fixture (that module's own correctness is already pinned there;
- * this file only needs to prove NetworkViewPanel wires the data through).
+ *
+ * `frame_depth` mirrors the real shape (`packages/nn/run-a.jsonl`): train_step
+ * at 3, Sequential.forward/backward and the loss/optimizer calls at 4, the
+ * per-layer calls at 5. It is load-bearing — depth is what tells
+ * `layerActivity` a frame has exited, including the exception case where no
+ * `return` event is ever emitted.
+ *
+ * Indices in the comments are absolute positions in this array, used directly
+ * by the playhead tests rather than re-derived from layerActivity.test.ts's
+ * golden-34 fixture (that module's own correctness is pinned there; this file
+ * only needs to prove NetworkViewPanel wires the data through).
  */
-const NET_EVENTS: TraceEvent[] = [
-  retEvent("grackle_nn/metrics.py:record_architecture", "'linear:4:2'", 0), // 0
-  callEvent("grackle_nn/train.py:train_step", 1), // 1
-  callEvent("grackle_nn/model.py:Sequential.forward", 2), // 2
-  callEvent("grackle_nn/layers.py:Linear.forward", 3), // 3 <- forward-train segment fires here
-  retEvent("grackle_nn/layers.py:Linear.forward", "<ndarray>", 4), // 4
-  {
-    event: "return",
-    node_id: "grackle_nn/model.py:Sequential.forward",
-    ts_ns: 5,
-    thread_id: 1,
-    frame_depth: 0,
-  }, // 5
-  callEvent("grackle_nn/losses.py:SoftmaxCrossEntropy.forward", 6), // 6 <- loss
-  {
-    event: "return",
-    node_id: "grackle_nn/losses.py:SoftmaxCrossEntropy.forward",
-    ts_ns: 7,
-    thread_id: 1,
-    frame_depth: 0,
-  }, // 7
-  callEvent("grackle_nn/losses.py:SoftmaxCrossEntropy.backward", 8), // 8 <- loss-grad
-  {
-    event: "return",
-    node_id: "grackle_nn/losses.py:SoftmaxCrossEntropy.backward",
-    ts_ns: 9,
-    thread_id: 1,
-    frame_depth: 0,
-  }, // 9
-  callEvent("grackle_nn/model.py:Sequential.backward", 10), // 10
-  callEvent("grackle_nn/layers.py:Linear.backward", 11), // 11 <- backward segment fires here
-  {
-    event: "return",
-    node_id: "grackle_nn/layers.py:Linear.backward",
-    ts_ns: 12,
-    thread_id: 1,
-    frame_depth: 0,
-  }, // 12
-  {
-    event: "return",
-    node_id: "grackle_nn/model.py:Sequential.backward",
-    ts_ns: 13,
-    thread_id: 1,
-    frame_depth: 0,
-  }, // 13
-  callEvent("grackle_nn/optim.py:SGD.step", 14), // 14 <- update
-  {
-    event: "return",
-    node_id: "grackle_nn/optim.py:SGD.step",
-    ts_ns: 15,
-    thread_id: 1,
-    frame_depth: 0,
-  }, // 15
-  callEvent("grackle_nn/model.py:Sequential.zero_grad", 16), // 16 <- reset
-  {
-    event: "return",
-    node_id: "grackle_nn/model.py:Sequential.zero_grad",
-    ts_ns: 17,
-    thread_id: 1,
-    frame_depth: 0,
-  }, // 17
-  {
-    event: "return",
-    node_id: "grackle_nn/train.py:train_step",
-    ts_ns: 18,
-    thread_id: 1,
-    frame_depth: 0,
-  }, // 18 <- idle
-  retEvent("grackle_nn/metrics.py:record_epoch", "(0, 0.5, 0.75)", 19), // 19
-  retEvent("grackle_nn/metrics.py:record_layer_stats", "(0, 0.2, 0.05)", 20), // 20
+type Row = [event: string, node_id: string, frame_depth: number, ret?: string];
+
+const NET_ROWS: Row[] = [
+  ["return", "grackle_nn/metrics.py:record_architecture", 3, "'linear:4:2'"], // 0
+  ["call", "grackle_nn/train.py:train_step", 3], // 1
+  ["call", "grackle_nn/model.py:Sequential.forward", 4], // 2
+  ["call", "grackle_nn/layers.py:Linear.forward", 5], // 3 <- forward-train
+  ["return", "grackle_nn/layers.py:Linear.forward", 5], // 4
+  ["return", "grackle_nn/model.py:Sequential.forward", 4], // 5
+  ["call", "grackle_nn/losses.py:SoftmaxCrossEntropy.forward", 4], // 6 <- loss
+  ["return", "grackle_nn/losses.py:SoftmaxCrossEntropy.forward", 4], // 7
+  ["call", "grackle_nn/losses.py:SoftmaxCrossEntropy.backward", 4], // 8 <- loss-grad
+  ["return", "grackle_nn/losses.py:SoftmaxCrossEntropy.backward", 4], // 9
+  ["call", "grackle_nn/model.py:Sequential.backward", 4], // 10
+  ["call", "grackle_nn/layers.py:Linear.backward", 5], // 11 <- backward
+  ["return", "grackle_nn/layers.py:Linear.backward", 5], // 12
+  ["return", "grackle_nn/model.py:Sequential.backward", 4], // 13
+  ["call", "grackle_nn/optim.py:SGD.step", 4], // 14 <- update
+  ["return", "grackle_nn/optim.py:SGD.step", 4], // 15
+  ["call", "grackle_nn/model.py:Sequential.zero_grad", 4], // 16 <- reset
+  ["return", "grackle_nn/model.py:Sequential.zero_grad", 4], // 17
+  ["return", "grackle_nn/train.py:train_step", 3], // 18 <- idle
+  ["return", "grackle_nn/metrics.py:record_epoch", 3, "(0, 0.5, 0.75)"], // 19
+  ["return", "grackle_nn/metrics.py:record_layer_stats", 3, "(0, 0.2, 0.05)"], // 20
 ];
 
-const NO_BEACON_EVENTS: TraceEvent[] = [
-  callEvent("some/module.py:foo", 0),
-  {
-    event: "return",
-    node_id: "some/module.py:foo",
-    ts_ns: 1,
+function toEvents(rows: readonly Row[]): TraceEvent[] {
+  return rows.map(([event, node_id, frame_depth, ret], i) => ({
+    event,
+    node_id,
+    ts_ns: i,
     thread_id: 1,
-    frame_depth: 0,
-  },
-];
+    frame_depth,
+    ...(ret === undefined ? {} : { values: { ret } }),
+  }));
+}
+
+const NET_EVENTS: TraceEvent[] = toEvents(NET_ROWS);
+
+/** Captured values present, but no `record_architecture` anywhere. */
+const NO_BEACON_EVENTS: TraceEvent[] = toEvents([
+  ["call", "some/module.py:foo", 0],
+  ["return", "some/module.py:foo", 0, "1"],
+]);
+
+/** No `values` on any event at all — i.e. traced without --capture-values. */
+const NO_CAPTURE_EVENTS: TraceEvent[] = toEvents([
+  ["call", "grackle_nn/metrics.py:record_architecture", 3],
+  ["return", "grackle_nn/metrics.py:record_architecture", 3],
+]);
 
 const INITIAL_STORE_STATE = useGraphStore.getState();
 
@@ -303,7 +263,7 @@ describe("NetworkViewPanel — seekable loading states", () => {
 });
 
 describe("NetworkViewPanel — no-beacon degrade", () => {
-  it("shows the quiet degrade message when no record_architecture beacon is present", () => {
+  it("shows the quiet degrade message when values were captured but no beacon fired", () => {
     mockUseFullTrace.mockReturnValue(
       fullTrace({ events: NO_BEACON_EVENTS, loaded: true })
     );
@@ -316,6 +276,89 @@ describe("NetworkViewPanel — no-beacon degrade", () => {
       )
     ).toBeInTheDocument();
     expect(screen.queryByLabelText("Network view canvas")).toBeNull();
+  });
+
+  it("blames --capture-values, not the beacons, when nothing was captured", () => {
+    // The beacons DID fire here — they just carry no payload, so "no network
+    // beacons in this trace" would be the wrong diagnosis and would leave the
+    // user with no route to the actual fix.
+    mockUseFullTrace.mockReturnValue(
+      fullTrace({ events: NO_CAPTURE_EVENTS, loaded: true })
+    );
+    useGraphStore.setState({ traceSessionId: "s1" });
+    render(<NetworkViewPanel />);
+    expandPanel();
+    expect(screen.getByText(/--capture-values/)).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        "No network beacons (record_architecture) in this trace."
+      )
+    ).toBeNull();
+  });
+});
+
+describe("NetworkViewPanel — hover tooltip", () => {
+  /** Layout for `linear:4:2` in the stubbed 800x400 container: columns at
+   *  x=40 (4 neurons, y 167/189/211/233) and x=760 (2 neurons, y 189/211).
+   *  jsdom's getBoundingClientRect is all-zero, so client coords ARE canvas
+   *  coords. */
+  function setupHover(playhead = 20): HTMLElement {
+    mockUseFullTrace.mockReturnValue(
+      fullTrace({ events: NET_EVENTS, loaded: true })
+    );
+    useGraphStore.setState({ traceSessionId: "s1", tracePlayhead: playhead });
+    render(<NetworkViewPanel />);
+    expandPanel();
+    return screen.getByLabelText("Network view canvas");
+  }
+
+  it("names the column under a neuron", () => {
+    const canvas = setupHover();
+    fireEvent.mouseMove(canvas, { clientX: 40, clientY: 167 });
+    expect(screen.getByText("input · 4")).toBeInTheDocument();
+
+    fireEvent.mouseMove(canvas, { clientX: 760, clientY: 189 });
+    expect(screen.getByText("logits · 2")).toBeInTheDocument();
+  });
+
+  it("reads the live w/dw off a bundle at the playhead", () => {
+    const canvas = setupHover();
+    // Midpoint of the (40,167) -> (760,189) weight line.
+    fireEvent.mouseMove(canvas, { clientX: 400, clientY: 178 });
+    expect(
+      screen.getByText("linear 4→2 · w 0.200 · dw 0.050")
+    ).toBeInTheDocument();
+  });
+
+  it("falls back to the bare label before any stats have fired", () => {
+    const canvas = setupHover(5); // before record_layer_stats at index 20
+    fireEvent.mouseMove(canvas, { clientX: 400, clientY: 178 });
+    expect(screen.getByText("linear 4→2")).toBeInTheDocument();
+  });
+
+  it("clears on mouseleave and on a miss", () => {
+    const canvas = setupHover();
+    fireEvent.mouseMove(canvas, { clientX: 40, clientY: 167 });
+    expect(screen.getByText("input · 4")).toBeInTheDocument();
+
+    fireEvent.mouseMove(canvas, { clientX: 400, clientY: 5 }); // empty space
+    expect(screen.queryByText("input · 4")).toBeNull();
+
+    fireEvent.mouseMove(canvas, { clientX: 40, clientY: 167 });
+    fireEvent.mouseLeave(canvas);
+    expect(screen.queryByText("input · 4")).toBeNull();
+  });
+
+  it("does not resurrect a stale tooltip when the card is reopened", () => {
+    // Closing from the keyboard leaves the pointer over the canvas, so the
+    // canvas's own mouseleave never fires.
+    const canvas = setupHover();
+    fireEvent.mouseMove(canvas, { clientX: 40, clientY: 167 });
+    expect(screen.getByText("input · 4")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Close network view" }));
+    expandPanel();
+    expect(screen.queryByText("input · 4")).toBeNull();
   });
 });
 

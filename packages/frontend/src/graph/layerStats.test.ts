@@ -118,13 +118,17 @@ describe("statsAtPlayhead", () => {
 
   it("returns null before the first epoch's stats have fired", () => {
     expect(statsAtPlayhead(series, 0)).toBeNull();
-    expect(statsAtPlayhead(series, 30)).toBeNull(); // eventIndex === P is excluded
+    expect(statsAtPlayhead(series, 29)).toBeNull();
   });
 
-  it("returns the last point strictly before the playhead", () => {
+  it("returns the last point at or before the playhead", () => {
+    // playheadLookup.ts's shared INCLUSIVE convention: the event AT the
+    // playhead has happened, matching what ValueInspectorPanel displays and
+    // where a LossCurvePanel click seeks to.
+    expect(statsAtPlayhead(series, 30)?.epoch).toBe(0); // boundary included
     expect(statsAtPlayhead(series, 31)?.epoch).toBe(0);
-    expect(statsAtPlayhead(series, 60)?.epoch).toBe(0); // boundary excluded
-    expect(statsAtPlayhead(series, 61)?.epoch).toBe(1);
+    expect(statsAtPlayhead(series, 59)?.epoch).toBe(0);
+    expect(statsAtPlayhead(series, 60)?.epoch).toBe(1); // boundary included
     expect(statsAtPlayhead(series, 1000)?.epoch).toBe(2);
   });
 

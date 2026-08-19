@@ -1,4 +1,5 @@
 import type { TraceEvent } from "@grackle/shared-types";
+import { matchesBeaconNode } from "./beaconNode";
 
 /**
  * Network architecture extraction from a raw trace-event array (Phase 12.4).
@@ -73,26 +74,28 @@ function stripReprQuotes(s: string): string | null {
 
 /**
  * Extract the network architecture from a raw trace-event array (must be a
- * from-index-0 prefix, same contract as `extractEpochSeries`).
+ * from-index-0 prefix, same contract as `extractEpochSeries`). `startIndex`
+ * resumes the search over an appended tail; the beacon is one-shot, so a
+ * caller that has already found a spec should stop calling rather than rescan.
  *
  * Returns `null` when: no matching return event exists; the ret isn't a
- * quoted string; it parses to zero tokens; or the parsed linear layers don't
- * chain (`linear[k].inDim !== linear[k-1].outDim`) — a corrupt/foreign beacon
+ * quoted string; it parses to zero tokens; it contains no param-carrying
+ * (`linear:<in>:<out>`) layer at all; or the parsed linear layers don't chain
+ * (`linear[k].inDim !== linear[k-1].outDim`) — a corrupt/foreign beacon
  * value, safer to render nothing than a nonsensical network.
  */
 export function extractNetworkSpec(
-  events: readonly TraceEvent[]
+  events: readonly TraceEvent[],
+  startIndex = 0
 ): NetworkSpec | null {
-  for (const ev of events) {
+  for (let i = startIndex; i < events.length; i++) {
+    const ev = events[i];
+    if (!ev) continue; // noUncheckedIndexedAccess guard
     if (ev.event !== "return") continue;
 
-    // Exact-or-slash-preceded match — same false-positive guard as
-    // epochSeries.ts (a bare endsWith would also match "pkg/mymetrics.py:...").
-    const nodeId = ev.node_id;
-    const isRecordArchitecture =
-      nodeId === "metrics.py:record_architecture" ||
-      nodeId.endsWith("/metrics.py:record_architecture");
-    if (!isRecordArchitecture) continue;
+    if (!matchesBeaconNode(ev.node_id, "metrics.py:record_architecture")) {
+      continue;
+    }
 
     const ret = ev.values?.ret;
     if (typeof ret !== "string") continue;
@@ -109,16 +112,19 @@ export function extractNetworkSpec(
     const linears = tokens.filter(
       (t): t is Extract<LayerToken, { kind: "linear" }> => t.kind === "linear"
     );
-    for (let i = 1; i < linears.length; i++) {
-      const prev = linears[i - 1];
-      const cur = linears[i];
+    const first = linears[0];
+    // No param-carrying layer means no neuron columns and so nothing to draw.
+    // Returning a spec here would produce a non-null spec whose `columns` is
+    // empty, which makes `layoutNetwork` return null — the panel would render
+    // a blank card instead of taking its "no network beacons" degrade path.
+    if (!first) return null;
+    for (let k = 1; k < linears.length; k++) {
+      const prev = linears[k - 1];
+      const cur = linears[k];
       if (!prev || !cur || cur.inDim !== prev.outDim) return null;
     }
 
-    const columns =
-      linears.length > 0
-        ? [linears[0]?.inDim as number, ...linears.map((l) => l.outDim)]
-        : [];
+    const columns = [first.inDim, ...linears.map((l) => l.outDim)];
 
     // First match wins — record_architecture is a one-shot beacon (fires
     // once, before the training loop); a later duplicate return would only

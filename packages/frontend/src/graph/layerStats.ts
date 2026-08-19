@@ -1,5 +1,12 @@
 import type { TraceEvent } from "@grackle/shared-types";
-import { FLOAT } from "./epochSeries";
+import { matchesBeaconNode } from "./beaconNode";
+import {
+  computeRunsFromCandidates,
+  FLOAT,
+  parseFloatToken,
+} from "./epochSeries";
+import { lastAtOrBefore } from "./playheadLookup";
+import type { ScanStep } from "./useAppendOnlyScan";
 
 /**
  * Per-epoch layer weight-statistics extraction from a raw trace-event array
@@ -21,7 +28,10 @@ import { FLOAT } from "./epochSeries";
  * shape mismatch.
  *
  * Pure function over an already-received event array — no wire messages,
- * mirroring `epochSeries.ts`.
+ * mirroring `epochSeries.ts`, whose float grammar (`FLOAT`), token decoder
+ * (`parseFloatToken`) and multi-run rule (`computeRunsFromCandidates`) this
+ * module shares rather than duplicates: both series are emitted by the same
+ * `train.fit` loop and must agree about which run is current.
  */
 
 export interface LayerStatsPoint {
@@ -40,15 +50,6 @@ export interface LayerStatsMaxima {
   dwRms: number[];
 }
 
-/** See epochSeries.ts's identical helper: `Number("inf")` is `NaN` in JS, not
- *  `Infinity`, so Python repr()'s non-finite literals need special-casing. */
-function parseFloatToken(token: string): number {
-  if (token === "inf") return Number.POSITIVE_INFINITY;
-  if (token === "-inf") return Number.NEGATIVE_INFINITY;
-  if (token === "nan") return Number.NaN;
-  return Number(token);
-}
-
 /** Build a regex matching a Python repr'd `(int, float, float, ..., float)`
  *  tuple with EXACTLY `1 + 2 * linearCount` elements — the arity is baked
  *  into the pattern so a tuple of the wrong shape (a different net) simply
@@ -62,33 +63,28 @@ function buildStatsRegex(linearCount: number): RegExp {
 }
 
 /**
- * Extract the per-epoch layer-stats series from a raw trace-event array
- * (must be a from-index-0 prefix, same contract as `extractEpochSeries`).
- *
- * Multi-run rule mirrors `epochSeries.ts`: whenever an epoch does not
- * strictly increase over the current run's previous point, the run restarts;
- * only the LAST run's points are returned, in ascending `eventIndex` order.
+ * Scan `events[startIndex..]` for `record_layer_stats` points, reported with
+ * ABSOLUTE indices into `events` regardless of where the scan started. Pure
+ * and stateless (the `carry` is unused) — callers that want an incremental
+ * scan own the accumulation, see `useAppendOnlyScan`. Run splitting is NOT
+ * applied here; it is re-derived from the full accumulated candidate list.
  */
-export function extractLayerStats(
+export function scanLayerStatsCandidates(
   events: readonly TraceEvent[],
-  linearCount: number
-): LayerStatsPoint[] {
+  linearCount: number,
+  startIndex = 0
+): ScanStep<LayerStatsPoint, null> {
   const re = buildStatsRegex(linearCount);
-  const candidates: LayerStatsPoint[] = [];
+  const items: LayerStatsPoint[] = [];
 
-  for (let i = 0; i < events.length; i++) {
+  for (let i = startIndex; i < events.length; i++) {
     const ev = events[i];
     if (!ev) continue; // noUncheckedIndexedAccess guard
 
     if (ev.event !== "return") continue;
-
-    // Exact-or-slash-preceded match — same false-positive guard as
-    // epochSeries.ts / networkSpec.ts.
-    const nodeId = ev.node_id;
-    const isRecordLayerStats =
-      nodeId === "metrics.py:record_layer_stats" ||
-      nodeId.endsWith("/metrics.py:record_layer_stats");
-    if (!isRecordLayerStats) continue;
+    if (!matchesBeaconNode(ev.node_id, "metrics.py:record_layer_stats")) {
+      continue;
+    }
 
     const ret = ev.values?.ret;
     if (typeof ret !== "string") continue;
@@ -112,54 +108,40 @@ export function extractLayerStats(
       perLinear.push({ wRms, dwRms });
     }
 
-    candidates.push({ epoch, eventIndex: i, perLinear });
+    items.push({ epoch, eventIndex: i, perLinear });
   }
 
-  return keepLastRun(candidates);
-}
-
-function keepLastRun(
-  candidates: readonly LayerStatsPoint[]
-): LayerStatsPoint[] {
-  let currentRun: LayerStatsPoint[] = [];
-  for (const point of candidates) {
-    const prev = currentRun[currentRun.length - 1];
-    if (prev && point.epoch <= prev.epoch) {
-      currentRun = [point];
-    } else {
-      currentRun.push(point);
-    }
-  }
-  return currentRun;
+  return { items, carry: null };
 }
 
 /**
- * The last point whose `eventIndex` is strictly before `playhead` — the
- * "as of right now" epoch snapshot for a scrubbing playhead. Returns `null`
- * before the first epoch's stats have fired (nothing to show yet). `series`
- * must be in ascending `eventIndex` order (as returned by
- * `extractLayerStats`).
+ * Extract the per-epoch layer-stats series from a raw trace-event array
+ * (must be a from-index-0 prefix, same contract as `extractEpochSeries`).
+ *
+ * Multi-run rule mirrors `epochSeries.ts` because it IS `epochSeries.ts`'s:
+ * whenever an epoch does not strictly increase over the current run's previous
+ * point the run restarts, and only the LAST run's points are returned, in
+ * ascending `eventIndex` order.
+ */
+export function extractLayerStats(
+  events: readonly TraceEvent[],
+  linearCount: number
+): LayerStatsPoint[] {
+  const { items } = scanLayerStatsCandidates(events, linearCount, 0);
+  return computeRunsFromCandidates(items).points;
+}
+
+/**
+ * The layer stats in effect as of `playhead` — `playheadLookup.ts`'s inclusive
+ * convention (the event AT the playhead has happened). Returns `null` before
+ * the first epoch's stats have fired (nothing to show yet). `series` must be
+ * in ascending `eventIndex` order (as returned by `extractLayerStats`).
  */
 export function statsAtPlayhead(
   series: readonly LayerStatsPoint[],
   playhead: number
 ): LayerStatsPoint | null {
-  // Binary search for the last point with eventIndex < playhead.
-  let lo = 0;
-  let hi = series.length - 1;
-  let result: LayerStatsPoint | null = null;
-  while (lo <= hi) {
-    const mid = (lo + hi) >> 1;
-    const point = series[mid];
-    if (!point) break; // unreachable given the loop bounds
-    if (point.eventIndex < playhead) {
-      result = point;
-      lo = mid + 1;
-    } else {
-      hi = mid - 1;
-    }
-  }
-  return result;
+  return lastAtOrBefore(series, playhead, (p) => p.eventIndex);
 }
 
 /**

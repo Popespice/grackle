@@ -40,7 +40,10 @@ export interface LayoutColumn {
   /** Rendered positions, capped at `MAX_NEURONS_PER_COLUMN`. */
   neurons: NeuronPosition[];
   radius: number;
-  /** `"×<count>"` when `count > MAX_NEURONS_PER_COLUMN`, else `null`. */
+  /** `"64 of 100 shown"` when `count > MAX_NEURONS_PER_COLUMN`, else `null`.
+   *  States the DRAWN count, not the total: a label of `"×100"` read as
+   *  "×100 not drawn" in the tooltip, claiming the whole column was omitted
+   *  when in fact 64 of it is on screen. */
   overflowLabel: string | null;
   /** `"input · 2"` / `"hidden · 32"` / `"logits · 3"` (mockup wording). */
   caption: string;
@@ -118,8 +121,14 @@ function neuronYPositions(
   return Array.from({ length: renderedCount }, (_, i) => startY + i * spacing);
 }
 
-function radiusFor(spacing: number): number {
-  if (spacing <= 0) return NEURON_RADIUS_MAX;
+/** Neuron radius from the row spacing. The two `spacing === 0` causes need
+ *  distinguishing: a lone neuron has no spacing to speak of and should be
+ *  drawn at full size, whereas a column whose rows collapsed for want of
+ *  vertical room is maximally crowded and must shrink, not swell into one
+ *  solid blob. */
+function radiusFor(spacing: number, renderedCount: number): number {
+  if (renderedCount <= 1) return NEURON_RADIUS_MAX;
+  if (spacing <= 0) return NEURON_RADIUS_MIN;
   return Math.max(
     NEURON_RADIUS_MIN,
     Math.min(NEURON_RADIUS_MAX, spacing * 0.32)
@@ -165,8 +174,11 @@ export function layoutNetwork(
       x,
       count,
       neurons,
-      radius: radiusFor(spacing),
-      overflowLabel: count > MAX_NEURONS_PER_COLUMN ? `×${count}` : null,
+      radius: radiusFor(spacing, rendered),
+      overflowLabel:
+        count > MAX_NEURONS_PER_COLUMN
+          ? `${MAX_NEURONS_PER_COLUMN} of ${count} shown`
+          : null,
       caption: columnCaption(count, columnIndex, columnCount),
     };
   });

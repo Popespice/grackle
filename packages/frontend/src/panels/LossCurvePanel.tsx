@@ -1,4 +1,3 @@
-import type { TraceEvent } from "@grackle/shared-types";
 import type { JSX } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -14,6 +13,8 @@ import {
   PADDING_RIGHT,
   PADDING_TOP,
 } from "../graph/lossCurveLayout";
+import { lastIndexAtOrBefore } from "../graph/playheadLookup";
+import { type Scanner, useAppendOnlyScan } from "../graph/useAppendOnlyScan";
 import { useFullTrace } from "../graph/useFullTrace";
 import { useGraphStore } from "../graph/useGraphStore";
 import { useSeekablePrefixState } from "../graph/useSeekablePrefixState";
@@ -114,54 +115,34 @@ export function LossCurvePanel(): JSX.Element | null {
   const [width, setWidth] = useState(0);
   const [hover, setHover] = useState<HoverState | null>(null);
 
-  // Incremental scan cache: buffered (live-streaming) sessions grow
-  // `full.events` via append-only `.concat()` (useGraphStore.ts's
-  // addTraceEvents), so re-scanning the WHOLE array from scratch on every
-  // batch is O(events) work repeated every ~150ms for the entire session
-  // duration — wasted for the overwhelming majority of traces, which
-  // contain zero record_epoch events at all. Only the newly-appended tail
-  // is scanned; `computeRunsFromCandidates` is then cheaply re-derived
-  // (O(candidates), not O(events)) from the full accumulated candidate
-  // list every time.
-  //
-  // `scanCacheRef.lastEvent` guards against anything OTHER than pure
-  // append — a new trace session (full.events swaps to a different array)
-  // or a seekable reload — by checking that the event this cache last
-  // scanned up to is still the same object reference at the same index; a
-  // mismatch (or the array having shrunk below what was scanned) forces a
-  // full rescan from index 0.
-  const scanCacheRef = useRef<{
-    scanned: number;
-    candidates: EpochPoint[];
-    dropped: number;
-    lastEvent: TraceEvent | undefined;
-  }>({ scanned: 0, candidates: [], dropped: 0, lastEvent: undefined });
+  // Incremental scan: buffered (live-streaming) sessions grow `full.events`
+  // via append-only `.concat()` (useGraphStore.ts's addTraceEvents), so
+  // re-scanning the WHOLE array from scratch on every batch is O(events) work
+  // repeated every ~150ms for the entire session duration — wasted for the
+  // overwhelming majority of traces, which contain zero record_epoch events at
+  // all. `useAppendOnlyScan` walks only the newly-appended tail (and owns the
+  // pure-append validity check); `computeRunsFromCandidates` is then cheaply
+  // re-derived (O(candidates), not O(events)) from the full accumulated list.
+  // The `carry` accumulates the non-finite drop count across batches.
+  const epochScan = useCallback<Scanner<EpochPoint, number>>(
+    (events, startIndex, carry) => {
+      const scanned = scanEpochCandidates(events, startIndex);
+      return {
+        items: scanned.candidates,
+        carry: (carry ?? 0) + scanned.dropped,
+      };
+    },
+    []
+  );
+  const { items: candidates, carry: dropped } = useAppendOnlyScan(
+    full.events,
+    epochScan
+  );
 
   const series = useMemo(() => {
-    const events = full.events;
-    const cache = scanCacheRef.current;
-    const stillValid =
-      cache.scanned === 0 ||
-      (cache.scanned <= events.length &&
-        events[cache.scanned - 1] === cache.lastEvent);
-
-    const startIndex = stillValid ? cache.scanned : 0;
-    const scanned = scanEpochCandidates(events, startIndex);
-    const candidates = stillValid
-      ? cache.candidates.concat(scanned.candidates)
-      : scanned.candidates;
-    const dropped = (stillValid ? cache.dropped : 0) + scanned.dropped;
-
-    scanCacheRef.current = {
-      scanned: events.length,
-      candidates,
-      dropped,
-      lastEvent: events[events.length - 1],
-    };
-
     const { points, runs } = computeRunsFromCandidates(candidates);
-    return { points, runs, dropped };
-  }, [full.events]);
+    return { points, runs, dropped: dropped ?? 0 };
+  }, [candidates, dropped]);
 
   const layout: CurveLayout | null = useMemo(
     () => layoutLossCurve(series.points, width, CANVAS_HEIGHT),
@@ -233,14 +214,14 @@ export function LossCurvePanel(): JSX.Element | null {
     }
 
     // Playhead marker: a vertical line at the last point whose eventIndex has
-    // been reached (points are index-parallel and eventIndex is strictly
-    // increasing with array position, so a linear scan is cheap and exact).
-    let markerIndex = -1;
-    for (let i = 0; i < series.points.length; i++) {
-      const p = series.points[i];
-      if (p && p.eventIndex <= tracePlayhead) markerIndex = i;
-      else break;
-    }
+    // been reached — playheadLookup.ts's shared inclusive convention, which
+    // every trace-series panel now uses (three hand-written copies of this
+    // scan had drifted to two different boundary rules).
+    const markerIndex = lastIndexAtOrBefore(
+      series.points,
+      tracePlayhead,
+      (p) => p.eventIndex
+    );
     if (markerIndex >= 0) {
       const x = layout.xForEpochIndex(markerIndex);
       ctx.strokeStyle = PLAYHEAD_COLOR;

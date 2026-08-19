@@ -102,6 +102,24 @@ describe("extractNetworkSpec", () => {
     expect(extractNetworkSpec(events)?.columns).toEqual([2, 32, 32, 3]);
   });
 
+  it("returns null when the beacon names no param-carrying layer", () => {
+    // A spec with no linear tokens has no neuron columns, so layoutNetwork
+    // would return null and the panel would paint a blank card instead of
+    // taking its "no network beacons" degrade path.
+    const events = [
+      retEvent("grackle_nn/metrics.py:record_architecture", "'relu relu'"),
+    ];
+    expect(extractNetworkSpec(events)).toBeNull();
+  });
+
+  it("resumes the search from startIndex", () => {
+    const events = [
+      retEvent("grackle_nn/metrics.py:record_architecture", "'linear:1:1'"),
+      retEvent("grackle_nn/metrics.py:record_architecture", GOLDEN_RET),
+    ];
+    expect(extractNetworkSpec(events, 1)?.columns).toEqual([2, 32, 32, 3]);
+  });
+
   it("returns null for an empty event array", () => {
     expect(extractNetworkSpec([])).toBeNull();
   });
