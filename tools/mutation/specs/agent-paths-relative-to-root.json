@@ -1,0 +1,15 @@
+{
+  "id": "agent-paths-relative-to-root",
+  "description": "to_posix() computes the relative path against root's parent instead of root itself — every output gains a spurious leading path segment.",
+  "target": {
+    "file": "packages/agent/src/grackle/paths.py",
+    "find": "return p.resolve().relative_to(root.resolve()).as_posix()",
+    "replace": "return p.resolve().relative_to(root.resolve().parent).as_posix()"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_paths.py"]
+  },
+  "expect": "killed"
+}

@@ -1,0 +1,15 @@
+{
+  "id": "agent-cache-bounded-race-guard",
+  "description": "T4-4 calibration case (docs/test-campaigns/phase-12.md): _cache_bounded's `except (StopIteration, RuntimeError)` guards a benign race between the connect path and the watch executor thread evicting the same cache concurrently. No test in the package actually races these two paths — the bounding tests call _cache_bounded sequentially — so narrowing the catch to StopIteration alone is expected to survive. This is the harness's own self-test: it must report a true survivor as a survivor, not silently pass everything. Promoting this to 'killed' is exactly what a real T7 concurrency hammer test (racing the connect path against the watch executor) should do.",
+  "target": {
+    "file": "packages/agent/src/grackle/server.py",
+    "find": "        except (StopIteration, RuntimeError):  # raced by the other thread",
+    "replace": "        except StopIteration:  # raced by the other thread"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_server_predicted_heat.py"]
+  },
+  "expect": "survives"
+}

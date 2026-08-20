@@ -79,3 +79,7 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# An xfail that starts passing (XPASS) is treated as a failure — without this,
+# a fixed defect's expected-fail test goes green and nobody notices the fix
+# landed (docs/test-campaigns/phase-12.md, prerequisite P-1).
+xfail_strict = true

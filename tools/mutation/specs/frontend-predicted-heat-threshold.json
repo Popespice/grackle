@@ -1,0 +1,15 @@
+{
+  "id": "frontend-predicted-heat-threshold",
+  "description": "predictionStatuses() classifies the ±0.25 boundary with a strict '<' instead of '<=' — a node exactly at the threshold flips from on-target to over/under.",
+  "target": {
+    "file": "packages/frontend/src/graph/predictedHeat.ts",
+    "find": "if (Math.abs(diff) <= PREDICTION_THRESHOLD) {",
+    "replace": "if (Math.abs(diff) < PREDICTION_THRESHOLD) {"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/predictedHeat.test.ts"]
+  },
+  "expect": "killed"
+}
