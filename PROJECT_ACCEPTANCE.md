@@ -1,7 +1,7 @@
 # Project-wide Acceptance Criteria
 
-> Last updated during the Phase 11.H close.
-> Seven grids: whole-product definition-of-done + Phase 6 + Phase 7 + Phase 8 + Phase 9 + Phase 10 + Phase 11 acceptance.
+> Last updated during the Phase 12.H close.
+> Eight grids: whole-product definition-of-done + Phase 6 + Phase 7 + Phase 8 + Phase 9 + Phase 10 + Phase 11 + Phase 12 acceptance.
 > Each item is marked **automated** (CI / per-chunk gate / bench) or **manual** (recorded in the phase `*_SUMMARY.md`).
 
 ---
@@ -19,7 +19,7 @@
 | 7 | **Performance.** Tracer overhead ≤10% on a 5s workload (including with the real-time `--stream` sink active); UI stays interactive during a real-time stream and a 50k-event replay (batched rAF ingest avoids quadratic accumulation). | bench (manual timing) + automated |
 | 8 | **Determinism.** `grackle parse` and `grackle trace` (with `PYTHONHASHSEED=0`) are reproducible; golden fixtures stable across runs. | automated (golden fixture tests) |
 | 9 | **Quality gates.** `pytest` + `mypy --strict` + `tsc` + `biome` + frontend tests + `check-parity` all green on the CI matrix; no skipped or disabled guards. | automated (CI + pre-push hooks) |
-| 10 | **Documented architecture.** Every cross-cutting decision has an accepted ADR (28 total); each phase has a `*_SUMMARY.md` card; `CLAUDE.md` current. | manual |
+| 10 | **Documented architecture.** Every cross-cutting decision has an accepted ADR (30 total); each phase has a `*_SUMMARY.md` card; `CLAUDE.md` current. | manual |
 | 11 | **Stable contracts.** JSON Schema is the single source of truth; generated TS/Py match (`check-parity`); message `type`, node/edge `kind`, trace `event` are open strings — unknown values ignored, never errors (ADR-0004). | automated (`check-parity`) |
 | 12 | **Robustness.** Malformed input (bad source, missing/garbled trace, non-3.12 interpreter, script outside `--root`, oversized source) yields a clear error or graceful skip — never a crash or hang. | automated (server + CLI error tests) |
 
@@ -143,6 +143,26 @@
 | 10 | **Zero agent/frontend/wire change.** `KNOWN_MESSAGE_TYPES` and every generated artifact untouched all phase; `check-parity` a no-op for 11.1, 11.2, 11.H. | **11.1–11.H ✓** automated |
 | 11 | **Cross-OS.** The nn CI leg (`ruff` + `mypy --strict` + `pytest`, `uv sync --frozen`) green on the Ubuntu + Windows matrix. | **CI ✓** automated |
 | 12 | **Ship.** ADR-0028 accepted; `PHASE_11_SUMMARY.md`; `PROJECT_ACCEPTANCE.md` §G grid (28 ADRs); `CLAUDE.md` (Phase 11 shipped, Phase 12 next); version 0.11.0; tag `v0.11.0-phase-11`. | **11.H ✓** |
+
+---
+
+## H. Phase 12 (grackle learns as it analyzes) acceptance grid
+
+| # | Criterion | Status |
+|---|---|---|
+| 1 | **Incremental trace persistence.** `grackle trace -o`/`--stream --output` write per-event to a `.part` file with atomic finalize; a killed Python tracing process keeps every event written so far; an existing `.part` is refused, never cleared; Node/Go/Rust keep their original one-shot write, gated on the new `streaming_trace_parity` Protocol attribute. | **12.0 ✓** automated |
+| 2 | **35-column feature vector, versioned.** `extract_features` computes all 35 columns from a raw graph dict only (never enriched metadata); `FEATURE_VERSION` gates the column layout; pinned by an exact-literal test on two hand-computed node rows. | **12.1 ✓** automated |
+| 3 | **Label correctness and cross-platform stability.** `make_targets`'s per-graph max-normalized log heat uses one `np.log1p` implementation for numerator and denominator (never a `math`/`numpy` mix); anti-leakage `split_by_graph` moves whole graphs, never nodes, proven by an executable test. | **12.1 ✓** automated |
+| 4 | **Model beats a from-scratch baseline.** A seeded synthetic-corpus acceptance test proves the trained model's held-out Spearman beats raw in-degree by a documented margin, with a mutation test (shuffled labels) proving the bar isn't vacuous; labels independently reproduce the agent's `TraceAggregates` byte-for-byte on all 5 committed golden traces. | **12.1 ✓** automated |
+| 5 | **`nn.ml` ↔ `grackle` dependency boundary, both directions.** `grackle_nn.ml` never imports `grackle` at runtime; `grackle.cli`/`grackle.server` never pull in numpy — each enforced by a fresh-subprocess + AST-scan test pair. | **12.1 / 12.2 ✓** automated |
+| 6 | **Capability-gated `predicted_heat`, byte-identical when absent.** The `ml_bridge` gate mirrors the Go/Rust toolchain-capability precedent; model missing, gate closed, and a broken model all produce the exact same serialized graph payload — asserted byte-for-byte, with a test proving the comparison is discriminating; `predicted_heat` is injected from `_build_static_graph` so watch-mode re-broadcasts carry it too. | **12.2 ✓** automated |
+| 7 | **`grackle learn` CLI contract.** Shared-`--root` assumption documented and enforced (one root ⇒ one graph ⇒ train-set metrics only, never mislabeled as validation); `--from-store` warns and skips missing recordings; zero traces / zero overlap → clean errors. | **12.2 ✓** automated |
+| 8 | **Predicted-heat overlay + cascade order.** `PredictedHeatPanel` (Off/Predicted/Vs-actual) paints via a `GraphCanvas` cascade branch after `diffOverlay`, before the runtime heat-map; vs-actual normalization matches `labels.py` within a documented `±0.25` tolerance; `LossCurvePanel` extracts `record_epoch` events into a hoverable, seekable curve with an incremental (non-quadratic) scan under live streaming. | **12.3 ✓** automated + manual |
+| 9 | **`NetworkViewPanel`.** Renders the demo architecture from `record_architecture`/`record_layer_stats`, animates phase (forward-train/forward-eval/backward) off the trace playhead, collapsed by default; literal hex colors throughout (no CSS `var()`/oklch on canvas); an 8-module mutation-testing pass kills 30/30 mutants, with known residual defects captured as intentionally-red tests rather than silently accepted. | **12.4 ✓** automated + manual |
+| 10 | **No wire-schema change all phase.** `KNOWN_MESSAGE_TYPES` and every generated artifact untouched 12.0–12.4; `check-parity` a no-op on every chunk. | **12.0–12.4 ✓** automated |
+| 11 | **ADR discipline.** ADR-0029 (self-supervised learning loop) and ADR-0030 (capability-gated inference surface) accepted; ADR-0020 amended for incremental persistence rather than given a new ADR, matching the `RecordingSink` precedent. | **12.H ✓** manual |
+| 12 | **Cross-OS.** All chunks green on the Ubuntu + Windows CI matrix; the agent's `uv sync --frozen` dev venv pulls numpy + `grackle-nn` on every leg. | **CI ✓** automated |
+| 13 | **Ship.** ADRs 0029–0030 accepted; `PHASE_12_SUMMARY.md`; `PROJECT_ACCEPTANCE.md` §H grid (30 ADRs); `CLAUDE.md` (Phase 12 shipped, Phase 13 candidate pool); version 0.12.0 on agent/nn/frontend, both `uv` locks re-locked; tag `v0.12.0-phase-12`. | **12.H ✓** |
 
 ---
 
