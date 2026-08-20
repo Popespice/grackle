@@ -112,6 +112,11 @@ function openFrame(ev: TraceEvent): OpenFrame {
  * (`activeToken = n - 1`) and the backward right-to-left indexing
  * (`activeToken = tokenCount - n`) need it to place the highlight on the
  * correct column.
+ *
+ * Tolerates a truncated prefix (a missing closing `return`) by construction:
+ * every transition is driven by a single event in isolation, never by matching
+ * a call to its eventual return, so a stream that ends mid-frame simply stops
+ * producing new segments.
  */
 export function scanActivitySegments(
   events: readonly TraceEvent[],
@@ -191,29 +196,12 @@ export function scanActivitySegments(
 }
 
 /**
- * Build the ordered activity-segment index for a full (or truncated-prefix)
- * trace-event array — the one-shot form of `scanActivitySegments` for callers
- * that don't need incremental scanning.
- *
- * Tolerates a truncated prefix (a missing closing `return`) by construction:
- * every transition is driven by a single event in isolation, never by matching
- * a call to its eventual return, so a stream that ends mid-frame simply stops
- * producing new segments.
- */
-export function buildActivityIndex(
-  events: readonly TraceEvent[],
-  tokenCount: number
-): ActivitySegment[] {
-  return scanActivitySegments(events, tokenCount, 0, undefined).items;
-}
-
-/**
  * The segment active as of `playhead` — the last segment whose `fromIndex` is
  * at or before it (`playheadLookup.ts`'s inclusive convention: the event AT
  * the playhead has happened). Returns a synthetic idle segment (never `null`)
  * before the first real segment or for an empty index, so callers never need a
  * null-check for "nothing has happened yet". `segments` must be in ascending
- * `fromIndex` order (as returned by `buildActivityIndex`).
+ * `fromIndex` order (as returned by `scanActivitySegments`).
  */
 export function activityAt(
   segments: readonly ActivitySegment[],

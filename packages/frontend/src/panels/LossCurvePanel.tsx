@@ -88,7 +88,7 @@ function drawPolyline(
 /**
  * LossCurvePanel — renders the NN training loss/accuracy curve extracted
  * from `record_epoch` beacon events (Phase 12.3). Geometry lives in the pure
- * `extractEpochSeries` / `layoutLossCurve` helpers (ADR-0019 precedent, see
+ * `scanEpochCandidates` / `layoutLossCurve` helpers (ADR-0019 precedent, see
  * flameLayout.ts); this component is a thin canvas-painting + controls shell.
  *
  * ADR-0007: every hook runs before the `traceSessionId === null` early

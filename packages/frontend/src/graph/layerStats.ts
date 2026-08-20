@@ -1,10 +1,6 @@
 import type { TraceEvent } from "@grackle/shared-types";
 import { matchesBeaconNode } from "./beaconNode";
-import {
-  computeRunsFromCandidates,
-  FLOAT,
-  parseFloatToken,
-} from "./epochSeries";
+import { FLOAT, parseFloatToken } from "./epochSeries";
 import { lastAtOrBefore } from "./playheadLookup";
 import type { ScanStep } from "./useAppendOnlyScan";
 
@@ -31,7 +27,9 @@ import type { ScanStep } from "./useAppendOnlyScan";
  * mirroring `epochSeries.ts`, whose float grammar (`FLOAT`), token decoder
  * (`parseFloatToken`) and multi-run rule (`computeRunsFromCandidates`) this
  * module shares rather than duplicates: both series are emitted by the same
- * `train.fit` loop and must agree about which run is current.
+ * `train.fit` loop and must agree about which run is current — including
+ * about how many points a diverged run lost, which is what the scan's
+ * `carry` counts.
  */
 
 export interface LayerStatsPoint {
@@ -64,18 +62,26 @@ function buildStatsRegex(linearCount: number): RegExp {
 
 /**
  * Scan `events[startIndex..]` for `record_layer_stats` points, reported with
- * ABSOLUTE indices into `events` regardless of where the scan started. Pure
- * and stateless (the `carry` is unused) — callers that want an incremental
- * scan own the accumulation, see `useAppendOnlyScan`. Run splitting is NOT
- * applied here; it is re-derived from the full accumulated candidate list.
+ * ABSOLUTE indices into `events` regardless of where the scan started. Callers
+ * that want an incremental scan own the accumulation, see `useAppendOnlyScan`.
+ * Run splitting is NOT applied here; it is re-derived from the full
+ * accumulated candidate list.
+ *
+ * `carry` is the running count of points whose tuple matched the expected
+ * shape but held a non-finite value (`inf`/`nan`) and were therefore dropped —
+ * the same signal `scanEpochCandidates` reports as `dropped`. A diverged run
+ * produces these, and without the count the panel would freeze its bundle
+ * widths at the last finite epoch with nothing to say about why.
  */
 export function scanLayerStatsCandidates(
   events: readonly TraceEvent[],
   linearCount: number,
-  startIndex = 0
-): ScanStep<LayerStatsPoint, null> {
+  startIndex = 0,
+  carry?: number
+): ScanStep<LayerStatsPoint, number> {
   const re = buildStatsRegex(linearCount);
   const items: LayerStatsPoint[] = [];
+  let dropped = carry ?? 0;
 
   for (let i = startIndex; i < events.length; i++) {
     const ev = events[i];
@@ -97,7 +103,10 @@ export function scanLayerStatsCandidates(
     if (epochStr === undefined) continue; // unreachable given the regex's first group
 
     const nums = match.slice(2).map((g) => parseFloatToken(g as string));
-    if (nums.some((n) => !Number.isFinite(n))) continue; // dropped: non-finite
+    if (nums.some((n) => !Number.isFinite(n))) {
+      dropped += 1;
+      continue;
+    }
 
     const epoch = Number.parseInt(epochStr, 10);
     const perLinear: { wRms: number; dwRms: number }[] = [];
@@ -111,31 +120,15 @@ export function scanLayerStatsCandidates(
     items.push({ epoch, eventIndex: i, perLinear });
   }
 
-  return { items, carry: null };
-}
-
-/**
- * Extract the per-epoch layer-stats series from a raw trace-event array
- * (must be a from-index-0 prefix, same contract as `extractEpochSeries`).
- *
- * Multi-run rule mirrors `epochSeries.ts` because it IS `epochSeries.ts`'s:
- * whenever an epoch does not strictly increase over the current run's previous
- * point the run restarts, and only the LAST run's points are returned, in
- * ascending `eventIndex` order.
- */
-export function extractLayerStats(
-  events: readonly TraceEvent[],
-  linearCount: number
-): LayerStatsPoint[] {
-  const { items } = scanLayerStatsCandidates(events, linearCount, 0);
-  return computeRunsFromCandidates(items).points;
+  return { items, carry: dropped };
 }
 
 /**
  * The layer stats in effect as of `playhead` — `playheadLookup.ts`'s inclusive
  * convention (the event AT the playhead has happened). Returns `null` before
  * the first epoch's stats have fired (nothing to show yet). `series` must be
- * in ascending `eventIndex` order (as returned by `extractLayerStats`).
+ * in ascending `eventIndex` order — i.e. `scanLayerStatsCandidates`' output
+ * run through `computeRunsFromCandidates`.
  */
 export function statsAtPlayhead(
   series: readonly LayerStatsPoint[],

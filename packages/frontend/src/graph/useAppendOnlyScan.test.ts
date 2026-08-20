@@ -1,5 +1,5 @@
 import type { TraceEvent } from "@grackle/shared-types";
-import { act, renderHook } from "@testing-library/react";
+import { renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { type Scanner, useAppendOnlyScan } from "./useAppendOnlyScan";
 
@@ -67,13 +67,18 @@ describe("useAppendOnlyScan", () => {
   });
 
   it("rescans from 0 when the scan closure changes", () => {
+    // The array is hoisted deliberately: built inline in the render callback it
+    // would be a NEW array of NEW event objects every render, so the identity
+    // check would invalidate the cache before `cache.scan === scan` was ever
+    // consulted and this test would pass with that check deleted.
+    const events = [ev("hit"), ev("hit")];
     const { result, rerender } = renderHook(
-      ({ s }) => useAppendOnlyScan([ev("hit"), ev("hit")], s, true),
+      ({ s }) => useAppendOnlyScan(events, s, true),
       { initialProps: { s: scanHits } }
     );
     expect(result.current.items).toEqual(["hit@0", "hit@1"]);
-    const onlyFirst: Scanner<string, number> = (events, startIndex, carry) => {
-      const step = scanHits(events, startIndex, carry);
+    const onlyFirst: Scanner<string, number> = (evs, startIndex, carry) => {
+      const step = scanHits(evs, startIndex, carry);
       return { items: step.items.slice(0, 1), carry: step.carry };
     };
     rerender({ s: onlyFirst });
@@ -95,13 +100,54 @@ describe("useAppendOnlyScan", () => {
     expect(scan.mock.calls[0]?.[1]).toBe(0);
   });
 
-  it("is idempotent across a re-render with the same array (StrictMode-safe)", () => {
-    const events = [ev("hit"), ev("hit")];
-    const { result, rerender } = renderHook(() =>
-      useAppendOnlyScan(events, scanHits)
+  it("does not re-invoke scan for an already-scanned array (StrictMode-safe)", () => {
+    // The app renders under <StrictMode> (main.tsx), which double-invokes every
+    // render, and a concurrent render can be discarded and replayed. Rather
+    // than trusting each scanner to be a no-op over an empty tail, the hook
+    // short-circuits before calling it at all — so even a scanner that
+    // accumulated per CALL rather than per event cannot double-count.
+    const scan = vi.fn(scanHits);
+    const events = [ev("hit"), ev("miss")];
+    const { result, rerender } = renderHook(
+      ({ e }) => useAppendOnlyScan(e, scan),
+      { initialProps: { e: events } }
     );
-    rerender();
-    act(() => {});
-    expect(result.current.items).toEqual(["hit@0", "hit@1"]);
+    expect(scan).toHaveBeenCalledTimes(1);
+    rerender({ e: events });
+    expect(scan).toHaveBeenCalledTimes(1);
+    expect(result.current.items).toEqual(["hit@0"]);
+    expect(result.current.carry).toBe(1);
+  });
+
+  it("keeps the cache warm across a disable/enable cycle", () => {
+    // A collapsed panel that reopens on the same session must not pay for a
+    // full rescan of the prefix it already walked.
+    const scan = vi.fn(scanHits);
+    const events = [ev("hit"), ev("miss")];
+    const { result, rerender } = renderHook(
+      ({ on }) => useAppendOnlyScan(events, scan, on),
+      { initialProps: { on: true } }
+    );
+    expect(scan).toHaveBeenCalledTimes(1);
+
+    rerender({ on: false });
+    expect(result.current.items).toEqual([]);
+
+    rerender({ on: true });
+    expect(result.current.items).toEqual(["hit@0"]);
+    expect(scan).toHaveBeenCalledTimes(1); // resumed, never rescanned
+  });
+
+  it("still rescans after a disable when the session's array changed", () => {
+    const scan = vi.fn(scanHits);
+    const first = [ev("hit"), ev("miss")];
+    const { result, rerender } = renderHook(
+      ({ e, on }) => useAppendOnlyScan(e, scan, on),
+      { initialProps: { e: first, on: true } }
+    );
+    rerender({ e: first, on: false });
+    // A different session hands us an unrelated array while collapsed.
+    rerender({ e: [ev("miss"), ev("hit")], on: true });
+    expect(result.current.items).toEqual(["hit@1"]);
   });
 });

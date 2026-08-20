@@ -1,9 +1,9 @@
 import type { TraceEvent } from "@grackle/shared-types";
 import { describe, expect, it } from "vitest";
 import {
+  type ActivityScanState,
   type ActivitySegment,
   activityAt,
-  buildActivityIndex,
   scanActivitySegments,
 } from "./layerActivity";
 
@@ -66,9 +66,40 @@ function toEvents(pairs: readonly [string, string, number][]): TraceEvent[] {
 
 const TOKEN_COUNT = 5; // linear, relu, linear, relu, linear
 
-describe("buildActivityIndex — one train_step (golden 34)", () => {
+const CHUNK = 3;
+
+/**
+ * Runs the events through BOTH a single pass and a chunked incremental scan,
+ * asserts the two agree, and returns the single-pass result. Every test below
+ * therefore exercises the composition the panels actually ship — the
+ * incremental scanner accumulated across appends — rather than a one-shot
+ * convenience wrapper no production code calls.
+ */
+function segmentsOf(
+  events: readonly TraceEvent[],
+  tokenCount: number
+): ActivitySegment[] {
+  const single = scanActivitySegments(events, tokenCount, 0, undefined);
+  let chunked: ActivitySegment[] = [];
+  let carry: ActivityScanState | undefined;
+  for (let start = 0; start < events.length; start += CHUNK) {
+    const end = Math.min(events.length, start + CHUNK);
+    const step = scanActivitySegments(
+      events.slice(0, end),
+      tokenCount,
+      start,
+      carry
+    );
+    chunked = chunked.concat(step.items);
+    carry = step.carry;
+  }
+  expect(chunked).toEqual(single.items);
+  return [...single.items];
+}
+
+describe("scanActivitySegments — one train_step (golden 34)", () => {
   it("walks forward tokens 0..4 -> loss -> loss-grad -> backward tokens 4..0 -> update -> reset -> idle", () => {
-    const segments = buildActivityIndex(toEvents(GOLDEN_34), TOKEN_COUNT);
+    const segments = segmentsOf(toEvents(GOLDEN_34), TOKEN_COUNT);
     const shape = segments.map((s) => [s.phase, s.activeToken]);
     expect(shape).toEqual([
       ["forward-train", 0],
@@ -90,14 +121,14 @@ describe("buildActivityIndex — one train_step (golden 34)", () => {
   });
 
   it("stamps each segment's fromIndex at the triggering call/return event", () => {
-    const segments = buildActivityIndex(toEvents(GOLDEN_34), TOKEN_COUNT);
+    const segments = segmentsOf(toEvents(GOLDEN_34), TOKEN_COUNT);
     expect(segments.map((s) => s.fromIndex)).toEqual([
       2, 4, 6, 8, 10, 13, 15, 18, 20, 22, 24, 26, 29, 31, 33,
     ]);
   });
 });
 
-describe("buildActivityIndex — evaluate block", () => {
+describe("scanActivitySegments — evaluate block", () => {
   it("marks forward calls inside evaluate() as forward-eval, not forward-train", () => {
     const events = toEvents([
       ["call", "grackle_nn/train.py:evaluate", 3],
@@ -115,7 +146,7 @@ describe("buildActivityIndex — evaluate block", () => {
       ["return", "grackle_nn/metrics.py:accuracy", 4],
       ["return", "grackle_nn/train.py:evaluate", 3],
     ]);
-    const segments = buildActivityIndex(events, 3);
+    const segments = segmentsOf(events, 3);
     expect(segments.map((s) => [s.phase, s.activeToken])).toEqual([
       ["forward-eval", 0],
       ["forward-eval", 1],
@@ -137,7 +168,7 @@ describe("buildActivityIndex — evaluate block", () => {
       ["call", "grackle_nn/layers.py:Linear.forward", 5],
       ["return", "grackle_nn/layers.py:Linear.forward", 5],
     ]);
-    const segments = buildActivityIndex(events, 1);
+    const segments = segmentsOf(events, 1);
     expect(segments.map((s) => s.phase)).toEqual([
       "forward-eval",
       "forward-train",
@@ -145,7 +176,7 @@ describe("buildActivityIndex — evaluate block", () => {
   });
 });
 
-describe("buildActivityIndex — a frame that exits via an exception", () => {
+describe("scanActivitySegments — a frame that exits via an exception", () => {
   /**
    * The discriminating case for keying on depth rather than on a `return`
    * event. `tracer.py`'s PY_UNWIND callback does depth bookkeeping and emits
@@ -169,7 +200,7 @@ describe("buildActivityIndex — a frame that exits via an exception", () => {
   ]);
 
   it("does not latch forward-eval past the unwound frame", () => {
-    const segments = buildActivityIndex(CRASHED, 1);
+    const segments = segmentsOf(CRASHED, 1);
     expect(segments.map((s) => [s.phase, s.activeToken])).toEqual([
       ["forward-eval", 0],
       ["forward-train", 0],
@@ -177,7 +208,7 @@ describe("buildActivityIndex — a frame that exits via an exception", () => {
   });
 
   it("restarts the forward token counter for the post-crash pass", () => {
-    const segments = buildActivityIndex(CRASHED, 1);
+    const segments = segmentsOf(CRASHED, 1);
     // Not 1: `Sequential.forward` reopened, so this is the pass's FIRST layer.
     expect(segments[1]?.activeToken).toBe(0);
   });
@@ -214,7 +245,7 @@ describe("buildActivityIndex — a frame that exits via an exception", () => {
         frame_depth: 5,
       },
     ];
-    expect(buildActivityIndex(events, 1)[0]?.phase).toBe("forward-eval");
+    expect(segmentsOf(events, 1)[0]?.phase).toBe("forward-eval");
   });
 });
 
@@ -240,13 +271,13 @@ describe("scanActivitySegments — incremental resume", () => {
   });
 });
 
-describe("buildActivityIndex — truncated prefix tolerance", () => {
+describe("scanActivitySegments — truncated prefix tolerance", () => {
   it("does not throw and stops producing segments when returns are missing", () => {
     // The golden-34 prefix cut off mid-backward, with every closing return
     // dropped from that point on.
     const truncated = toEvents(GOLDEN_34).slice(0, 20); // through the first backward call
-    expect(() => buildActivityIndex(truncated, TOKEN_COUNT)).not.toThrow();
-    const segments = buildActivityIndex(truncated, TOKEN_COUNT);
+    expect(() => segmentsOf(truncated, TOKEN_COUNT)).not.toThrow();
+    const segments = segmentsOf(truncated, TOKEN_COUNT);
     expect(segments[segments.length - 1]).toEqual({
       fromIndex: 18,
       phase: "backward",
@@ -256,7 +287,7 @@ describe("buildActivityIndex — truncated prefix tolerance", () => {
 });
 
 describe("activityAt", () => {
-  const segments = buildActivityIndex(toEvents(GOLDEN_34), TOKEN_COUNT);
+  const segments = segmentsOf(toEvents(GOLDEN_34), TOKEN_COUNT);
 
   it("returns idle at playhead 0 (before anything has happened)", () => {
     expect(activityAt(segments, 0)).toEqual({

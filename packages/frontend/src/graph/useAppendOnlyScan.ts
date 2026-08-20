@@ -29,14 +29,39 @@ import { useMemo, useRef } from "react";
  * changed `scan` closure (e.g. a different layer count) — by checking that the
  * event this cache last scanned up to is still the same object reference at
  * the same index. A mismatch forces a full rescan from index 0.
+ *
+ * ## Re-entrancy
+ *
+ * The cache is written during render, which React may invoke more than once
+ * for the same inputs — `<StrictMode>` (main.tsx) double-invokes every render
+ * in development, and a concurrent render can be discarded and replayed. The
+ * hook is therefore built so a repeat invocation with an already-scanned array
+ * returns the cached result WITHOUT calling `scan` again, rather than relying
+ * on each scanner to be a no-op over an empty tail. That keeps the re-entrancy
+ * guarantee a property of this module instead of an unwritten obligation on
+ * every future scanner.
+ *
+ * ## Disabling
+ *
+ * `enabled: false` returns nothing and does no work, but deliberately does NOT
+ * clear the cache: a collapsed panel that reopens on the same session resumes
+ * from where it left off (usually with nothing to do at all) instead of paying
+ * a full rescan. Correctness across a session change is already handled by the
+ * validity check, which sees a different array.
  */
 
 export interface ScanStep<T, C> {
   /** Items found in `events[startIndex..]`, with ABSOLUTE indices. */
-  items: T[];
+  items: readonly T[];
   /** Scanner state to hand back on the next incremental call. */
   carry: C;
 }
+
+/** What the hook returns: the accumulated items, plus the scanner's carry
+ *  (`undefined` before the first scan, or while disabled). `items` identity is
+ *  preserved across batches that added nothing, so downstream `useMemo`s keyed
+ *  on it do not re-run. */
+export type AppendOnlyScanResult<T, C> = ScanStep<T, C | undefined>;
 
 export type Scanner<T, C> = (
   events: readonly TraceEvent[],
@@ -46,29 +71,23 @@ export type Scanner<T, C> = (
 
 interface ScanCache<T, C> {
   scanned: number;
-  items: T[];
+  items: readonly T[];
   carry: C | undefined;
   lastEvent: TraceEvent | undefined;
   scan: Scanner<T, C> | null;
 }
 
-const EMPTY: never[] = [];
-
-export interface AppendOnlyScanResult<T, C> {
-  /** Every item found so far. Identity is preserved across batches that added
-   *  nothing, so downstream `useMemo`s keyed on it do not re-run. */
-  items: T[];
-  /** The scanner's accumulated state — e.g. a dropped-event counter. */
-  carry: C | undefined;
-}
+/** Shared across every disabled consumer, hence `readonly` on the public
+ *  `items` — a caller that sorted or pushed in place would otherwise corrupt
+ *  every other consumer's "disabled means empty" result. */
+const EMPTY: readonly never[] = [];
 
 /**
  * Accumulate `scan`'s findings across appends to `events`.
  *
  * `scan` MUST be referentially stable across renders (a module-level function
  * or a `useCallback`) — a new identity is treated as a different scan and
- * forces a full rescan. Pass `enabled: false` to do no work at all and reset
- * the cache; a collapsed panel should never pay for a scan it isn't showing.
+ * forces a full rescan.
  */
 export function useAppendOnlyScan<T, C>(
   events: readonly TraceEvent[],
@@ -84,16 +103,7 @@ export function useAppendOnlyScan<T, C>(
   });
 
   return useMemo(() => {
-    if (!enabled) {
-      cacheRef.current = {
-        scanned: 0,
-        items: [],
-        carry: undefined,
-        lastEvent: undefined,
-        scan: null,
-      };
-      return { items: EMPTY as T[], carry: undefined };
-    }
+    if (!enabled) return { items: EMPTY as readonly T[], carry: undefined };
 
     const cache = cacheRef.current;
     const stillValid =
@@ -101,6 +111,13 @@ export function useAppendOnlyScan<T, C>(
       (cache.scanned === 0 ||
         (cache.scanned <= events.length &&
           events[cache.scanned - 1] === cache.lastEvent));
+
+    // Nothing new to look at: hand back the cache untouched, without calling
+    // `scan`. This is what makes a repeat render (StrictMode, a replayed
+    // concurrent render) and a collapse/reopen genuinely free.
+    if (stillValid && cache.scanned >= events.length) {
+      return { items: cache.items, carry: cache.carry };
+    }
 
     const startIndex = stillValid ? cache.scanned : 0;
     const step = scan(events, startIndex, stillValid ? cache.carry : undefined);

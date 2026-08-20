@@ -410,12 +410,13 @@ export function NetworkViewPanel(): JSX.Element | null {
   const [hover, setHover] = useState<HoverState | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  // A new session starts collapsed with no stale hover — mirrors
-  // FlameGraphPanel/LossCurvePanel's session-keyed reset.
+  // A new session starts collapsed — mirrors FlameGraphPanel/LossCurvePanel's
+  // session-keyed reset. Hover needs no reset here: collapsing always clears
+  // it via the `expanded` effect below, and hover can only be set while the
+  // card is open.
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset keyed on session id only.
   useEffect(() => {
     setExpanded(false);
-    setHover(null);
   }, [traceSessionId]);
 
   // Callback ref (not useRef) — FlameGraphPanel's latched-null-ref gotcha:
@@ -447,6 +448,12 @@ export function NetworkViewPanel(): JSX.Element | null {
   // the load-bearing part — keeps the object identity stable, without which
   // the `layout` memo below would rebuild every bundle's full cartesian pair
   // list (up to MAX_NEURONS_PER_COLUMN² objects per bundle) on every batch.
+  //
+  // The latch survives a collapse (it is keyed on the session, not on the card
+  // being open) so reopening does not re-scan the whole prefix for a value that
+  // provably cannot change. `scanning` below is what stops the collapsed panel
+  // doing work, and `spec` being warm while collapsed is exactly why that check
+  // still has to test `active`.
   const specCacheRef = useRef<{
     sessionId: string | null;
     scanned: number;
@@ -455,17 +462,12 @@ export function NetworkViewPanel(): JSX.Element | null {
   }>({ sessionId: null, scanned: 0, lastEvent: undefined, spec: null });
 
   const spec = useMemo(() => {
-    if (!active) {
-      specCacheRef.current = {
-        sessionId: null,
-        scanned: 0,
-        lastEvent: undefined,
-        spec: null,
-      };
-      return null;
-    }
     const events = full.events;
     const cache = specCacheRef.current;
+    if (!active) {
+      // Hold the latch without scanning; a different session invalidates it.
+      return cache.sessionId === traceSessionId ? cache.spec : null;
+    }
     // Same append-only validity check as useAppendOnlyScan: anything but a
     // pure append (a new session, a seekable re-page) forces a rescan.
     const appended =
@@ -505,12 +507,12 @@ export function NetworkViewPanel(): JSX.Element | null {
     scanning
   );
 
-  const statsScan = useCallback<Scanner<LayerStatsPoint, null>>(
-    (events, startIndex) =>
-      scanLayerStatsCandidates(events, linearCount, startIndex),
+  const statsScan = useCallback<Scanner<LayerStatsPoint, number>>(
+    (events, startIndex, carry) =>
+      scanLayerStatsCandidates(events, linearCount, startIndex, carry),
     [linearCount]
   );
-  const { items: statsCandidates } = useAppendOnlyScan(
+  const { items: statsCandidates, carry: statsDropped } = useAppendOnlyScan(
     full.events,
     statsScan,
     scanning
@@ -541,12 +543,14 @@ export function NetworkViewPanel(): JSX.Element | null {
     [epochCandidates]
   );
 
+  // `active` matters here now that `spec` stays warm while collapsed: without
+  // it a closed card would keep rebuilding the full pair geometry on resize.
   const layout = useMemo(
     () =>
-      spec && width > 0 && height > 0
+      active && spec && width > 0 && height > 0
         ? layoutNetwork(spec, width, height)
         : null,
-    [spec, width, height]
+    [active, spec, width, height]
   );
 
   const activity = useMemo(
@@ -687,6 +691,16 @@ export function NetworkViewPanel(): JSX.Element | null {
             {traceSeekable && full.truncated && (
               <div style={{ color: "var(--color-warning)" }}>
                 Network view covers the first {full.events.length} events only.
+              </div>
+            )}
+            {statsDropped !== undefined && statsDropped > 0 && (
+              <div
+                style={{ color: "var(--color-warning)" }}
+                title="record_layer_stats events whose weight RMS was non-finite (inf/nan) — likely a diverged run. Bundle widths show the last finite epoch."
+              >
+                {statsDropped} epoch{statsDropped === 1 ? "" : "s"} of layer
+                stats dropped (non-finite) — weights shown are the last finite
+                epoch.
               </div>
             )}
             <div

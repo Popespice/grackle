@@ -74,7 +74,7 @@ function stripReprQuotes(s: string): string | null {
 
 /**
  * Extract the network architecture from a raw trace-event array (must be a
- * from-index-0 prefix, same contract as `extractEpochSeries`). `startIndex`
+ * from-index-0 prefix, same contract as `scanEpochCandidates`). `startIndex`
  * resumes the search over an appended tail; the beacon is one-shot, so a
  * caller that has already found a spec should stop calling rather than rescan.
  *

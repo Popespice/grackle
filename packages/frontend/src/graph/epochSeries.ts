@@ -29,6 +29,9 @@ export interface EpochPoint {
   eventIndex: number;
 }
 
+/** The assembled series a panel renders: `scanEpochCandidates`' findings with
+ *  the multi-run rule applied. Built by the consumer (see LossCurvePanel),
+ *  which owns the incremental accumulation. */
 export interface EpochSeries {
   points: EpochPoint[];
   /** Number of distinct training runs detected (see multi-run rule below). */
@@ -39,9 +42,9 @@ export interface EpochSeries {
 }
 
 /** A single scan's raw findings, before the multi-run rule is applied —
- *  the incremental-scan cache (LossCurvePanel) accumulates these across
- *  calls; run-splitting is then re-derived cheaply from the full
- *  accumulated list via `computeRunsFromCandidates`. */
+ *  `useAppendOnlyScan` accumulates these across calls (threading `dropped`
+ *  through its `carry`); run-splitting is then re-derived cheaply from the
+ *  full accumulated list via `computeRunsFromCandidates`. */
 export interface EpochScanResult {
   candidates: EpochPoint[];
   dropped: number;
@@ -152,16 +155,4 @@ export function computeRunsFromCandidates<T extends { epoch: number }>(
     runs += 1;
   }
   return { points: currentRun, runs };
-}
-
-/**
- * Extract the training-loss curve from a raw trace-event array (must be a
- * from-index-0 prefix — see EpochPoint.eventIndex doc). A one-shot
- * convenience over `scanEpochCandidates` + `computeRunsFromCandidates` for
- * callers that don't need incremental scanning.
- */
-export function extractEpochSeries(events: readonly TraceEvent[]): EpochSeries {
-  const { candidates, dropped } = scanEpochCandidates(events, 0);
-  const { points, runs } = computeRunsFromCandidates(candidates);
-  return { points, runs, dropped };
 }

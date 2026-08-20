@@ -297,6 +297,192 @@ describe("NetworkViewPanel — no-beacon degrade", () => {
   });
 });
 
+/**
+ * A recording stand-in for a 2D context. jsdom has no canvas, and the rest of
+ * this file stubs `getContext` to null so the paint effect no-ops — which left
+ * `paintNetwork` (five draw passes, the active-bundle overdraw, the
+ * highlight-column choice, every caption and label) with no coverage at all.
+ * This records enough to assert what was drawn and in what colour.
+ *
+ * Neuron/glyph circles stroke an arc-only path, so `segments` stays 0 for them
+ * and `strokes` isolates the edge-bundle passes.
+ */
+function makeRecorder() {
+  const strokes: { style: string; alpha: number; segments: number }[] = [];
+  const arcs: { x: number; y: number; fill: string }[] = [];
+  const texts: string[] = [];
+  let segments = 0;
+  let lastArc: { x: number; y: number } | null = null;
+  const ctx = {
+    strokeStyle: "",
+    fillStyle: "",
+    globalAlpha: 1,
+    lineWidth: 1,
+    font: "",
+    textAlign: "",
+    textBaseline: "",
+    clearRect: () => {},
+    setTransform: () => {},
+    beginPath: () => {
+      segments = 0;
+      lastArc = null;
+    },
+    moveTo: () => {},
+    lineTo: () => {
+      segments += 1;
+    },
+    arc: (x: number, y: number) => {
+      lastArc = { x, y };
+    },
+    fill: () => {
+      if (lastArc) arcs.push({ ...lastArc, fill: String(ctx.fillStyle) });
+    },
+    stroke: () => {
+      if (segments > 0) {
+        strokes.push({
+          style: String(ctx.strokeStyle),
+          alpha: ctx.globalAlpha,
+          segments,
+        });
+      }
+    },
+    fillText: (text: string) => {
+      texts.push(text);
+    },
+  };
+  return { ctx, strokes, arcs, texts };
+}
+
+describe("NetworkViewPanel — what actually gets painted", () => {
+  const FORWARD_TRAIN = "#e86b20";
+  const BACKWARD = "#8b5cf6";
+  const NEURON_FILL = "#39404d";
+  /** Column x positions for `linear:4:2` in the stubbed 800x400 container. */
+  const SRC_X = 40;
+  const DST_X = 760;
+
+  let recorder: ReturnType<typeof makeRecorder>;
+
+  beforeEach(() => {
+    recorder = makeRecorder();
+    // getContext is overloaded across every context id; the recorder only
+    // implements the 2d one, so the assignment needs the cast.
+    HTMLCanvasElement.prototype.getContext = vi.fn(
+      () => recorder.ctx
+    ) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+  });
+
+  afterEach(() => {
+    HTMLCanvasElement.prototype.getContext = vi.fn(() => null);
+  });
+
+  function paintAt(playhead: number, events = NET_EVENTS): void {
+    mockUseFullTrace.mockReturnValue(fullTrace({ events, loaded: true }));
+    useGraphStore.setState({ traceSessionId: "s1", tracePlayhead: playhead });
+    render(<NetworkViewPanel />);
+    expandPanel();
+  }
+
+  it("labels every column and annotates the bundle with the live weight RMS", () => {
+    paintAt(20);
+    expect(recorder.texts).toContain("input · 4");
+    expect(recorder.texts).toContain("logits · 2");
+    expect(recorder.texts).toContain("linear 4→2 · w 0.20");
+  });
+
+  it("omits the weight annotation before any stats have fired", () => {
+    paintAt(5);
+    expect(recorder.texts).toContain("linear 4→2");
+    expect(recorder.texts.some((t) => t.includes("· w "))).toBe(false);
+  });
+
+  it("states the drawn count, not the total, on a capped column", () => {
+    const wide = toEvents([
+      [
+        "return",
+        "grackle_nn/metrics.py:record_architecture",
+        3,
+        "'linear:100:2'",
+      ],
+    ]);
+    paintAt(0, wide);
+    expect(recorder.texts).toContain("input · 100 (64 of 100 shown)");
+  });
+
+  it("forward highlights the DESTINATION column in the forward colour", () => {
+    paintAt(4);
+    expect(recorder.strokes.some((s) => s.style === FORWARD_TRAIN)).toBe(true);
+    const dst = recorder.arcs.filter((a) => a.x === DST_X);
+    const src = recorder.arcs.filter((a) => a.x === SRC_X);
+    // Pin the counts first: `every` over an empty list is vacuously true.
+    expect(dst).toHaveLength(2);
+    expect(src).toHaveLength(4);
+    expect(dst.every((a) => a.fill === FORWARD_TRAIN)).toBe(true);
+    expect(src.every((a) => a.fill === NEURON_FILL)).toBe(true);
+  });
+
+  it("backward highlights the SOURCE column in violet — the opposite end", () => {
+    // The direction is the panel's whole visual claim: gradients flow back
+    // toward the input, so the sweep must light the column the bundle starts
+    // from, not the one it ends at.
+    paintAt(12);
+    expect(recorder.strokes.some((s) => s.style === BACKWARD)).toBe(true);
+    const src = recorder.arcs.filter((a) => a.x === SRC_X);
+    const dst = recorder.arcs.filter((a) => a.x === DST_X);
+    expect(src).toHaveLength(4);
+    expect(dst).toHaveLength(2);
+    expect(src.every((a) => a.fill === BACKWARD)).toBe(true);
+    expect(dst.every((a) => a.fill === NEURON_FILL)).toBe(true);
+  });
+
+  it("highlights no column at all during update and reset", () => {
+    paintAt(15); // optimizer step
+    expect(recorder.arcs).toHaveLength(6); // 4 input + 2 logit neurons
+    expect(recorder.arcs.every((a) => a.fill === NEURON_FILL)).toBe(true);
+  });
+
+  it("draws one path per bundle, not one per line", () => {
+    // D-N3: a bundle is a single beginPath/stroke over all its pairs; per-line
+    // strokes would be 4x2 separate calls here.
+    paintAt(0);
+    const bundleStrokes = recorder.strokes.filter((s) => s.segments === 8);
+    expect(bundleStrokes).toHaveLength(1); // 4x2 pairs, ONE path
+  });
+});
+
+describe("NetworkViewPanel — diverged run", () => {
+  it("says how many epochs of layer stats were dropped as non-finite", () => {
+    const diverged = toEvents([
+      ...NET_ROWS,
+      [
+        "return",
+        "grackle_nn/metrics.py:record_layer_stats",
+        3,
+        "(1, nan, 0.05)",
+      ],
+    ]);
+    mockUseFullTrace.mockReturnValue(
+      fullTrace({ events: diverged, loaded: true })
+    );
+    useGraphStore.setState({ traceSessionId: "s1", tracePlayhead: 22 });
+    render(<NetworkViewPanel />);
+    expandPanel();
+    expect(
+      screen.getByText(/1 epoch of layer stats dropped/)
+    ).toBeInTheDocument();
+  });
+
+  it("says nothing when every epoch is finite", () => {
+    mockUseFullTrace.mockReturnValue(
+      fullTrace({ events: NET_EVENTS, loaded: true })
+    );
+    useGraphStore.setState({ traceSessionId: "s1", tracePlayhead: 20 });
+    render(<NetworkViewPanel />);
+    expandPanel();
+    expect(screen.queryByText(/dropped \(non-finite\)/)).toBeNull();
+  });
+});
+
 describe("NetworkViewPanel — hover tooltip", () => {
   /** Layout for `linear:4:2` in the stubbed 800x400 container: columns at
    *  x=40 (4 neurons, y 167/189/211/233) and x=760 (2 neurons, y 189/211).

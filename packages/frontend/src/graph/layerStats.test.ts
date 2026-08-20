@@ -1,9 +1,10 @@
 import type { TraceEvent } from "@grackle/shared-types";
 import { describe, expect, it } from "vitest";
+import { computeRunsFromCandidates } from "./epochSeries";
 import {
-  extractLayerStats,
   type LayerStatsPoint,
   maxima,
+  scanLayerStatsCandidates,
   statsAtPlayhead,
 } from "./layerStats";
 
@@ -26,12 +27,49 @@ function retEvent(
 
 const NODE = "grackle_nn/metrics.py:record_layer_stats";
 
-describe("extractLayerStats", () => {
+const CHUNK = 2;
+
+/**
+ * Runs the events through BOTH a single pass and a chunked incremental scan,
+ * asserts the two agree, and returns the single-pass result. Every test below
+ * therefore exercises the composition the panels actually ship — the
+ * incremental scanner accumulated across appends — rather than a one-shot
+ * convenience wrapper no production code calls.
+ */
+function statsOf(
+  events: readonly TraceEvent[],
+  linearCount: number
+): LayerStatsPoint[] {
+  const single = scanLayerStatsCandidates(events, linearCount, 0, undefined);
+  let chunked: LayerStatsPoint[] = [];
+  let carry: number | undefined;
+  for (let start = 0; start < events.length; start += CHUNK) {
+    const end = Math.min(events.length, start + CHUNK);
+    const step = scanLayerStatsCandidates(
+      events.slice(0, end),
+      linearCount,
+      start,
+      carry
+    );
+    chunked = chunked.concat(step.items);
+    carry = step.carry;
+  }
+  expect(chunked).toEqual(single.items);
+  expect(carry ?? 0).toBe(single.carry);
+  return computeRunsFromCandidates(single.items).points;
+}
+
+/** The non-finite drop count the panel surfaces, threaded through `carry`. */
+function droppedOf(events: readonly TraceEvent[], linearCount: number): number {
+  return scanLayerStatsCandidates(events, linearCount, 0, undefined).carry;
+}
+
+describe("scanLayerStatsCandidates", () => {
   it("parses a real 3-linear-layer 7-tuple", () => {
     const events = [
       retEvent(NODE, "(0, 0.123, 0.0456, 0.789, 0.0123, 1.11, 0.222)"),
     ];
-    const series = extractLayerStats(events, 3);
+    const series = statsOf(events, 3);
     expect(series).toEqual([
       {
         epoch: 0,
@@ -47,31 +85,31 @@ describe("extractLayerStats", () => {
 
   it("parses scientific notation", () => {
     const events = [retEvent(NODE, "(2, 1e-05, 2.5e+02)")];
-    const series = extractLayerStats(events, 1);
+    const series = statsOf(events, 1);
     expect(series[0]?.perLinear).toEqual([{ wRms: 0.00001, dwRms: 250 }]);
   });
 
   it("drops a point containing inf/nan", () => {
     const events = [retEvent(NODE, "(0, inf, nan)")];
-    expect(extractLayerStats(events, 1)).toEqual([]);
+    expect(statsOf(events, 1)).toEqual([]);
   });
 
   it("ignores a tuple whose arity doesn't match linearCount (wrong net)", () => {
     // A 5-element (2-linear) tuple parsed against linearCount=3 (expects 7).
     const events = [retEvent(NODE, "(0, 0.1, 0.2, 0.3, 0.4)")];
-    expect(extractLayerStats(events, 3)).toEqual([]);
+    expect(statsOf(events, 3)).toEqual([]);
   });
 
   it("rejects a node_id where metrics.py:record_layer_stats is not exact-or-slash-preceded", () => {
     const events = [
       retEvent("pkg/mymetrics.py:record_layer_stats", "(0, 0.1, 0.2)"),
     ];
-    expect(extractLayerStats(events, 1)).toEqual([]);
+    expect(statsOf(events, 1)).toEqual([]);
   });
 
   it("skips an event with ret_truncated: true", () => {
     const events = [retEvent(NODE, "(0, 0.1, 0.2)", true)];
-    expect(extractLayerStats(events, 1)).toEqual([]);
+    expect(statsOf(events, 1)).toEqual([]);
   });
 
   it("keeps only the last run on a restart (non-increasing epoch)", () => {
@@ -80,7 +118,7 @@ describe("extractLayerStats", () => {
       retEvent(NODE, "(1, 0.15, 0.15)"), // run 1
       retEvent(NODE, "(0, 0.05, 0.4)"), // run 2 (restart)
     ];
-    const series = extractLayerStats(events, 1);
+    const series = statsOf(events, 1);
     expect(series.map((p) => p.epoch)).toEqual([0]);
     expect(series[0]?.perLinear).toEqual([{ wRms: 0.05, dwRms: 0.4 }]);
   });
@@ -104,8 +142,42 @@ describe("extractLayerStats", () => {
       },
       retEvent(NODE, "(1, 0.15, 0.15)"),
     ];
-    const series = extractLayerStats(events, 1);
+    const series = statsOf(events, 1);
     expect(series.map((p) => p.eventIndex)).toEqual([1, 3]);
+  });
+});
+
+describe("scanLayerStatsCandidates — non-finite drop count", () => {
+  it("counts a dropped point instead of discarding it silently", () => {
+    // A diverged run: without the count the panel would freeze its bundle
+    // widths at the last finite epoch with nothing to say about why.
+    const events = [
+      retEvent(NODE, "(0, 0.1, 0.2)"),
+      retEvent(NODE, "(1, nan, 0.2)"),
+      retEvent(NODE, "(2, 0.3, inf)"),
+    ];
+    expect(droppedOf(events, 1)).toBe(2);
+    expect(statsOf(events, 1).map((p) => p.epoch)).toEqual([0]);
+  });
+
+  it("is zero when every point is finite", () => {
+    expect(droppedOf([retEvent(NODE, "(0, 0.1, 0.2)")], 1)).toBe(0);
+  });
+
+  it("does not count a shape mismatch as a drop", () => {
+    // Wrong arity is a different net, not a diverged one.
+    expect(droppedOf([retEvent(NODE, "(0, 0.1, 0.2, 0.3, 0.4)")], 1)).toBe(0);
+  });
+
+  it("accumulates across an incremental resume", () => {
+    const events = [
+      retEvent(NODE, "(0, nan, 0.2)"),
+      retEvent(NODE, "(1, 0.1, inf)"),
+    ];
+    const first = scanLayerStatsCandidates(events.slice(0, 1), 1, 0, undefined);
+    const second = scanLayerStatsCandidates(events, 1, 1, first.carry);
+    expect(second.carry).toBe(droppedOf(events, 1));
+    expect(second.carry).toBe(2);
   });
 });
 
