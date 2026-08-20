@@ -50,3 +50,5 @@ NNNN-short-title.md
 | [0026](0026-explanation-layer-edge-evidence.md) | Explanation layer: edge evidence (`metadata.line`, no wire-schema change) and the causal "why did this fire" path | accepted |
 | [0027](0027-watch-mode.md) | Watch mode: full `static_graph` re-push, polling default + optional watchfiles backend, hash-gated rebuild | accepted |
 | [0028](0028-nn-traceable-subject.md) | The NN as a traceable subject: layer-granularity call shape, builtin-float metric boundary, the beacon parse-contract convention, trace-root discipline, structural-golden determinism, dev-only grackle dep | accepted |
+| [0029](0029-self-supervised-learning-loop.md) | The self-supervised learning loop: 35-column structural features, max-normalized log-heat labels, split-by-graph anti-leakage, from-scratch rank metrics, independent Tarjan/BFS, labels/aggregates cross-check tripwire | accepted |
+| [0030](0030-capability-gated-inference-surface.md) | The capability-gated inference surface: `ml_bridge` toolchain-style gate, byte-identical-when-absent `predicted_heat`, separate model-freshness cache, `grackle learn` shared-root contract | accepted |

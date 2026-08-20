@@ -65,6 +65,8 @@ pnpm check-parity                         # diff fresh codegen against committed
 (cd packages/agent && uv run mypy --strict src tests)
 (cd packages/agent && uv run grackle serve)
 (cd packages/agent && uv run grackle languages)
+(cd packages/agent && uv run grackle learn TRACE.jsonl --root ../nn/src)  # train a heat-model.npz (Phase 12.2)
+(cd packages/agent && uv run grackle serve --model .grackle/heat-model.npz)  # serve with predicted_heat
 
 # Frontend-only
 pnpm --filter @grackle/frontend test --run
@@ -82,7 +84,7 @@ Auto-fix on dirty repos: `pnpm format` (biome write) and `uv run ruff format` in
 
 ## Architecture seams (read these to be productive)
 
-- **`docs/adr/`** — 28 ADRs: monorepo structure (0001), WebSocket transport (0002), adapter design (0003), open-string extension surface (0004), kind registry (0005), Python ast vs Tree-sitter (0006), panel/slot system (0007), analysis registry (0008), Tree-sitter integration (0009), Rust adapter (0010), cycle detection (0011), cross-language edges (0012), runtime trace event schema (0013), trace transport (0014), runtime overlay UI (0015), real-time trace streaming (0016), server-side trace seek (0017), server-side aggregation engine (0018), call-tree + flame graph (0019), trace persistence + session store (0020), differential analysis (0021), polyglot runtime via V8 Inspector (0022), Go runtime coverage (0023), Rust runtime coverage (0024), value capture (0025), explanation layer: edge evidence + causal path (0026), watch mode (0027), the NN as a traceable subject (0028). When designing new code, check whether an ADR already constrains the decision.
+- **`docs/adr/`** — 30 ADRs: monorepo structure (0001), WebSocket transport (0002), adapter design (0003), open-string extension surface (0004), kind registry (0005), Python ast vs Tree-sitter (0006), panel/slot system (0007), analysis registry (0008), Tree-sitter integration (0009), Rust adapter (0010), cycle detection (0011), cross-language edges (0012), runtime trace event schema (0013), trace transport (0014), runtime overlay UI (0015), real-time trace streaming (0016), server-side trace seek (0017), server-side aggregation engine (0018), call-tree + flame graph (0019), trace persistence + session store (0020), differential analysis (0021), polyglot runtime via V8 Inspector (0022), Go runtime coverage (0023), Rust runtime coverage (0024), value capture (0025), explanation layer: edge evidence + causal path (0026), watch mode (0027), the NN as a traceable subject (0028), the self-supervised learning loop (0029), the capability-gated inference surface (0030). When designing new code, check whether an ADR already constrains the decision.
 - **`docs/cross-platform.md`** — the cross-platform contract (path handling, `spawn` semantics, line endings, CI matrix). Non-negotiable; CI runs Ubuntu + Windows on every PR, all three OSes on push to main.
 - **`packages/agent/src/grackle/adapters/`** — `StaticParserAdapter` and `RuntimeAdapter` are `@runtime_checkable` `typing.Protocol`s (not ABCs — see ADR-0003). `AdapterRegistry` is a thread-safe module singleton; adapters register themselves and the CLI/UI look them up by language string.
 
@@ -95,6 +97,8 @@ Auto-fix on dirty repos: `pnpm format` (biome write) and `uv run ruff format` in
 - **Atomic writes** — write to `.tmp`, then `Path.replace()` (not `Path.rename()` — Windows `rename` fails on existing target; this caused commit `3c31dca`).
 - **Bind only to `127.0.0.1`.** Never `0.0.0.0`. Local-first is a product invariant, not a default.
 - **Versions are single-source.** `__version__` is read from `importlib.metadata`; don't add string literals that duplicate `pyproject.toml`'s `version`.
+- **`grackle_nn` is a soft, function-local import everywhere it's optional.** `packages/agent/src/grackle/ml_bridge.py` is the agent's only `grackle_nn` importer, and every import lives inside a function body (never module scope) so `import grackle.cli`/`grackle.server` never pulls in numpy; mirrored on the `nn` side, where `grackle_nn.ml` never imports `grackle` at runtime. Both directions are enforced by a fresh-subprocess + AST-scan test pair, not just convention (ADR-0029/0030).
+- **`FEATURE_VERSION` gates the ML feature-vector layout.** `grackle_nn.ml.features.FEATURE_NAMES` (35 columns) is baked into every trained `heat-model.npz` checkpoint; reordering or changing the column set requires bumping `FEATURE_VERSION`, or a checkpoint trained under the old layout will silently misalign with predictions made under the new one (ADR-0029).
 
 ## Active roadmap context
 
@@ -129,73 +133,45 @@ ship (**this PR**): folds in the "network as a network" amendment's Phase-11 del
 unchanged; per-epoch tail 20→22, C 28→30, 60-epoch total ≈25,830) — plus ADR-0028 ("The NN as a
 traceable subject", ADR count 27→28), `PHASE_11_SUMMARY.md`, `PROJECT_ACCEPTANCE.md` §G, version
 `0.11.0`, tag (post-merge). The three beacons are identity passthroughs whose captured return reprs
-are a versioned frontend parse contract (Phase 12.4 renders the latter two). **Phase 12
-("grackle learns as it analyzes") queued after 11.H.** **12.0** — incremental trace persistence
-(agent-only durability fix, lands before the ML chunks): `grackle trace -o` used to buffer the
-whole run in memory and write once at the end, so a killed tracing process lost everything;
-`JsonlPartWriter` (extracted from the Phase-9.3 `RecordingSink` mechanism, `python_runtime/
-writer.py`) now backs both `-o` (Python only, gated on a new `RuntimeAdapter.streaming_trace_parity`
-protocol attribute — Node/Go/Rust keep the one-shot buffered write, since their `trace()` is a
-different instrument or a post-hoc coverage conversion) and the `--stream` tee, writing per-event
-to `FILE.jsonl.part` with atomic truncate-close-rename finalize — a killed run keeps the run so far
-(minus the unflushed write-buffer tail; process-kill durable, not power-loss durable). An existing
-`.part` is **refused, never cleared** — it holds a prior run's salvaged events, and clobbering it is
-also how two concurrent traces corrupt each other. Write failures are swallowed at the sink and
-reported from `writer.broken`, never propagated into the traced program via `sys.monitoring`. All
-JSONL emitters write binary LF (`write_jsonl` used text mode, so it emitted CRLF on Windows).
-ADR-0020 amendment (no new ADR — same precedent as `RecordingSink` itself). **12.1** — ML pipeline
-(`packages/nn/src/grackle_nn/ml/`, blocks M0–M9) — **SHIPPED: [PR #77](https://github.com/Popespice/grackle/pull/77),
-squash-merged to main at `604e245`.** A self-supervised hotspot-prediction engine, standalone in
-the `nn` package: `features.py` extracts a 35-column structural feature vector from a raw static
-graph (degree buckets by edge kind, an independently-reimplemented iterative Tarjan SCC, BFS
-reachability from an entry set, name/path flags — never touches trace/heat data); `labels.py`
-mirrors the agent's `TraceAggregates` count-weighting exactly (pinned by a cross-check test against
-all 5 committed golden traces); `dataset.py` does graph-level (never node-level) train/val
-splitting; `metrics_rank.py` is pure-numpy Spearman + top-k overlap; `heat_model.py` trains the
-Phase-11 MLP architecture (`Linear(35,64)→ReLU→Linear(64,32)→ReLU→Linear(32,1)`, Adam+MSE) wired to
-the `record_epoch` trace beacon, with an atomic, two-pass-validated `heat-model.npz` checkpoint
-format. A synthetic-corpus acceptance test proves the trained model beats a raw-in-degree Spearman
-baseline on held-out graphs; a real-fixture integration test covers Python plus the polyglot
-Go/Rust/Node goldens; import-hygiene is enforced by a fresh-subprocess + AST-scan test pair
-(ADR-0028: `nn -> grackle` stays dev-only). **No agent/frontend/wire-schema change**
-(`check-parity` stays a no-op). An 8-angle, 58-agent adversarial code review found 25 raw findings,
-23 confirmed after independent re-verification and fixed pre-merge — including one real correctness
-bug (a self-recursive node with no other callers was wrongly excluded from the BFS entry set, an
-asymmetry between the in-degree count and the adjacency actually walked), three unguarded crashes
-on malformed input, `spearman` returning `NaN` on empty input instead of the documented `0.0`, and
-a duplicated tie-averaging algorithm extracted to a shared `_rank_utils` helper. CI was blocked
-twice by an unrelated active GitHub Actions platform outage (confirmed via githubstatus.com, jobs
-never acquired a runner) before landing green. **12.2** — `grackle learn` CLI + capability-gated
-`predicted_heat` (blocks A0–A4) — **SHIPPED: [PR #79](https://github.com/Popespice/grackle/pull/79),
-squash-merged to main at `d55dc18`.** New `src/grackle/ml_bridge.py` is the agent's only
-`grackle_nn` importer and does it exclusively inside function bodies, so importing `grackle.cli` /
-`grackle.server` never pulls in numpy (enforced by a fresh-subprocess + module-scope AST scan in
-`tests/test_ml_bridge_import_hygiene.py` — the mirror of 12.1's nn-side hygiene test). `grackle
-learn [TRACES...] --root R` merges every trace's heat into ONE example (one root ⇒ one graph, so
-there is no held-out graph and the reported Spearman numbers are train-set metrics, never
-mislabeled as validation); `serve --model` injects `metadata.predicted_heat` from inside
-`_build_static_graph`, so watch-mode re-broadcasts carry it too. Absence is byte-identical —
-model missing, gate closed, or model broken all add NO key. No wire-schema change;
-`check-parity` a no-op; agent runtime deps unchanged (grackle-nn is an editable **dev** dep).
-**Non-obvious invariants worth not re-deriving:** `meta_cache` and `predicted_heat` need
-*different* signatures — the former tracks node ids + edges (so a cosmetic edit still hits and
-Tarjan is not re-run), the latter must additionally track name/line/kind/decorators/async because
-its payload bakes in node_ids; both use sorted, multiplicity-preserving tuples because an XOR fold
-cancels duplicate edge triples (`x(); x()`) and stress-2k has 26 of them; both caches are bounded
-(watch mode mints a key per edit); a broken checkpoint is tracked by *file* identity, not per
-graph, or one corrupt model evicts every live payload. Also fixed here, though it is 12.1 code:
-`ml/labels.py::make_targets` mixed `np.log1p` with `math.log1p` — different implementations that
-disagree by 1 ULP on some platforms, so the hottest node normalized to `1.0000000000000002`,
-breaking D12.2's `y ∈ [0,1]` bound on Linux only (macOS's libm agrees with numpy, so it never
-reproduced locally and read as a flake). Next: 12.3 (frontend predicted-heat overlay +
-LossCurvePanel), 12.4 (NetworkViewPanel), and 12.H (ship, ADRs 0029–0030, `v0.12.0` — still
-reserved, unconsumed). **Deferred to 13.0:** `serve --exclude` — `learn --exclude` currently warns
-about the resulting train/serve feature skew rather than fixing it. Full plan:
-`~/.claude/plans/as-phase-10-is-snazzy-sedgewick.md`.
+are a versioned frontend parse contract (Phase 12.4 renders the latter two).
 
-Granular per-sub-chunk implementation detail (Phase 8.5, 9.1–9.3, 10.1–10.7) has moved out
-of this file — it's already fully preserved in `PHASE_8_SUMMARY.md`, `PHASE_9_SUMMARY.md`, and
-`PHASE_10_SUMMARY.md` below. Read the relevant summary file when you need that level of detail
-(e.g. exact mechanism notes, review-finding history, ADR cross-references for a specific chunk).
+**Phase 12 ("grackle learns as it analyzes") is shipped at tag `v0.12.0-phase-12`.** Turns the
+Phase-11 MLP into grackle's own ML engine: a self-supervised hotspot-prediction pipeline
+(`packages/nn/src/grackle_nn/ml/`) trained from `(graph, trace)` pairs via `grackle learn`,
+surfaced as a capability-gated `predicted_heat` metadata key at `serve` time, rendered as a
+predicted-vs-actual overlay + `LossCurvePanel` + `NetworkViewPanel` — **no wire-schema change all
+phase** (`check-parity` a no-op every chunk). Chunks (one squash-merged PR each): **12.0** —
+incremental trace persistence (agent-only durability fix: `grackle trace -o` used to buffer a
+whole run in memory and lose it all on a kill; `JsonlPartWriter` now writes per-event to a `.part`
+file with atomic finalize; ADR-0020 amendment, no new ADR) — **SHIPPED PR #76, main=`6d89fd6`**;
+**12.1** — ML pipeline (35-column structural features, max-normalized log-heat labels,
+from-scratch Spearman/top-k metrics, an independent Tarjan/BFS reimplementation, a seeded
+synthetic-corpus acceptance bar beating a raw-in-degree baseline, ADR-0029) — **SHIPPED PR #77,
+main=`604e245`**; **12.2** — `grackle learn` CLI + capability-gated `predicted_heat`
+(`src/grackle/ml_bridge.py`, a toolchain-style gate mirroring `go_runtime`/`rust_runtime`; absence
+is byte-identical whether the model is missing, the gate is closed, or the model is broken; ADR-0030)
+— **SHIPPED PR #79, main=`d55dc18`**; **12.3** — frontend: predicted-heat overlay +
+`LossCurvePanel` (right-sidebar `PredictedHeatPanel`, a `GraphCanvas` cascade branch after
+`diffOverlay`, `record_epoch`-driven loss curve with click-to-seek) — **SHIPPED PR #81,
+main=`c3a21bf`**; **12.4** — `NetworkViewPanel` (neuron columns + weight-bundle edges +
+playhead-animated forward/eval/backward sweeps, reading the Phase-11.H `record_architecture`/
+`record_layer_stats` beacons; a dedicated mutation-testing pass kills 30/30 mutants across the 8
+new modules) — **SHIPPED PR #83, main=`7bf6502`**; **12.H** — ship (this PR): ADR-0029 ("The
+self-supervised learning loop") + ADR-0030 ("The capability-gated inference surface") accepted,
+ADR count 28→30; `PHASE_12_SUMMARY.md`; `PROJECT_ACCEPTANCE.md` §H; version `0.12.0` on
+agent/nn/frontend, both `uv` locks re-locked (now bidirectional editable dev deps — the agent's
+lock pins editable `grackle-nn`, the nn package's lock pins editable `grackle`); tag (post-merge).
+**Deferred to 13.0:** `serve --exclude` (a model trained on a filtered subset is still scored
+against the full graph at inference time — surfaced as a warning, not fixed) and a session-store
+`root` column (would unlock a genuine multi-graph training corpus and real held-out validation
+metrics, currently impossible since `grackle learn` merges every trace under one `--root` into a
+single graph). Full plan: `~/.claude/plans/as-phase-10-is-snazzy-sedgewick.md`; full per-chunk
+detail (review-finding history, exact mechanism notes): `PHASE_12_SUMMARY.md`.
 
-`PHASE_0_SUMMARY.md` through `PHASE_11_SUMMARY.md` at the repo root are the per-phase "what shipped + acceptance grid" reference cards. `PROJECT_ACCEPTANCE.md` at the repo root contains the whole-product definition-of-done grid.
+Granular per-sub-chunk implementation detail (Phase 8.5, 9.1–9.3, 10.1–10.7, 12.0–12.4) has moved
+out of this file — it's already fully preserved in `PHASE_8_SUMMARY.md`, `PHASE_9_SUMMARY.md`,
+`PHASE_10_SUMMARY.md`, and `PHASE_12_SUMMARY.md` below. Read the relevant summary file when you
+need that level of detail (e.g. exact mechanism notes, review-finding history, ADR cross-references
+for a specific chunk).
+
+`PHASE_0_SUMMARY.md` through `PHASE_12_SUMMARY.md` at the repo root are the per-phase "what shipped + acceptance grid" reference cards. `PROJECT_ACCEPTANCE.md` at the repo root contains the whole-product definition-of-done grid.
