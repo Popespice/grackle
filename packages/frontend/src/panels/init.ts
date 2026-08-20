@@ -7,6 +7,7 @@ import { FlameGraphPanel } from "./FlameGraphPanel";
 import { GraphLegendPanel } from "./GraphLegendPanel";
 import { HeaderChrome } from "./HeaderChrome";
 import { LossCurvePanel } from "./LossCurvePanel";
+import { NetworkViewPanel } from "./NetworkViewPanel";
 import { NodeInspectorPanel } from "./NodeInspectorPanel";
 import { PredictedHeatPanel } from "./PredictedHeatPanel";
 import { panels } from "./registry";
@@ -34,6 +35,12 @@ panels.register({
   id: "graph-canvas",
   component: GraphCanvas,
   order: 0,
+});
+panels.register({
+  slot: "floating-overlay",
+  id: "network-view-panel",
+  component: NetworkViewPanel,
+  order: 10,
 });
 panels.register({
   slot: "right-sidebar",

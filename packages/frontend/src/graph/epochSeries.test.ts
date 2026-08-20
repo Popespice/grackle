@@ -2,7 +2,8 @@ import type { TraceEvent } from "@grackle/shared-types";
 import { describe, expect, it } from "vitest";
 import {
   computeRunsFromCandidates,
-  extractEpochSeries,
+  type EpochPoint,
+  type EpochSeries,
   scanEpochCandidates,
 } from "./epochSeries";
 
@@ -34,7 +35,32 @@ function otherEvent(event: string, node_id: string): TraceEvent {
   return { event, node_id, ts_ns: 0, thread_id: 1, frame_depth: 0 };
 }
 
-describe("extractEpochSeries — selection + parsing", () => {
+const CHUNK = 2;
+
+/**
+ * Runs the events through BOTH a single pass and a chunked incremental scan,
+ * asserts the two agree, and returns the assembled series. Every test below
+ * therefore exercises the composition LossCurvePanel actually ships —
+ * `scanEpochCandidates` accumulated across appends, then run-split — rather
+ * than a one-shot convenience wrapper no production code calls.
+ */
+function seriesOf(events: readonly TraceEvent[]): EpochSeries {
+  const single = scanEpochCandidates(events, 0);
+  let candidates: EpochPoint[] = [];
+  let dropped = 0;
+  for (let start = 0; start < events.length; start += CHUNK) {
+    const end = Math.min(events.length, start + CHUNK);
+    const step = scanEpochCandidates(events.slice(0, end), start);
+    candidates = candidates.concat(step.candidates);
+    dropped += step.dropped;
+  }
+  expect(candidates).toEqual(single.candidates);
+  expect(dropped).toBe(single.dropped);
+  const { points, runs } = computeRunsFromCandidates(single.candidates);
+  return { points, runs, dropped: single.dropped };
+}
+
+describe("scanEpochCandidates — selection + parsing", () => {
   it("parses the real full-precision repr from run-a.jsonl (golden case)", () => {
     const events = [
       retEvent(
@@ -42,7 +68,7 @@ describe("extractEpochSeries — selection + parsing", () => {
         "(0, 0.7107649687606569, 0.6041666666666666)"
       ),
     ];
-    const series = extractEpochSeries(events);
+    const series = seriesOf(events);
     expect(series.dropped).toBe(0);
     expect(series.runs).toBe(1);
     expect(series.points).toEqual([
@@ -59,7 +85,7 @@ describe("extractEpochSeries — selection + parsing", () => {
     const events = [
       retEvent("grackle_nn/metrics.py:record_epoch", "(5, 1e-05, 0.99)"),
     ];
-    const series = extractEpochSeries(events);
+    const series = seriesOf(events);
     expect(series.points).toHaveLength(1);
     expect(series.points[0]?.loss).toBe(0.00001);
     expect(series.points[0]?.accuracy).toBe(0.99);
@@ -69,14 +95,14 @@ describe("extractEpochSeries — selection + parsing", () => {
     const events = [
       retEvent("grackle_nn/metrics.py:record_epoch", "(0, inf, nan)"),
     ];
-    const series = extractEpochSeries(events);
+    const series = seriesOf(events);
     expect(series.points).toEqual([]);
     expect(series.dropped).toBe(1);
   });
 
   it("silently ignores a 2-tuple ret (wrong shape) — not dropped, not a point", () => {
     const events = [retEvent("grackle_nn/metrics.py:record_epoch", "(0, 0.5)")];
-    const series = extractEpochSeries(events);
+    const series = seriesOf(events);
     expect(series.points).toEqual([]);
     expect(series.dropped).toBe(0);
   });
@@ -88,14 +114,14 @@ describe("extractEpochSeries — selection + parsing", () => {
         "<ndarray shape=(32, 2) dtype=dtype('float64')>"
       ),
     ];
-    const series = extractEpochSeries(events);
+    const series = seriesOf(events);
     expect(series.points).toEqual([]);
     expect(series.dropped).toBe(0);
   });
 
   it("rejects a node_id where metrics.py:record_epoch is not exact-or-slash-preceded", () => {
     const events = [retEvent("pkg/mymetrics.py:record_epoch", "(0, 0.5, 0.5)")];
-    const series = extractEpochSeries(events);
+    const series = seriesOf(events);
     expect(series.points).toEqual([]);
     expect(series.dropped).toBe(0);
   });
@@ -104,14 +130,14 @@ describe("extractEpochSeries — selection + parsing", () => {
     const events = [
       retEvent("grackle_nn/metrics.py:record_epoch", "(0, 0.5, 0.5)"),
     ];
-    const series = extractEpochSeries(events);
+    const series = seriesOf(events);
     expect(series.points).toHaveLength(1);
     expect(series.points[0]?.epoch).toBe(0);
   });
 
   it("accepts a bare node_id", () => {
     const events = [retEvent("metrics.py:record_epoch", "(0, 0.5, 0.5)")];
-    const series = extractEpochSeries(events);
+    const series = seriesOf(events);
     expect(series.points).toHaveLength(1);
     expect(series.points[0]?.epoch).toBe(0);
   });
@@ -120,13 +146,13 @@ describe("extractEpochSeries — selection + parsing", () => {
     const events = [
       retEvent("grackle_nn/metrics.py:record_epoch", "(0, 0.5, 0.5)", true),
     ];
-    const series = extractEpochSeries(events);
+    const series = seriesOf(events);
     expect(series.points).toEqual([]);
     expect(series.dropped).toBe(0);
   });
 });
 
-describe("extractEpochSeries — event indexing", () => {
+describe("scanEpochCandidates — event indexing", () => {
   it("reports absolute array indices when interleaved with unrelated events", () => {
     const events: TraceEvent[] = [
       otherEvent("call", "grackle_nn/train.py:fit"), // 0
@@ -137,13 +163,13 @@ describe("extractEpochSeries — event indexing", () => {
       otherEvent("call", "grackle_nn/metrics.py:record_epoch"), // 5
       retEvent("grackle_nn/metrics.py:record_epoch", "(1, 0.8, 0.2)"), // 6
     ];
-    const series = extractEpochSeries(events);
+    const series = seriesOf(events);
     expect(series.points.map((p) => p.eventIndex)).toEqual([2, 6]);
     expect(series.points.map((p) => p.epoch)).toEqual([0, 1]);
   });
 });
 
-describe("extractEpochSeries — multi-run rule", () => {
+describe("scanEpochCandidates — multi-run rule", () => {
   it("returns only the last run's points and counts total runs", () => {
     const events = [
       retEvent("grackle_nn/metrics.py:record_epoch", "(0, 1.0, 0.1)"), // run 1
@@ -152,7 +178,7 @@ describe("extractEpochSeries — multi-run rule", () => {
       retEvent("grackle_nn/metrics.py:record_epoch", "(0, 0.7, 0.4)"), // run 2 (restart)
       retEvent("grackle_nn/metrics.py:record_epoch", "(1, 0.6, 0.5)"), // run 2
     ];
-    const series = extractEpochSeries(events);
+    const series = seriesOf(events);
     expect(series.runs).toBe(2);
     expect(series.points.map((p) => p.epoch)).toEqual([0, 1]);
     expect(series.points.map((p) => p.loss)).toEqual([0.7, 0.6]);
@@ -162,13 +188,13 @@ describe("extractEpochSeries — multi-run rule", () => {
     const events = [
       retEvent("grackle_nn/metrics.py:record_epoch", "(0, 1.0, 0.1)"),
     ];
-    const series = extractEpochSeries(events);
+    const series = seriesOf(events);
     expect(series.runs).toBe(1);
     expect(series.points).toHaveLength(1);
   });
 
   it("reports zero runs and empty points for no candidates", () => {
-    const series = extractEpochSeries([]);
+    const series = seriesOf([]);
     expect(series.runs).toBe(0);
     expect(series.points).toEqual([]);
     expect(series.dropped).toBe(0);
@@ -179,7 +205,7 @@ describe("extractEpochSeries — multi-run rule", () => {
       retEvent("grackle_nn/metrics.py:record_epoch", "(0, 1.0, 0.1)"), // run 1
       retEvent("grackle_nn/metrics.py:record_epoch", "(0, 0.9, 0.2)"), // run 2 (0 <= 0)
     ];
-    const series = extractEpochSeries(events);
+    const series = seriesOf(events);
     expect(series.runs).toBe(2);
     expect(series.points).toHaveLength(1);
     expect(series.points[0]?.loss).toBe(0.9);
@@ -247,5 +273,56 @@ describe("computeRunsFromCandidates", () => {
     const { points, runs } = computeRunsFromCandidates([]);
     expect(points).toEqual([]);
     expect(runs).toBe(0);
+  });
+});
+
+describe("scanEpochCandidates — grammar and run-splitting edges", () => {
+  it("counts a drop that happened in an earlier, discarded run", () => {
+    const events = [
+      retEvent("grackle_nn/metrics.py:record_epoch", "(0, nan, 0.1)"), // run 1
+      retEvent("grackle_nn/metrics.py:record_epoch", "(1, 0.9, 0.2)"), // run 1
+      retEvent("grackle_nn/metrics.py:record_epoch", "(0, 0.8, 0.3)"), // run 2
+    ];
+    const series = seriesOf(events);
+    expect(series.dropped).toBe(1);
+    expect(series.runs).toBe(2);
+    expect(series.points.map((p) => p.epoch)).toEqual([0]);
+  });
+
+  it("splits three runs and keeps only the third", () => {
+    const events = [
+      retEvent("grackle_nn/metrics.py:record_epoch", "(0, 1.0, 0.1)"),
+      retEvent("grackle_nn/metrics.py:record_epoch", "(1, 0.9, 0.2)"),
+      retEvent("grackle_nn/metrics.py:record_epoch", "(0, 0.8, 0.3)"),
+      retEvent("grackle_nn/metrics.py:record_epoch", "(0, 0.7, 0.4)"),
+      retEvent("grackle_nn/metrics.py:record_epoch", "(1, 0.6, 0.5)"),
+    ];
+    const series = seriesOf(events);
+    expect(series.runs).toBe(3);
+    expect(series.points.map((p) => p.loss)).toEqual([0.7, 0.6]);
+  });
+
+  it("does not split on a non-contiguous but increasing epoch", () => {
+    // A resumed run (checkpoint reload) counts up from where it left off.
+    const events = [
+      retEvent("grackle_nn/metrics.py:record_epoch", "(0, 1.0, 0.1)"),
+      retEvent("grackle_nn/metrics.py:record_epoch", "(7, 0.5, 0.6)"),
+    ];
+    const series = seriesOf(events);
+    expect(series.runs).toBe(1);
+    expect(series.points).toHaveLength(2);
+  });
+
+  it("rejects a negative epoch and a signed loss exponent it never emits", () => {
+    expect(
+      seriesOf([
+        retEvent("grackle_nn/metrics.py:record_epoch", "(-1, 0.5, 0.5)"),
+      ]).points
+    ).toEqual([]);
+    expect(
+      seriesOf([
+        retEvent("grackle_nn/metrics.py:record_epoch", "(0, 1.5e-3, 0.5)"),
+      ]).points[0]?.loss
+    ).toBe(0.0015);
   });
 });
