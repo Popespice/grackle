@@ -275,3 +275,54 @@ describe("computeRunsFromCandidates", () => {
     expect(runs).toBe(0);
   });
 });
+
+describe("scanEpochCandidates — grammar and run-splitting edges", () => {
+  it("counts a drop that happened in an earlier, discarded run", () => {
+    const events = [
+      retEvent("grackle_nn/metrics.py:record_epoch", "(0, nan, 0.1)"), // run 1
+      retEvent("grackle_nn/metrics.py:record_epoch", "(1, 0.9, 0.2)"), // run 1
+      retEvent("grackle_nn/metrics.py:record_epoch", "(0, 0.8, 0.3)"), // run 2
+    ];
+    const series = seriesOf(events);
+    expect(series.dropped).toBe(1);
+    expect(series.runs).toBe(2);
+    expect(series.points.map((p) => p.epoch)).toEqual([0]);
+  });
+
+  it("splits three runs and keeps only the third", () => {
+    const events = [
+      retEvent("grackle_nn/metrics.py:record_epoch", "(0, 1.0, 0.1)"),
+      retEvent("grackle_nn/metrics.py:record_epoch", "(1, 0.9, 0.2)"),
+      retEvent("grackle_nn/metrics.py:record_epoch", "(0, 0.8, 0.3)"),
+      retEvent("grackle_nn/metrics.py:record_epoch", "(0, 0.7, 0.4)"),
+      retEvent("grackle_nn/metrics.py:record_epoch", "(1, 0.6, 0.5)"),
+    ];
+    const series = seriesOf(events);
+    expect(series.runs).toBe(3);
+    expect(series.points.map((p) => p.loss)).toEqual([0.7, 0.6]);
+  });
+
+  it("does not split on a non-contiguous but increasing epoch", () => {
+    // A resumed run (checkpoint reload) counts up from where it left off.
+    const events = [
+      retEvent("grackle_nn/metrics.py:record_epoch", "(0, 1.0, 0.1)"),
+      retEvent("grackle_nn/metrics.py:record_epoch", "(7, 0.5, 0.6)"),
+    ];
+    const series = seriesOf(events);
+    expect(series.runs).toBe(1);
+    expect(series.points).toHaveLength(2);
+  });
+
+  it("rejects a negative epoch and a signed loss exponent it never emits", () => {
+    expect(
+      seriesOf([
+        retEvent("grackle_nn/metrics.py:record_epoch", "(-1, 0.5, 0.5)"),
+      ]).points
+    ).toEqual([]);
+    expect(
+      seriesOf([
+        retEvent("grackle_nn/metrics.py:record_epoch", "(0, 1.5e-3, 0.5)"),
+      ]).points[0]?.loss
+    ).toBe(0.0015);
+  });
+});

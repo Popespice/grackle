@@ -239,3 +239,87 @@ describe("maxima", () => {
     expect(maxima([])).toEqual({ wRms: [], dwRms: [] });
   });
 });
+
+describe("scanLayerStatsCandidates — float grammar", () => {
+  it("parses negative values", () => {
+    // wRms/dwRms are magnitudes today, but the grammar is shared with
+    // record_epoch's loss, so a sign must not silently drop the whole point.
+    const series = statsOf([retEvent(NODE, "(0, -0.5, 0.25)")], 1);
+    expect(series[0]?.perLinear).toEqual([{ wRms: -0.5, dwRms: 0.25 }]);
+  });
+
+  it("parses an uppercase exponent and a bare-dot float", () => {
+    const series = statsOf([retEvent(NODE, "(0, 1.5E-3, .25)")], 1);
+    expect(series[0]?.perLinear).toEqual([{ wRms: 0.0015, dwRms: 0.25 }]);
+  });
+
+  it("drops -inf as non-finite", () => {
+    const events = [retEvent(NODE, "(0, -inf, 0.2)")];
+    expect(statsOf(events, 1)).toEqual([]);
+    expect(droppedOf(events, 1)).toBe(1);
+  });
+
+  it("ignores an explicit + sign (not repr's grammar) without counting a drop", () => {
+    const events = [retEvent(NODE, "(0, +1.5, 0.2)")];
+    expect(statsOf(events, 1)).toEqual([]);
+    expect(droppedOf(events, 1)).toBe(0);
+  });
+
+  it("requires exactly 1 + 2L elements", () => {
+    const five = "(0, 0.1, 0.2, 0.3, 0.4)";
+    expect(statsOf([retEvent(NODE, five)], 2)).toHaveLength(1);
+    expect(statsOf([retEvent(NODE, five)], 1)).toEqual([]);
+    expect(statsOf([retEvent(NODE, five)], 3)).toEqual([]);
+  });
+
+  it("rejects a negative epoch (the epoch group is unsigned)", () => {
+    expect(statsOf([retEvent(NODE, "(-1, 0.1, 0.2)")], 1)).toEqual([]);
+  });
+});
+
+describe("scanLayerStatsCandidates — series ordering and maxima", () => {
+  it("reports candidates in ascending eventIndex order", () => {
+    const events = Array.from({ length: 5 }, (_, i) =>
+      retEvent(NODE, `(${i}, 0.${i + 1}, 0.0${i + 1})`)
+    );
+    const indices = statsOf(events, 1).map((p) => p.eventIndex);
+    expect(indices).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it("counts drops across a restart, while the series keeps only the last run", () => {
+    // Documented asymmetry: the panel's "N epochs dropped" warning is a
+    // whole-trace count, the bundles it annotates are last-run only.
+    const events = [
+      retEvent(NODE, "(0, nan, 0.2)"), // run 1, dropped
+      retEvent(NODE, "(1, 0.1, 0.2)"), // run 1
+      retEvent(NODE, "(0, 0.3, 0.4)"), // run 2 (restart)
+      retEvent(NODE, "(1, inf, 0.4)"), // run 2, dropped
+    ];
+    expect(droppedOf(events, 1)).toBe(2);
+    expect(statsOf(events, 1).map((p) => p.epoch)).toEqual([0]);
+  });
+
+  it("keeps per-index maxima independent when a later point has fewer layers", () => {
+    const series: LayerStatsPoint[] = [
+      {
+        epoch: 0,
+        eventIndex: 0,
+        perLinear: [
+          { wRms: 1, dwRms: 2 },
+          { wRms: 3, dwRms: 4 },
+        ],
+      },
+      { epoch: 1, eventIndex: 1, perLinear: [{ wRms: 9, dwRms: 0.5 }] },
+    ];
+    expect(maxima(series)).toEqual({ wRms: [9, 3], dwRms: [2, 4] });
+  });
+
+  it("reports zero maxima for an all-zero layer (the panel's divide guard)", () => {
+    // paintNetwork normalizes wRms/max; a zero max must stay zero here so the
+    // `max > 0` guard there is the only thing standing between it and NaN.
+    const series: LayerStatsPoint[] = [
+      { epoch: 0, eventIndex: 0, perLinear: [{ wRms: 0, dwRms: 0 }] },
+    ];
+    expect(maxima(series)).toEqual({ wRms: [0], dwRms: [0] });
+  });
+});

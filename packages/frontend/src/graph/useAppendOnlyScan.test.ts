@@ -1,5 +1,6 @@
 import type { TraceEvent } from "@grackle/shared-types";
 import { renderHook } from "@testing-library/react";
+import { StrictMode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { type Scanner, useAppendOnlyScan } from "./useAppendOnlyScan";
 
@@ -106,11 +107,17 @@ describe("useAppendOnlyScan", () => {
     // than trusting each scanner to be a no-op over an empty tail, the hook
     // short-circuits before calling it at all — so even a scanner that
     // accumulated per CALL rather than per event cannot double-count.
+    //
+    // The StrictMode wrapper is what gives this test teeth: a plain rerender
+    // with the same array/scan/enabled never re-runs the useMemo factory at
+    // all, so it would stay green with the short-circuit deleted (verified).
+    // Under StrictMode the factory DOES run twice against a ref the first
+    // invocation already advanced — the production hazard, exactly.
     const scan = vi.fn(scanHits);
     const events = [ev("hit"), ev("miss")];
     const { result, rerender } = renderHook(
       ({ e }) => useAppendOnlyScan(e, scan),
-      { initialProps: { e: events } }
+      { initialProps: { e: events }, wrapper: StrictMode }
     );
     expect(scan).toHaveBeenCalledTimes(1);
     rerender({ e: events });

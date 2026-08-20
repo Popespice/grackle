@@ -311,6 +311,7 @@ function makeRecorder() {
   const strokes: { style: string; alpha: number; segments: number }[] = [];
   const arcs: { x: number; y: number; fill: string }[] = [];
   const texts: string[] = [];
+  const transforms: number[][] = [];
   let segments = 0;
   let lastArc: { x: number; y: number } | null = null;
   const ctx = {
@@ -322,7 +323,9 @@ function makeRecorder() {
     textAlign: "",
     textBaseline: "",
     clearRect: () => {},
-    setTransform: () => {},
+    setTransform: (...args: number[]) => {
+      transforms.push(args);
+    },
     beginPath: () => {
       segments = 0;
       lastArc = null;
@@ -350,7 +353,7 @@ function makeRecorder() {
       texts.push(text);
     },
   };
-  return { ctx, strokes, arcs, texts };
+  return { ctx, strokes, arcs, texts, transforms };
 }
 
 describe("NetworkViewPanel — what actually gets painted", () => {
@@ -591,5 +594,170 @@ describe("NetworkViewPanel — header readout and phase label", () => {
     useGraphStore.setState({ tracePlayhead: 15 });
     rerender(<NetworkViewPanel />);
     expect(screen.getByText("update")).toBeInTheDocument();
+  });
+});
+
+/** The real per-epoch shape of `train.fit` (packages/nn/src/grackle_nn/train.py):
+ *  train_step(s), then evaluate(), then the two beacons. LossCurvePanel seeks
+ *  to the record_epoch index, so index 8 here is where a click lands. */
+const EPOCH_BOUNDARY_ROWS: Row[] = [
+  ["return", "grackle_nn/metrics.py:record_architecture", 3, "'linear:4:2'"], // 0
+  ["call", "grackle_nn/train.py:train_step", 3], // 1
+  ["call", "grackle_nn/model.py:Sequential.forward", 4], // 2
+  ["call", "grackle_nn/layers.py:Linear.forward", 5], // 3
+  ["return", "grackle_nn/layers.py:Linear.forward", 5], // 4
+  ["return", "grackle_nn/model.py:Sequential.forward", 4], // 5
+  ["return", "grackle_nn/train.py:train_step", 3], // 6
+  ["call", "grackle_nn/train.py:evaluate", 3], // 7
+  ["call", "grackle_nn/losses.py:SoftmaxCrossEntropy.forward", 4], // 8
+  ["return", "grackle_nn/losses.py:SoftmaxCrossEntropy.forward", 4], // 9
+  ["return", "grackle_nn/train.py:evaluate", 3], // 10
+  ["return", "grackle_nn/metrics.py:record_epoch", 3, "(0, 0.5, 0.75)"], // 11
+  ["return", "grackle_nn/metrics.py:record_layer_stats", 3, "(0, 0.2, 0.05)"], // 12
+];
+
+describe("NetworkViewPanel — session isolation", () => {
+  it("does not carry a latched spec into the next session", () => {
+    // The architecture latch is keyed on the session id and survives a
+    // collapse; a new session must not inherit the old net's columns.
+    mockUseFullTrace.mockReturnValue(
+      fullTrace({ events: NET_EVENTS, loaded: true })
+    );
+    useGraphStore.setState({ traceSessionId: "s1", tracePlayhead: 20 });
+    const { rerender } = render(<NetworkViewPanel />);
+    expandPanel();
+    expect(screen.getByText(/model: 4-2/)).toBeInTheDocument();
+
+    mockUseFullTrace.mockReturnValue(
+      fullTrace({ events: NO_BEACON_EVENTS, loaded: true })
+    );
+    useGraphStore.setState({ traceSessionId: "s2" });
+    rerender(<NetworkViewPanel />);
+    expandPanel();
+    expect(screen.queryByText(/model: 4-2/)).toBeNull();
+    expect(
+      screen.getByText(
+        "No network beacons (record_architecture) in this trace."
+      )
+    ).toBeInTheDocument();
+  });
+
+  it("shows the truncated banner and the diverged-run warning together", () => {
+    const diverged = toEvents([
+      ...NET_ROWS,
+      [
+        "return",
+        "grackle_nn/metrics.py:record_layer_stats",
+        3,
+        "(1, nan, 0.05)",
+      ],
+    ]);
+    mockUseFullTrace.mockReturnValue(
+      fullTrace({ events: diverged, loaded: true, truncated: true })
+    );
+    useGraphStore.setState({
+      traceSessionId: "s1",
+      traceSeekable: true,
+      tracePlayhead: 22,
+    });
+    render(<NetworkViewPanel />);
+    expandPanel();
+    expect(screen.getByText(/events only\./)).toBeInTheDocument();
+    expect(
+      screen.getByText(/1 epoch of layer stats dropped/)
+    ).toBeInTheDocument();
+  });
+});
+
+describe("NetworkViewPanel — canvas backing store", () => {
+  let recorder: ReturnType<typeof makeRecorder>;
+  let originalDpr: number;
+
+  beforeEach(() => {
+    recorder = makeRecorder();
+    HTMLCanvasElement.prototype.getContext = vi.fn(
+      () => recorder.ctx
+    ) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+    originalDpr = window.devicePixelRatio;
+  });
+
+  afterEach(() => {
+    HTMLCanvasElement.prototype.getContext = vi.fn(() => null);
+    Object.defineProperty(window, "devicePixelRatio", {
+      configurable: true,
+      value: originalDpr,
+    });
+  });
+
+  it("scales the backing store by devicePixelRatio and matches the transform", () => {
+    // A backing store at CSS size on a retina display is the classic blurry
+    // canvas; a transform that disagrees with it draws at the wrong scale.
+    Object.defineProperty(window, "devicePixelRatio", {
+      configurable: true,
+      value: 2,
+    });
+    mockUseFullTrace.mockReturnValue(
+      fullTrace({ events: NET_EVENTS, loaded: true })
+    );
+    useGraphStore.setState({ traceSessionId: "s1", tracePlayhead: 20 });
+    render(<NetworkViewPanel />);
+    expandPanel();
+    const canvas = screen.getByLabelText(
+      "Network view canvas"
+    ) as HTMLCanvasElement;
+    expect(canvas.width).toBe(1600); // 800 css px * 2
+    expect(canvas.height).toBe(800); // 400 css px * 2
+    expect(recorder.transforms.at(-1)).toEqual([2, 0, 0, 2, 0, 0]);
+  });
+
+  it("paints an all-zero-weight layer at base alpha rather than NaN", () => {
+    // maxima() is 0 for a layer whose wRms never moves off zero, and
+    // `wRms / max` would be NaN — which canvas silently IGNORES, leaving the
+    // previous bundle's alpha in place and making one layer masquerade as
+    // another. The `max > 0` guard in paintNetwork is what prevents it.
+    const zeroed = toEvents([
+      [
+        "return",
+        "grackle_nn/metrics.py:record_architecture",
+        3,
+        "'linear:4:2'",
+      ],
+      [
+        "return",
+        "grackle_nn/metrics.py:record_layer_stats",
+        3,
+        "(0, 0.0, 0.0)",
+      ],
+    ]);
+    mockUseFullTrace.mockReturnValue(
+      fullTrace({ events: zeroed, loaded: true })
+    );
+    useGraphStore.setState({ traceSessionId: "s1", tracePlayhead: 1 });
+    render(<NetworkViewPanel />);
+    expandPanel();
+    const bundleStrokes = recorder.strokes.filter((s) => s.segments === 8);
+    expect(bundleStrokes).toHaveLength(1);
+    expect(bundleStrokes[0]?.alpha).toBe(0.15); // BASE_ALPHA_MIN, not NaN
+    expect(Number.isNaN(bundleStrokes[0]?.alpha ?? Number.NaN)).toBe(false);
+  });
+});
+
+/**
+ * ─── KNOWN DEFECT ─────────────────────────────────────────────────────────
+ * The panel-level face of layerActivity.ts's "idle is keyed on a return
+ * event" defect — see the KNOWN DEFECTS block in layerActivity.test.ts.
+ */
+describe("KNOWN DEFECT — the phase chip at an epoch boundary", () => {
+  it.fails("reads idle where a loss-curve click lands", () => {
+    // Measured on the real packages/nn/run-a.jsonl: 60 of 60 epoch markers
+    // report "loss" — the loss call inside evaluate(), which returned three
+    // events earlier. The chip is wrong at every point a user can click to.
+    mockUseFullTrace.mockReturnValue(
+      fullTrace({ events: toEvents(EPOCH_BOUNDARY_ROWS), loaded: true })
+    );
+    useGraphStore.setState({ traceSessionId: "s1", tracePlayhead: 11 });
+    render(<NetworkViewPanel />);
+    expandPanel();
+    expect(screen.getByText("idle")).toBeInTheDocument(); // reads "loss"
   });
 });
