@@ -47,22 +47,41 @@ const PY_HEADER =
   "# Source: packages/shared-types/schema/";
 
 /**
- * Run codegen. Accepts alternate output dirs so verify-parity can use a tmp dir.
- * @param {{ tsOutDir?: string; pyOutDir?: string }} [opts]
+ * Run codegen. Accepts alternate output dirs so verify-parity can use a tmp dir,
+ * and an alternate schema dir so tests can point codegen at a single schema (or
+ * a temp copy of the schema dir) without touching the real one.
+ * @param {{ tsOutDir?: string; pyOutDir?: string; schemaDir?: string }} [opts]
  */
 export async function main(opts = {}) {
   const tsOutDir = opts.tsOutDir ?? DEFAULT_TS_OUT;
   const pyOutDir = opts.pyOutDir ?? DEFAULT_PY_OUT;
+  const schemaDir = opts.schemaDir ?? SCHEMA_DIR;
   const generatePython = existsSync(AGENT_DIR);
 
   await mkdir(tsOutDir, { recursive: true });
 
-  const schemaFiles = (await readdir(SCHEMA_DIR))
+  const schemaFiles = (await readdir(schemaDir))
     .filter((f) => f.endsWith(".schema.json"))
     .sort();
 
+  if (generatePython && schemaFiles.length > 0) {
+    // Logged once per run (not per schema file) — the resolved version is the
+    // same for every file this invocation generates. `uvx` is unpinned (see
+    // the --from datamodel-code-generator call below), so surfacing exactly
+    // which version resolved makes drift visible in CI output.
+    const { stdout: versionOut } = await execFileAsync("uvx", [
+      "--from",
+      "datamodel-code-generator",
+      "datamodel-codegen",
+      "--version",
+    ]);
+    console.log(
+      `  Py  ⓘ datamodel-code-generator resolved version: ${versionOut.trim()}`
+    );
+  }
+
   for (const schemaFile of schemaFiles) {
-    const schemaPath = join(SCHEMA_DIR, schemaFile);
+    const schemaPath = join(schemaDir, schemaFile);
     const baseName = schemaFile.replace(".schema.json", "");
     const schema = JSON.parse(
       await readFile(schemaPath, { encoding: "utf-8" })
@@ -75,7 +94,7 @@ export async function main(opts = {}) {
       enableConstEnums: false,
       unreachableDefinitions: true,
       style: { singleQuote: false, semi: true },
-      cwd: SCHEMA_DIR,
+      cwd: schemaDir,
     });
     await writeFile(join(tsOutDir, `${baseName}.ts`), tsSource, {
       encoding: "utf-8",
