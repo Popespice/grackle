@@ -85,7 +85,7 @@ jobs:
 
       - name: Pytest
         working-directory: packages/agent
-        run: uv run pytest -q
+        run: uv run pytest -q -ra
 
       - name: Install Python dependencies (nn)
         working-directory: packages/nn
@@ -101,4 +101,4 @@ jobs:
 
       - name: Pytest (nn)
         working-directory: packages/nn
-        run: uv run pytest -q
+        run: uv run pytest -q -ra
