@@ -32,11 +32,29 @@ node tools/mutation/runner.mjs tools/mutation/specs/some-spec.json # one spec
 ```
 
 Each spec's target file is mutated, the named suite runs, the file is
-restored (always — even if the suite command itself throws), and the actual
-outcome is compared against `expect`. Exit code is non-zero if any spec's
-actual outcome didn't match its declaration — i.e. the harness itself failed
-to discriminate correctly, or a target has silently changed behavior since
-the spec was written (in which case update the spec, don't just re-run it).
+restored, and the actual outcome is compared against `expect`. Exit code is
+non-zero if any spec's actual outcome didn't match its declaration — i.e. the
+harness itself failed to discriminate correctly, or a target has silently
+changed behavior since the spec was written (in which case update the spec,
+don't just re-run it).
+
+Restoration is unconditional: it survives a throwing suite command (`finally`)
+and an interrupted run (`SIGINT`/`SIGTERM`/`SIGHUP` handlers, plus an `exit`
+backstop that also covers an uncaught exception). This matters because the
+mutation is written into your real working tree — a mutant left behind is a
+deliberate bug one `git commit` away from shipping.
+
+### Three outcomes, not two
+
+A suite run resolves to `killed` (it ran and went red), `survives` (it ran and
+stayed green), or **`error`** — it never reached a verdict at all. The third is
+reported as a spec failure and is deliberately *not* compared against `expect`,
+because a mutant nothing measured must never be certified as caught. `error`
+covers a suite that failed to launch, one killed by a signal, a pytest exit
+outside {0, 1} (4 and 5 are what a stale path in `suite.args` produces), and a
+vitest run that printed no `Test Files` summary — vitest exits 1 both for a
+genuine failure and for "No test files found", so its exit code alone cannot
+tell the two apart.
 
 ## Writing a new spec
 
