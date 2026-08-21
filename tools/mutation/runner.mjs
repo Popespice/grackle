@@ -14,9 +14,15 @@
 // (commit 99b5a9a) — that sweep's "30/30 killed" claim was never committed
 // as anything re-runnable. Specs here are.
 //
-// Usage:
-//   node tools/mutation/runner.mjs                  # run every spec in specs/
-//   node tools/mutation/runner.mjs specs/foo.json    # run one spec
+// Usage (spec paths resolve against the repo root, so pass them as written):
+//   node tools/mutation/runner.mjs                                      # all
+//   node tools/mutation/runner.mjs tools/mutation/specs/foo.json        # one
+//   node tools/mutation/runner.mjs --check                              # validate only
+//
+// --check applies no mutation and runs no suite: it only asserts that every
+// spec is well-formed and that its target.find still matches its source
+// exactly once. That is the cheap guard against specs rotting silently as the
+// code they target drifts, and it is safe to run on a dirty tree.
 //
 // Spec shape (see specs/*.json for real examples):
 //   {
@@ -37,13 +43,25 @@
 // edits the working tree in place, so "always restored" has to mean always.
 
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..", "..");
 const SPECS_DIR = join(HERE, "specs");
+// Two runners mutating the same working tree would interleave their restores
+// and write back each other's stale snapshots. A lock file is cruder than
+// mutating a private copy, but the suites need the package's installed
+// environment (node_modules, .venv), so a per-mutant copy is not viable.
+const LOCK_PATH = join(HERE, ".runner.lock");
 
 // The single file currently holding a mutation, or null. A mutation is a
 // deliberate bug written into the developer's real working tree, so leaving
@@ -63,10 +81,29 @@ function restorePending() {
   writeFileSync(path, original, "utf-8");
 }
 
-process.on("exit", restorePending);
+let lockHeld = false;
+
+function releaseLock() {
+  if (!lockHeld) return;
+  lockHeld = false;
+  try {
+    unlinkSync(LOCK_PATH);
+  } catch {
+    // Already gone (manually cleared, or a concurrent teardown). Nothing owed.
+  }
+}
+
+// Restore first, then release: the lock must outlive the mutation it guards,
+// or a waiting runner could start mutating before this one has cleaned up.
+function cleanup() {
+  restorePending();
+  releaseLock();
+}
+
+process.on("exit", cleanup);
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
   process.on(signal, () => {
-    restorePending();
+    cleanup();
     // 128 + signal number, the conventional shell encoding for "died to a
     // signal". Re-raising the signal would be more faithful but would need the
     // handler removed first; the exit code is what CI reads.
@@ -81,10 +118,15 @@ function loadSpecs(argv) {
       : readdirSync(SPECS_DIR)
           .filter((f) => f.endsWith(".json"))
           .map((f) => join(SPECS_DIR, f));
-  return paths.map((p) => ({
-    path: p,
-    spec: JSON.parse(readFileSync(p, "utf-8")),
-  }));
+  return paths.map((p) => {
+    // A malformed or unreadable spec must fail as that one spec, not as an
+    // uncaught stack trace that takes every other spec down with it.
+    try {
+      return { path: p, spec: JSON.parse(readFileSync(p, "utf-8")) };
+    } catch (err) {
+      return { path: p, spec: null, loadError: err.message };
+    }
+  });
 }
 
 function countOccurrences(haystack, needle) {
@@ -200,35 +242,124 @@ function classifyExit(kind, result, stdout, stderr) {
   return { verdict: "killed", detail: null };
 }
 
-function runOne({ path, spec }) {
-  const requiredFields = ["id", "target", "suite", "expect"];
-  for (const field of requiredFields) {
-    if (!(field in spec)) {
-      return {
-        id: spec.id ?? path,
-        ok: false,
-        reason: `spec missing required field "${field}"`,
-      };
-    }
+// Full structural validation up front, so a malformed spec is reported as a
+// named failure rather than surfacing later as a TypeError on a nested field.
+function validateSpec(spec) {
+  for (const field of ["id", "target", "suite", "expect"]) {
+    if (!(field in spec)) return `spec missing required field "${field}"`;
   }
   if (spec.expect !== "killed" && spec.expect !== "survives") {
-    return {
-      id: spec.id,
-      ok: false,
-      reason: `expect must be "killed" or "survives", got ${JSON.stringify(spec.expect)}`,
-    };
+    return `expect must be "killed" or "survives", got ${JSON.stringify(spec.expect)}`;
   }
+  const { target, suite } = spec;
+  if (typeof target !== "object" || target === null)
+    return "target must be an object";
+  for (const field of ["file", "find", "replace"]) {
+    if (typeof target[field] !== "string")
+      return `target.${field} must be a string`;
+  }
+  if (target.find === "") return "target.find must not be empty";
+  if (target.find === target.replace) {
+    return "target.find and target.replace are identical — this mutant changes nothing";
+  }
+  if (typeof suite !== "object" || suite === null)
+    return "suite must be an object";
+  if (suite.kind !== "pytest" && suite.kind !== "vitest") {
+    return `suite.kind must be "pytest" or "vitest", got ${JSON.stringify(suite.kind)}`;
+  }
+  if (typeof suite.cwd !== "string") return "suite.cwd must be a string";
+  if (
+    !Array.isArray(suite.args) ||
+    suite.args.some((a) => typeof a !== "string")
+  ) {
+    return "suite.args must be an array of strings";
+  }
+  return null;
+}
 
+// Reads the target and confirms the mutation site is still uniquely locatable.
+// Shared by --check and the real run so the two cannot disagree.
+function locateTarget(spec) {
   const targetPath = join(REPO_ROOT, spec.target.file);
-  const original = readFileSync(targetPath, "utf-8");
+  let original;
+  try {
+    original = readFileSync(targetPath, "utf-8");
+  } catch (err) {
+    return { error: `cannot read target ${spec.target.file}: ${err.message}` };
+  }
   const occurrences = countOccurrences(original, spec.target.find);
   if (occurrences !== 1) {
     return {
-      id: spec.id,
-      ok: false,
-      reason: `spec.target.find matched ${occurrences} time(s) in ${spec.target.file}, need exactly 1 (spec is stale or ambiguous — update the "find" string)`,
+      error: `spec.target.find matched ${occurrences} time(s) in ${spec.target.file}, need exactly 1 (spec is stale or ambiguous — update the "find" string)`,
     };
   }
+  return { targetPath, original };
+}
+
+// Refuses to mutate a file that already has uncommitted edits: the restore
+// writes back the snapshot taken before mutating, so on a dirty file an
+// ill-timed interrupt could hand back a stale version of the developer's own
+// in-progress work. Unknown git state is a warning, not a refusal — the tool
+// still has to work outside a checkout.
+function assertTargetCommitted(relFile) {
+  const probe = spawnSync("git", ["status", "--porcelain", "--", relFile], {
+    cwd: REPO_ROOT,
+    encoding: "utf-8",
+  });
+  if (probe.error || probe.status !== 0) return null;
+  if (probe.stdout.trim() !== "") {
+    return `${relFile} has uncommitted changes — commit or stash them first (the harness restores a pre-mutation snapshot and will not risk your working copy)`;
+  }
+  return null;
+}
+
+function acquireLock() {
+  try {
+    closeSync(openSync(LOCK_PATH, "wx"));
+    lockHeld = true;
+    return null;
+  } catch (err) {
+    if (err.code === "EEXIST") {
+      return `another mutation run holds ${LOCK_PATH}. If no run is active, delete that file.`;
+    }
+    return `could not acquire lock: ${err.message}`;
+  }
+}
+
+// --check: validate only. No mutation, no suite, safe on a dirty tree.
+function checkOne({ path, spec, loadError }) {
+  if (loadError)
+    return { id: path, ok: false, reason: `unreadable spec: ${loadError}` };
+  const invalid = validateSpec(spec);
+  if (invalid) return { id: spec.id ?? path, ok: false, reason: invalid };
+  const located = locateTarget(spec);
+  if (located.error) return { id: spec.id, ok: false, reason: located.error };
+  return {
+    id: spec.id,
+    ok: true,
+    reason: `spec valid; target.find still matches uniquely`,
+  };
+}
+
+function runOne({ path, spec, loadError }) {
+  if (loadError) {
+    return { id: path, ok: false, reason: `unreadable spec: ${loadError}` };
+  }
+  const invalid = validateSpec(spec);
+  if (invalid) {
+    return { id: spec.id ?? path, ok: false, reason: invalid };
+  }
+
+  const dirty = assertTargetCommitted(spec.target.file);
+  if (dirty) {
+    return { id: spec.id, ok: false, reason: dirty };
+  }
+
+  const located = locateTarget(spec);
+  if (located.error) {
+    return { id: spec.id, ok: false, reason: located.error };
+  }
+  const { targetPath, original } = located;
 
   // Spliced by index rather than String.replace(): replace() would interpret
   // $&, $`, $' and $$ inside spec.target.replace as substitution patterns and
@@ -281,13 +412,32 @@ function runOne({ path, spec }) {
 
 function main() {
   const argv = process.argv.slice(2);
-  const specs = loadSpecs(argv);
+  const checkOnly = argv.includes("--check");
+  const specs = loadSpecs(argv.filter((a) => a !== "--check"));
   if (specs.length === 0) {
     console.error("no mutation specs found");
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 
-  const results = specs.map(runOne);
+  let results;
+  if (checkOnly) {
+    results = specs.map(checkOne);
+  } else {
+    // Taken once for the whole sweep, not per spec: the window that needs
+    // protecting is "this process has a mutation somewhere in the tree".
+    const lockError = acquireLock();
+    if (lockError) {
+      console.error(lockError);
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      results = specs.map(runOne);
+    } finally {
+      releaseLock();
+    }
+  }
 
   let failures = 0;
   for (const r of results) {
@@ -302,17 +452,25 @@ function main() {
 
   console.log("");
   console.log(
-    `${results.length - failures}/${results.length} mutants behaved as their spec declared.`
+    checkOnly
+      ? `${results.length - failures}/${results.length} specs are valid and still match their target.`
+      : `${results.length - failures}/${results.length} mutants behaved as their spec declared.`
   );
-  process.exit(failures > 0 ? 1 : 0);
+  // Not process.exit(): that tears the process down before a piped stdout has
+  // necessarily flushed, which can swallow the summary line in CI logs.
+  process.exitCode = failures > 0 ? 1 : 0;
 }
 
+// The TAIL, not the head: pytest and vitest both print the banner and
+// collection noise first and the actual failure detail last, so the first 20
+// lines are reliably the least useful 20 lines.
 function indent(text) {
-  return text
-    .split("\n")
-    .slice(0, 20)
-    .map((line) => `    ${line}`)
-    .join("\n");
+  const lines = text.trimEnd().split("\n");
+  const tail = lines.slice(-30);
+  const elided = lines.length - tail.length;
+  const shown =
+    elided > 0 ? [`... ${elided} earlier line(s) elided ...`, ...tail] : tail;
+  return shown.map((line) => `    ${line}`).join("\n");
 }
 
 main();

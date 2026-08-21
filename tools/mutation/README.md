@@ -27,9 +27,28 @@ as an executable fact instead of a claim in prose.
 ## Usage
 
 ```bash
-node tools/mutation/runner.mjs                                    # all specs
+node tools/mutation/runner.mjs                                     # all specs
 node tools/mutation/runner.mjs tools/mutation/specs/some-spec.json # one spec
+node tools/mutation/runner.mjs --check                             # validate only
 ```
+
+`--check` applies no mutation and runs no suite. It asserts each spec is
+well-formed and that its `target.find` still matches its source exactly once —
+seconds rather than minutes, and safe on a dirty tree. This is the guard
+against specs rotting silently as the code they target drifts, so it belongs
+in the PR gate even where the full sweep is too slow to run.
+
+### Two refusals
+
+Because the mutation is written into your real working tree, the runner
+declines to start in two situations rather than risk your files:
+
+- **The target has uncommitted changes.** The restore writes back the snapshot
+  taken before mutating, so on a dirty file a badly-timed interrupt could hand
+  you back a stale copy of your own in-progress work. Commit or stash first.
+- **Another run holds the lock** (`tools/mutation/.runner.lock`, gitignored).
+  Two runners mutating the same tree would interleave their restores. If no run
+  is active, delete the file.
 
 Each spec's target file is mutated, the named suite runs, the file is
 restored, and the actual outcome is compared against `expect`. Exit code is

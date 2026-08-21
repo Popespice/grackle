@@ -82,7 +82,7 @@ passing direction; this tier drives each one through its **failure** paths.
 | Probe | Fails if | Status |
 |---|---|---|
 | T3-1: parity guard failing-direction meta-test | `verify-parity.mjs`'s failure paths have **never executed once**: `diffSets`' onlyA/onlyB branches, all three `throw` sites, the MISSING branches, `process.exit(1)`. Worse, the guard is regex-textual — a formatter switching `messages.ts` to single quotes would make both type-set extractions return empty, and empty-vs-empty compares **pass vacuously**. Probe: a pure-Node test that copies the schema dir to temp, mutates it (add a type const / remove one / rename a `$def` / author one under Draft-07 `definitions`), and asserts the guard reports drift each time — plus the vacuity case (zero extracted types must be an error, not a pass). | **Seeded finding** (`verify-parity.mjs:97-144`) |
-| T3-2: schema authored under `definitions` is invisible | Both extractors read `$defs` only, with `?? {}` defaults — and `packages/shared-types/schema/README.md:15` **still instructs contributors to use `definitions`**, the exact keyword renamed away in a phase-1.5 finding. Following the README's own instructions produces a vacuously-passing guard. Probe: the T3-1 meta-test's Draft-07 case + fix the README line. | **Seeded finding** |
+| T3-2: schema authored under `definitions` is invisible | Both extractors read `$defs` only, with `?? {}` defaults, so a `$def` authored under Draft-07 `definitions` is silently absent from both sides and the guard passes vacuously. Probe: the T3-1 meta-test's Draft-07 case. | Open |
 | T3-3: message-type consts outside the hardcoded path | Both the JS and Python extractors hardcode `$defs.<X>.allOf[*].properties.type.const`. A type declared via `enum:` or `oneOf` generates fine and is **never parity-checked**; duplicate consts collapse silently in the `Set`. Probe: meta-test cases for each shape. | Open |
 | T3-4: path-discipline lint test (the missing one) | `paths.py:3` declares itself "the single sanctioned location for `Path.relative_to`" — **nothing enforces it**, and the invariant is already violated at `cli.py:437` and `node_resolution.py:91` (both arguably legitimate containment predicates, but that distinction exists nowhere). CLAUDE.md's claim of "a path-discipline lint test" is aspirational. Probe: port the AST-scan pattern from `test_ml_bridge_import_hygiene.py` (which already ships its own discriminating-power meta-tests) into a `test_path_discipline.py` with a two-site allow-list. Fails on any new unsanctioned `relative_to`. | **Seeded finding** |
 | T3-5: import-hygiene scanners still discriminate | Re-run the existing meta-tests; extend the agent-side AST scan to flag `Path.relative_to` per T3-4 (shared walker). | Open |
@@ -217,7 +217,7 @@ Following the phase-1 T8 tradition: claims vs reality.
 
 | Probe | Fails if |
 |---|---|
-| T13-1 | CLAUDE.md's "path-discipline lint test" claim (doesn't exist until T3-4 lands); the schema README `definitions` instruction (T3-2); `packages/nn` missing from `dependabot.yml`; ADR cross-references for 0029/0030 resolve. |
+| T13-1 | CLAUDE.md's "path-discipline lint test" claim (doesn't exist until T3-4 lands); `packages/nn` missing from `dependabot.yml`; ADR cross-references for 0029/0030 resolve. |
 | T13-2 | Acceptance-grid claims spot-audit: every "automated" cell names a test that actually runs (T2-1 proves at least one doesn't). |
 
 ---
@@ -239,6 +239,49 @@ Following the phase-1 T8 tradition: claims vs reality.
 *(Populated as tiers execute. Seeded findings above carry audit-derived citations; each is
 confirmed by executing its probe before being written up here in the phase-0/1 format:
 Location / Reproducer / Observed / Expected / Fix / Severity / Recommendation.)*
+
+### F-1 — An exact-count assertion on V8 coverage is load-dependent, and flakes Windows CI
+
+**Location.** `packages/agent/tests/node_runtime/test_e2e.py:95`
+(`test_coverage_emits_live_heat`), against fixture `fixtures/tiny-node-app`.
+
+**Reproducer.** Observed in the wild rather than constructed: CI run `32436999328`,
+`windows-latest / py3.12`, on PR #85 — a PR whose diff touches only `tools/mutation/`, docs,
+`dependabot.yml` and pytest config, none of which CI executes on this path. The same commit
+passed on `windows-latest / py3.13` and both Ubuntu legs. Re-running the failed job alone
+turned it green.
+
+**Observed.** `assert 130607 == 2000000` — V8's precise-coverage count for `src/math.ts:add`
+came back at roughly 6.5% of the true call count.
+
+**Expected.** The test asserts `metadata["count"] == 2_000_000` exactly, because
+`main.ts` calls `busy(2_000_000)` and `busy` calls `add` once per round.
+
+**Root cause.** `fixtures/tiny-node-app/src/math.ts` already documents the mechanism in its own
+trailing comment: TurboFan **inlines `add` into `busy`** once the loop is hot. V8's
+precise-coverage counter does not increment for inlined call sites, so the reported count is
+however many calls were made *before the JIT tiered up* — a function of runner speed and load,
+not of program semantics. 130,607 is simply where that runner happened to optimize.
+
+This assertion also contradicts its own file's stated contract. The module docstring at
+`test_e2e.py:7-8` reads: "Assertions are robust to sampling non-determinism: structure (which
+nodes appear, call/return balance, depth, no leaked non-project frames) rather than exact
+counts." Line 95 is the one assertion in the file that violates it.
+
+**Fix.** Replace exact equality with the invariant that actually holds under inlining — a lower
+bound plus an upper bound of the true count, e.g. `0 < metadata["count"] <= 2_000_000`, or assert
+`count` is present and integral and move the exactness claim to a non-JIT-sensitive fixture.
+Do not "fix" it by disabling the JIT: the adapter's fidelity contract (ADR-0022) is about what
+grackle reports under *normal* Node execution, and inlining is normal.
+
+**Severity.** Medium. It is not a product defect — the adapter behaves correctly — but it puts
+red CI on unrelated PRs, which is the precise failure mode that trains a team to ignore the gate.
+It also predates this campaign; no PR in flight introduced it.
+
+**Recommendation.** Fold into **T9** (numerics and the ML envelope) as an exact-vs-tolerance
+audit: grep the agent and nn suites for equality assertions on any quantity produced by a
+sampling profiler, a JIT-instrumented counter, or a wall-clock timer, and convert each to the
+invariant that survives optimization. This finding is one instance of a class.
 
 ## What worked well
 
