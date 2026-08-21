@@ -17,6 +17,6 @@
     "verify-parity": "node scripts/verify-parity.mjs"
   },
   "devDependencies": {
-    "json-schema-to-typescript": "^14.0.0"
+    "json-schema-to-typescript": "^15.0.4"
   }
 }
