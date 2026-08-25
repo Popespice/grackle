@@ -12,6 +12,8 @@
  */
 
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import {
   cp,
   mkdtemp,
@@ -30,6 +32,29 @@ import { diffSets, schemaMessageTypes } from "./verify-parity.mjs";
 const SCRIPT_DIR = fileURLToPath(new URL(".", import.meta.url));
 const SCHEMA_DIR = join(SCRIPT_DIR, "..", "schema");
 const MESSAGES_SCHEMA = join(SCHEMA_DIR, "messages.schema.json");
+const AGENT_DIR = join(SCRIPT_DIR, "..", "..", "agent");
+
+/**
+ * The two codegen tests below need a real Python toolchain and the agent
+ * package. Both are genuinely optional: codegen itself skips Python output
+ * entirely when packages/agent is absent ("Py → skipped"), and a
+ * frontend-only contributor need not have uv installed. Gate rather than
+ * fail, matching the repo's existing toolchain-capability pattern
+ * (packages/agent/tests/node_runtime/test_e2e.py's module-level skipif on
+ * Node availability, and the go/rust runtime suites' equivalents).
+ */
+function pythonCodegenUnavailable() {
+  if (!existsSync(AGENT_DIR)) {
+    return "packages/agent not present — codegen emits no Python output";
+  }
+  const probe = spawnSync("uvx", ["--version"], { encoding: "utf-8" });
+  if (probe.error || probe.status !== 0) {
+    return "uvx not available — cannot run datamodel-code-generator";
+  }
+  return false;
+}
+
+const PY_CODEGEN_SKIP = pythonCodegenUnavailable();
 
 /**
  * Run `fn` (sync) with console.log/console.error captured instead of printed,
@@ -68,8 +93,8 @@ test("T3-1: diffSets reports failure when a type is added to one side", async ()
   assert.ok(real.size > 0, "sanity: the real schema must have message types");
 
   const withExtra = new Set([...real, "__synthetic_extra_type__"]);
-  const { result } = captureConsole(() =>
-    diffSets("added", real, withExtra, "a", "b")
+  const { result, errors } = captureConsole(() =>
+    diffSets("added", real, withExtra, "schemaSide", "tsSide")
   );
 
   assert.equal(
@@ -77,8 +102,20 @@ test("T3-1: diffSets reports failure when a type is added to one side", async ()
     1,
     "adding a type to one side must be reported as drift"
   );
-  const onlyB = [...withExtra].filter((x) => !real.has(x));
-  assert.deepEqual(onlyB, ["__synthetic_extra_type__"]);
+  // Assert on what diffSets actually PRINTED, not on a set the test recomputes
+  // itself — otherwise a swapped aName/bName (the obvious copy-paste bug in a
+  // five-positional-argument function) would report every drift against the
+  // wrong side and this test would still pass.
+  assert.equal(
+    errors.length,
+    1,
+    `expected one DRIFT line, got ${JSON.stringify(errors)}`
+  );
+  assert.match(
+    errors[0],
+    /in tsSide not schemaSide: __synthetic_extra_type__/,
+    `extra type must be reported as present in the second set only; got: ${errors[0]}`
+  );
 });
 
 test("T3-1: diffSets reports failure when a type is removed from one side", async () => {
@@ -87,8 +124,8 @@ test("T3-1: diffSets reports failure when a type is removed from one side", asyn
   const withoutOne = new Set(real);
   withoutOne.delete(removed);
 
-  const { result } = captureConsole(() =>
-    diffSets("removed", real, withoutOne, "a", "b")
+  const { result, errors } = captureConsole(() =>
+    diffSets("removed", real, withoutOne, "schemaSide", "tsSide")
   );
 
   assert.equal(
@@ -96,8 +133,16 @@ test("T3-1: diffSets reports failure when a type is removed from one side", asyn
     1,
     "removing a type from one side must be reported as drift"
   );
-  const onlyA = [...real].filter((x) => !withoutOne.has(x));
-  assert.deepEqual(onlyA, [removed]);
+  assert.equal(
+    errors.length,
+    1,
+    `expected one DRIFT line, got ${JSON.stringify(errors)}`
+  );
+  assert.match(
+    errors[0],
+    new RegExp(`in schemaSide not tsSide: ${removed}`),
+    `removed type must be reported as present in the first set only; got: ${errors[0]}`
+  );
 });
 
 test("T3-1: diffSets reports failure when a type is renamed", async () => {
@@ -107,15 +152,24 @@ test("T3-1: diffSets reports failure when a type is renamed", async () => {
   renamed.delete(target);
   renamed.add("__synthetic_renamed_type__");
 
-  const { result } = captureConsole(() =>
-    diffSets("renamed", real, renamed, "a", "b")
+  const { result, errors } = captureConsole(() =>
+    diffSets("renamed", real, renamed, "schemaSide", "tsSide")
   );
 
   assert.equal(result, 1, "renaming a type must be reported as drift");
-  const onlyA = [...real].filter((x) => !renamed.has(x));
-  const onlyB = [...renamed].filter((x) => !real.has(x));
-  assert.deepEqual(onlyA, [target]);
-  assert.deepEqual(onlyB, ["__synthetic_renamed_type__"]);
+  // A rename is the case that actually distinguishes the two directions: the
+  // old name must be reported as schema-only and the new name as ts-only.
+  const joined = errors.join("\n");
+  assert.match(
+    joined,
+    new RegExp(`in schemaSide not tsSide: ${target}`),
+    `old name must be reported against the first set; got: ${joined}`
+  );
+  assert.match(
+    joined,
+    /in tsSide not schemaSide: __synthetic_renamed_type__/,
+    `new name must be reported against the second set; got: ${joined}`
+  );
 });
 
 test("T3-1: diffSets reports success when the two sides are identical (sanity baseline)", async () => {
@@ -230,9 +284,24 @@ test("KNOWN GAP (T3-3): duplicate type consts across different $defs collapse si
 //    one-time Phase-1 check; this is the first time it's committed as code).
 //    Runs against a single representative schema (messages.schema.json) via
 //    a temp schema-dir copy, not the whole schema directory, to bound wall-time.
+//
+//    SCOPE, precisely: both runs happen inside one process and therefore
+//    necessarily resolve the SAME datamodel-code-generator version, so this
+//    proves only *intra-run* determinism — no embedded timestamp, no
+//    iteration-order or hash-seed dependence. It structurally CANNOT catch
+//    the other drift vector, a different generator version resolving between
+//    two CI runs, because `uvx --from datamodel-code-generator` is
+//    deliberately unpinned. That vector is real and was observed live during
+//    the C1 review (0.74.0 and 0.75.1 resolving minutes apart on one
+//    machine; outputs happened to match, so check-parity survived on luck).
+//    Mitigation today is visibility only — codegen.mjs logs the resolved
+//    version. A genuine cross-version guard remains open; see tier T3-6 in
+//    docs/test-campaigns/phase-12.md.
 // ---------------------------------------------------------------------------
 
-test("T3-6: codegen is byte-for-byte deterministic across two runs of the same schema", async () => {
+test("T3-6: codegen is byte-for-byte deterministic within a run (same resolved generator version)", {
+  skip: PY_CODEGEN_SKIP,
+}, async () => {
   const schemaTmp = await mkdtemp(join(tmpdir(), "grackle-codegen-schema-"));
   const tsOut1 = await mkdtemp(join(tmpdir(), "grackle-codegen-ts1-"));
   const tsOut2 = await mkdtemp(join(tmpdir(), "grackle-codegen-ts2-"));
@@ -295,7 +364,9 @@ test("T3-6: codegen is byte-for-byte deterministic across two runs of the same s
 // writes probes; the actual fix is out of scope here). If this ever starts erroring or
 // producing output for the bogus file, this test will fail — update it to assert the
 // fixed behavior and delete this comment.
-test("KNOWN GAP (T3-6): a non-.schema.json filename in the schema dir is silently skipped by codegen", async () => {
+test("KNOWN GAP (T3-6): a non-.schema.json filename in the schema dir is silently skipped by codegen", {
+  skip: PY_CODEGEN_SKIP,
+}, async () => {
   const schemaTmp = await mkdtemp(
     join(tmpdir(), "grackle-codegen-bogus-schema-")
   );

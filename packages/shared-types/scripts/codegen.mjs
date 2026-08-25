@@ -52,6 +52,40 @@ const PY_HEADER =
  * a temp copy of the schema dir) without touching the real one.
  * @param {{ tsOutDir?: string; pyOutDir?: string; schemaDir?: string }} [opts]
  */
+// Resolved once per process, not per main() call: the probe costs a full uvx
+// spawn (~1.3s, comparable to the generation it precedes), and verify-parity's
+// tests call main() several times in one process.
+let resolvedGeneratorVersion = null;
+
+/**
+ * Log which datamodel-code-generator `uvx` actually resolved. The version is
+ * deliberately unpinned, so recording it is the only thing making drift
+ * visible after the fact.
+ *
+ * Never fatal. This is diagnostics, not generation — if it fails, the real
+ * datamodel-codegen call later in the loop reports the real error, and the
+ * TypeScript half of codegen (which needs no Python toolchain at all) still
+ * completes rather than being blocked by a broken probe.
+ */
+async function logResolvedGeneratorVersion() {
+  if (resolvedGeneratorVersion === null) {
+    try {
+      const { stdout } = await execFileAsync("uvx", [
+        "--from",
+        "datamodel-code-generator",
+        "datamodel-codegen",
+        "--version",
+      ]);
+      resolvedGeneratorVersion = stdout.trim();
+    } catch (err) {
+      resolvedGeneratorVersion = `unavailable (${err.message ?? err})`;
+    }
+  }
+  console.log(
+    `  Py  \u24d8 datamodel-code-generator resolved version: ${resolvedGeneratorVersion}`
+  );
+}
+
 export async function main(opts = {}) {
   const tsOutDir = opts.tsOutDir ?? DEFAULT_TS_OUT;
   const pyOutDir = opts.pyOutDir ?? DEFAULT_PY_OUT;
@@ -65,19 +99,7 @@ export async function main(opts = {}) {
     .sort();
 
   if (generatePython && schemaFiles.length > 0) {
-    // Logged once per run (not per schema file) — the resolved version is the
-    // same for every file this invocation generates. `uvx` is unpinned (see
-    // the --from datamodel-code-generator call below), so surfacing exactly
-    // which version resolved makes drift visible in CI output.
-    const { stdout: versionOut } = await execFileAsync("uvx", [
-      "--from",
-      "datamodel-code-generator",
-      "datamodel-codegen",
-      "--version",
-    ]);
-    console.log(
-      `  Py  ⓘ datamodel-code-generator resolved version: ${versionOut.trim()}`
-    );
+    await logResolvedGeneratorVersion();
   }
 
   for (const schemaFile of schemaFiles) {

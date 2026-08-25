@@ -19,4 +19,12 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+# Appended, not prepended, and only once. Prepending would give every module
+# in this directory priority over the standard library and site-packages, so a
+# future helper named e.g. types.py or json.py would silently shadow the
+# stdlib module for the whole session and fail far from its cause. Appending
+# still resolves ``synth`` (nothing else on the path provides that name) with
+# none of that hazard.
+_HERE = str(Path(__file__).parent)
+if _HERE not in sys.path:
+    sys.path.append(_HERE)

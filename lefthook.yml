@@ -30,8 +30,10 @@ pre-push:
       run: pnpm check-parity
     typecheck:
       run: pnpm typecheck
-    test-frontend:
-      run: pnpm --filter @grackle/frontend test --run
+    # Workspace-wide, not frontend-only: a package whose suite no gate runs
+    # is a green tick for nothing.
+    test-workspace:
+      run: pnpm test
     mypy:
       root: "packages/agent/"
       run: uv run mypy --strict src tests

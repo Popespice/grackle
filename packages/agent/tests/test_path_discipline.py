@@ -58,12 +58,12 @@ def _find_relative_to_calls(source: str) -> list[int]:
     *source*, anywhere in the AST — module scope, inside a function or
     class body, nested in a comprehension, wherever.
 
-    Deliberately uses ``ast.walk`` rather than a hand-rolled recursive
-    ``ast.walk``, unlike the import-hygiene scanner in
-    ``test_ml_bridge_import_hygiene.py``, matters here because both real
-    call sites this scan must allow-list (``cli.py``, ``node_resolution.py``)
-    are themselves inside function bodies — a module-scope-only walker would
-    have silently missed them entirely, defeating the whole scan.
+    Uses ``ast.walk``, which recurses everywhere, rather than the custom
+    module-scope-only walker in ``test_ml_bridge_import_hygiene.py``. That
+    difference is deliberate and load-bearing: both call sites this scan must
+    allow-list (``cli.py``, ``node_resolution.py``) are themselves inside
+    function bodies, so a module-scope-only walker would miss them entirely
+    and the scan would silently find nothing.
     """
     tree = ast.parse(source)
     lines: list[int] = []
@@ -77,21 +77,19 @@ def _find_relative_to_calls(source: str) -> list[int]:
     return lines
 
 
-def _scanned_source_files() -> list[Path]:
-    """Every agent-package source file this test holds to the convention:
-    all of ``src/grackle``, excluding generated code and ``paths.py`` itself
-    (the sanctioned module — its own internal ``relative_to`` call is the
-    point of the module, not a violation of the rule it enforces)."""
-    return [
-        p
-        for p in sorted(_SRC_DIR.rglob("*.py"))
-        if "_generated" not in p.parts and p != _PATHS_MODULE
-    ]
+def _scannable(agent_source_files: list[Path]) -> list[Path]:
+    """The files this test holds to the convention: everything the shared
+    ``agent_source_files`` fixture enumerates, minus ``paths.py`` itself (the
+    sanctioned module — its own internal ``relative_to`` call is the point of
+    the module, not a violation of the rule it enforces)."""
+    return [p for p in agent_source_files if p != _PATHS_MODULE]
 
 
-def test_relative_to_calls_confined_to_allow_listed_sites() -> None:
+def test_relative_to_calls_confined_to_allow_listed_sites(
+    agent_source_files: list[Path],
+) -> None:
     offenders: dict[str, list[int]] = {}
-    for path in _scanned_source_files():
+    for path in _scannable(agent_source_files):
         hits = _find_relative_to_calls(path.read_text(encoding="utf-8"))
         if hits:
             offenders[path.relative_to(_SRC_DIR).as_posix()] = hits
@@ -119,8 +117,10 @@ def test_relative_to_calls_confined_to_allow_listed_sites() -> None:
         "happens to land in a file already on the list)."
     )
 
-    # Exact-set equality (not subset): both directions above must hold.
-    assert found == _ALLOWED_RELATIVE_TO_FILES
+    # The two assertions above are jointly exactly set equality: nothing
+    # outside the allow-list, and nothing on the allow-list missing. A third
+    # bare `found == _ALLOWED...` assert would add no coverage and would
+    # report a worse message than either of them.
 
 
 def test_direct_call_at_module_scope_is_caught() -> None:
@@ -152,13 +152,19 @@ def test_bare_attribute_reference_without_a_call_is_not_flagged() -> None:
     assert _find_relative_to_calls("f = x.relative_to\n") == []
 
 
-def test_agent_source_files_actually_scanned_non_vacuous() -> None:
+def test_agent_source_files_actually_scanned_non_vacuous(
+    agent_source_files: list[Path],
+) -> None:
     # Guards the scan above against silently walking zero/wrong files (a bad
     # glob or moved directory), which would make the main test pass vacuously.
-    scanned = _scanned_source_files()
+    scanned = _scannable(agent_source_files)
     assert len(scanned) > 20
     assert (_SRC_DIR / "cli.py") in scanned
 
 
-def test_paths_module_itself_is_excluded_from_the_scan() -> None:
-    assert _PATHS_MODULE not in _scanned_source_files()
+def test_paths_module_itself_is_excluded_from_the_scan(
+    agent_source_files: list[Path],
+) -> None:
+    # paths.py must be in the shared enumeration but out of this scan.
+    assert _PATHS_MODULE in agent_source_files
+    assert _PATHS_MODULE not in _scannable(agent_source_files)
