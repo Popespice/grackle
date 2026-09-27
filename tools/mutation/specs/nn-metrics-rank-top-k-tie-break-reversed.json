@@ -1,0 +1,15 @@
+{
+  "id": "nn-metrics-rank-top-k-tie-break-reversed",
+  "description": "T4-3: both top-k selections take descending order by reversing an ascending stable sort, which flips the documented tie-break (lower original index wins) to higher-index-wins and changes the reported overlap whenever ties straddle the top-k cut.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/ml/metrics_rank.py",
+    "find": "    top_a = set(np.argsort(-a, kind=\"stable\")[:k_eff].tolist())\n    top_b = set(np.argsort(-b, kind=\"stable\")[:k_eff].tolist())",
+    "replace": "    top_a = set(np.argsort(a, kind=\"stable\")[::-1][:k_eff].tolist())\n    top_b = set(np.argsort(b, kind=\"stable\")[::-1][:k_eff].tolist())"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/ml/test_metrics_rank.py"]
+  },
+  "expect": "killed"
+}

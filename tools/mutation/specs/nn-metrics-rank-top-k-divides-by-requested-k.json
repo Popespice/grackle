@@ -1,0 +1,15 @@
+{
+  "id": "nn-metrics-rank-top-k-divides-by-requested-k",
+  "description": "T4-3: top_k_overlap divides by the requested k instead of the clamped k_eff, so any k larger than the graph under-reports agreement (a perfect match on a 2-node graph with k=100 scores 0.02).",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/ml/metrics_rank.py",
+    "find": "    return float(len(top_a & top_b) / k_eff)",
+    "replace": "    return float(len(top_a & top_b) / k)"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/ml/test_metrics_rank.py"]
+  },
+  "expect": "killed"
+}

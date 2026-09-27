@@ -1,0 +1,15 @@
+{
+  "id": "nn-labels-event-weight-float-rounds",
+  "description": "T4-3: a float metadata.count is rounded instead of truncated, diverging from the aggregates.py _event_weight this function mirrors, so trained labels disagree with the live heat-map on fractional counts.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/ml/labels.py",
+    "find": "        return max(1, int(raw))",
+    "replace": "        return max(1, round(raw))"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/ml/test_labels.py"]
+  },
+  "expect": "killed"
+}

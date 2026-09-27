@@ -1,0 +1,15 @@
+{
+  "id": "nn-features-tarjan-cross-edge-ignores-on-stack",
+  "description": "T4-3: Tarjan's non-tree-edge case drops the on_stack check, so an edge into an already-finished SCC lowers the caller's lowlink; the caller is then never popped as a root and inherits a stale component id, marking a plain caller of a recursive pair as in_cycle.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/ml/features.py",
+    "find": "                elif on_stack[w]:",
+    "replace": "                else:"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/ml/test_features.py"]
+  },
+  "expect": "killed"
+}

@@ -1,0 +1,15 @@
+{
+  "id": "nn-labels-event-weight-int-not-floored",
+  "description": "T4-3: an integer metadata.count is used as-is instead of floored at 1, so a zero or negative count subtracts heat from a node that genuinely fired.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/ml/labels.py",
+    "find": "        return max(1, raw)",
+    "replace": "        return raw"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/ml/test_labels.py"]
+  },
+  "expect": "killed"
+}

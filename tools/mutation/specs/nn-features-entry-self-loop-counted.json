@@ -1,0 +1,15 @@
+{
+  "id": "nn-features-entry-self-loop-counted",
+  "description": "T4-3: a self-loop call/import edge is counted toward call_import_in_degree, so a directly recursive function with no external caller stops qualifying as a BFS entry and is reported unreachable.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/ml/features.py",
+    "find": "        if kind in (\"call\", \"import\") and src_idx != tgt_idx:",
+    "replace": "        if kind in (\"call\", \"import\"):"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/ml/test_features.py"]
+  },
+  "expect": "killed"
+}

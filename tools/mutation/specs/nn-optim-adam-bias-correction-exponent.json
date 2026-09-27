@@ -1,0 +1,15 @@
+{
+  "id": "nn-optim-adam-bias-correction-exponent",
+  "description": "T4-5/T9-3: Adam's bias correction uses beta**(t+1) instead of beta**t (a step-counter off-by-one), mis-scaling every update of the optimizer train_heat_model actually ships with.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/optim.py",
+    "find": "            m_hat = m / (1.0 - self.beta1**self.t)\n            v_hat = v / (1.0 - self.beta2**self.t)",
+    "replace": "            m_hat = m / (1.0 - self.beta1**(self.t + 1))\n            v_hat = v / (1.0 - self.beta2**(self.t + 1))"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/test_optim.py"]
+  },
+  "expect": "killed"
+}
