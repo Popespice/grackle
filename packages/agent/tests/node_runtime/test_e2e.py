@@ -6,6 +6,9 @@ frontend job, so they run there (Ubuntu + Windows), not only locally.
 
 Assertions are robust to sampling non-determinism: structure (which nodes appear,
 call/return balance, depth, no leaked non-project frames) rather than exact counts.
+The same holds for the precise-coverage channel: its call counts are bounded by the
+program's true call counts, never pinned to them, because JIT inlining makes V8
+under-count by a load-dependent amount (docs/test-campaigns/phase-12.md, F-1).
 """
 
 from __future__ import annotations
@@ -40,6 +43,15 @@ _KNOWN_NODES = {
     "src/math.ts:add",
     "src/math.ts:fib",
     "src/math.ts:busy",
+}
+
+# True call counts, from program semantics: main.ts runs fib(30), which makes
+# 2*F(31) - 1 calls, and busy(2_000_000), which calls add once per round. These are
+# upper bounds on what V8 reports, not expected values (see the coverage test).
+_FIXTURE_CALLS = ("fib(30)", "busy(2_000_000)")
+_TRUE_CALLS = {
+    "src/math.ts:fib": 2_692_537,
+    "src/math.ts:add": 2_000_000,
 }
 
 
@@ -85,14 +97,29 @@ def test_coverage_emits_live_heat() -> None:
 
     node_ids = {e["node_id"] for e in events}
     assert node_ids <= _KNOWN_NODES, node_ids
-    # Both functions are definitely called → exact coverage records them.
+    # Both functions are definitely called, and each runs unoptimized before any
+    # tier-up can inline it, so precise coverage always records them.
     assert {"src/math.ts:fib", "src/math.ts:add"} <= node_ids
 
-    # The exact call count rides along in metadata for fidelity-aware consumers.
-    add_event = next(e for e in events if e["node_id"] == "src/math.ts:add")
-    metadata = add_event["metadata"]
-    assert isinstance(metadata, dict)
-    assert metadata["count"] == 2_000_000
+    # The per-poll call delta rides along in metadata.count for fidelity-aware
+    # consumers. The adapter emits only positive deltas, so every event must carry
+    # a positive int.
+    per_node: dict[str, list[int]] = {}
+    for e in events:
+        count = e["metadata"].get("count")
+        assert type(count) is int and count > 0, e
+        per_node.setdefault(e["node_id"], []).append(count)
+
+    # The counts are bounded, not exact (F-1). V8 stops counting calls at call
+    # sites that TurboFan has inlined. Once busy's loop tiers up with add inlined
+    # into it, V8 reports only the calls made before that. How many that is
+    # depends on runner speed and load: 2,000,000 on an idle machine, 130,607 on
+    # a loaded windows-latest runner. What survives inlining is that the counts,
+    # summed over every poll, never exceed the calls the program made.
+    source = _SCRIPT.read_text(encoding="utf-8")
+    assert all(call in source for call in _FIXTURE_CALLS), "fixture drifted: re-derive bounds"
+    for node_id, true_calls in _TRUE_CALLS.items():
+        assert sum(per_node[node_id]) <= true_calls, (node_id, per_node[node_id])
 
 
 def test_cli_trace_typescript_stdout() -> None:
