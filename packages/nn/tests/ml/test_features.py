@@ -427,6 +427,68 @@ def test_self_loop_only_node_is_still_an_entry_point() -> None:
     assert x[ids.index("a.py:other"), reach] == 1.0
 
 
+def test_imported_file_nodes_are_still_entry_points() -> None:
+    """Test campaign T4-3 (docs/test-campaigns/phase-12.md): the entry set is
+    "file nodes, OR any node with zero call/import in-degree". Every file node
+    is a BFS root at depth 0, even one that other files import. Covers the two
+    cases where the file-kind clause matters: a file imported by another file,
+    and two files in a circular import. With neither file having zero in-degree,
+    the circular pair would otherwise be reported unreachable."""
+    graph = {
+        "version": 1,
+        "language": "python",
+        "nodes": [
+            {"id": "a.py", "kind": "file", "name": "a.py", "path": "a.py"},
+            {"id": "b.py", "kind": "file", "name": "b.py", "path": "b.py"},
+            {"id": "c.py", "kind": "file", "name": "c.py", "path": "c.py"},
+            {"id": "d.py", "kind": "file", "name": "d.py", "path": "d.py"},
+        ],
+        "edges": [
+            {"source": "a.py", "target": "b.py", "kind": "import"},  # b.py is imported
+            {"source": "c.py", "target": "d.py", "kind": "import"},  # c.py <-> d.py cycle
+            {"source": "d.py", "target": "c.py", "kind": "import"},
+        ],
+    }
+    ids, x = extract_features(graph)
+    bfs = FEATURE_NAMES.index("log1p_bfs_depth")
+    reach = FEATURE_NAMES.index("reachable")
+    for nid in ("a.py", "b.py", "c.py", "d.py"):
+        assert x[ids.index(nid), bfs] == 0.0, nid
+        assert x[ids.index(nid), reach] == 1.0, nid
+
+
+def test_caller_of_a_finished_cycle_is_not_in_that_cycle() -> None:
+    """Test campaign T4-3: Tarjan must only lower a lowlink through a neighbour
+    that is still on the stack. ``caller`` is listed after the recursive pair,
+    so the DFS finishes {even, odd} before it reaches ``caller``, and
+    ``caller -> even`` is an edge into an already-completed SCC. Following that
+    edge would lower ``caller``'s lowlink and leave it unassigned to any
+    component. Before this test, the only check was the dev-only cross-check
+    against the agent package's fixture."""
+    graph = {
+        "version": 1,
+        "language": "python",
+        "nodes": [
+            {"id": "m.py:even", "kind": "function", "name": "even", "path": "m.py"},
+            {"id": "m.py:odd", "kind": "function", "name": "odd", "path": "m.py"},
+            {"id": "m.py:caller", "kind": "function", "name": "caller", "path": "m.py"},
+        ],
+        "edges": [
+            {"source": "m.py:even", "target": "m.py:odd", "kind": "call"},
+            {"source": "m.py:odd", "target": "m.py:even", "kind": "call"},
+            {"source": "m.py:caller", "target": "m.py:even", "kind": "call"},
+        ],
+    }
+    ids, x = extract_features(graph)
+    in_cycle = FEATURE_NAMES.index("in_cycle")
+    scc = FEATURE_NAMES.index("log1p_scc_size")
+    for nid in ("m.py:even", "m.py:odd"):
+        assert x[ids.index(nid), in_cycle] == 1.0, nid
+        assert x[ids.index(nid), scc] == pytest.approx(math.log1p(2)), nid
+    assert x[ids.index("m.py:caller"), in_cycle] == 0.0
+    assert x[ids.index("m.py:caller"), scc] == pytest.approx(math.log1p(1))
+
+
 def test_none_path_defaults_to_empty_string_not_crash() -> None:
     graph = {
         "version": 1,

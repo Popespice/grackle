@@ -94,6 +94,20 @@ def test_top_k_overlap_tie_determinism() -> None:
     assert top_k_overlap(a, a, 2) == 1.0
 
 
+def test_top_k_overlap_tie_break_is_lower_index_wins() -> None:
+    """Test campaign T4-3 (docs/test-campaigns/phase-12.md): pins the documented
+    tie-break (lower original index wins) to its actual value. The determinism
+    test above compares an array with itself, which passes under ANY consistent
+    rule. Here ``a`` is all ties and ``b`` has an unambiguous top element, so
+    the overlap is 1.0 or 0.0 depending on which index the tie-break picks from
+    ``a``."""
+    tied = np.array([1.0, 1.0, 1.0])
+    assert top_k_overlap(tied, np.array([3.0, 2.0, 1.0]), 1) == 1.0  # index 0 chosen
+    assert top_k_overlap(tied, np.array([1.0, 2.0, 3.0]), 1) == 0.0  # index 2 not chosen
+    # Ties straddling the cut in both arrays: index 0 wins in each, so they agree.
+    assert top_k_overlap(np.array([1.0, 1.0, 0.0]), np.array([1.0, 0.0, 1.0]), 1) == 1.0
+
+
 def test_spearman_empty_input_is_zero_not_nan() -> None:
     r = spearman(np.array([]), np.array([]))
     assert r == 0.0

@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pytest
 
-from grackle_nn.ml.dataset import build_example
+from grackle_nn.losses import MSE
+from grackle_nn.ml.dataset import build_example, stack
 from grackle_nn.ml.heat_model import HeatModel, ModelFormatError, train_heat_model
 
 if TYPE_CHECKING:
@@ -88,6 +89,21 @@ def test_val_provided_computes_loss_from_val_not_train_data() -> None:
     assert [h[1] for h in history_with_val] == train_losses_alone  # sanity: same trajectory
     assert val_losses != train_losses_alone
     assert all(math.isfinite(loss) for loss in val_losses)
+
+
+def test_val_loss_uses_the_train_time_standardization_the_model_ships() -> None:
+    """Test campaign T4-3 (docs/test-campaigns/phase-12.md): the reported val_loss
+    must be the loss the RETURNED model achieves on the val set, standardized with
+    the train-time norm_mean/norm_std the model stores and ``predict()`` applies.
+    The test above only proves val_loss differs from train_loss, which a val set
+    re-centred on its own statistics would also satisfy."""
+    examples = _examples(count=6)
+    train, val = examples[:4], examples[4:]
+    model, history = train_heat_model(train, epochs=3, seed=0, val=val)
+    val_x, val_y = stack(val)
+    standardized = (val_x - model.norm_mean) / model.norm_std
+    expected = MSE().forward(model.model.forward(standardized), val_y.reshape(-1, 1))
+    assert history[-1][2] == pytest.approx(expected, rel=1e-12, abs=0)
 
 
 def test_predict_clip_bounds() -> None:

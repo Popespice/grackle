@@ -1,0 +1,15 @@
+{
+  "id": "nn-heat-model-std-epsilon-guard",
+  "description": "T4-3: the std epsilon floor is dropped, so any constant feature column (a one-hot nobody uses, a graph with no async functions) divides by zero and training goes NaN.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/ml/heat_model.py",
+    "find": "    norm_std: Array = np.maximum(x.std(axis=0), 1e-8)",
+    "replace": "    norm_std: Array = x.std(axis=0)"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/ml/test_heat_model.py"]
+  },
+  "expect": "killed"
+}

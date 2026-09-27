@@ -1,0 +1,15 @@
+{
+  "id": "nn-features-tarjan-tree-edge-uses-index",
+  "description": "T4-3: Tarjan's tree-edge return propagates the child's discovery index instead of its lowlink (the classic tree-edge/back-edge rule swap), so a cycle longer than two splits into smaller SCCs and its members lose in_cycle / log1p_scc_size.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/ml/features.py",
+    "find": "                    lowlinks[parent] = min(lowlinks[parent], lowlinks[v])",
+    "replace": "                    lowlinks[parent] = min(lowlinks[parent], indices[v])"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/ml/test_features.py"]
+  },
+  "expect": "killed"
+}
