@@ -1,0 +1,15 @@
+{
+  "id": "frontend-graph-canvas-theme-label-colors-swapped",
+  "description": "Label colors are swapped between themes: white labels on the light canvas, slate on the dark one (T11-1).",
+  "target": {
+    "file": "packages/frontend/src/graph/GraphCanvas.tsx",
+    "find": "return theme === \"dark\" ? LABEL_COLOR_DARK : LABEL_COLOR_LIGHT;",
+    "replace": "return theme === \"dark\" ? LABEL_COLOR_LIGHT : LABEL_COLOR_DARK;"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/GraphCanvas.test.tsx"]
+  },
+  "expect": "killed"
+}

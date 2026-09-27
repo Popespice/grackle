@@ -1,0 +1,15 @@
+{
+  "id": "frontend-graph-canvas-click-edge-reads-build-time-graph",
+  "description": "clickEdge reads the source path from the graph the Sigma was BUILT with, which goes stale after an in-place watch-mode re-push (T11-1).",
+  "target": {
+    "file": "packages/frontend/src/graph/GraphCanvas.tsx",
+    "find": "const path = g.getNodeAttribute(source, \"path\");",
+    "replace": "const path = graphData.nodes.find((n) => n.id === source)?.path;"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/GraphCanvas.test.tsx"]
+  },
+  "expect": "killed"
+}

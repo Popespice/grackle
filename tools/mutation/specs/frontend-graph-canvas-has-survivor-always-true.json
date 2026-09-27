@@ -1,0 +1,15 @@
+{
+  "id": "frontend-graph-canvas-has-survivor-always-true",
+  "description": "hasSurvivor reports a survivor for any graph, so a different project (or an empty graph) is diffed into the old one instead of rebuilt (T11-1).",
+  "target": {
+    "file": "packages/frontend/src/graph/GraphCanvas.tsx",
+    "find": "    if (live.hasNode(node.id)) return true;\n  }\n  return false;",
+    "replace": "    if (live.hasNode(node.id)) return true;\n  }\n  return true;"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/GraphCanvas.test.tsx"]
+  },
+  "expect": "killed"
+}

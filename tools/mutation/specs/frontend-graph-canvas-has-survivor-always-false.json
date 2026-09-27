@@ -1,0 +1,15 @@
+{
+  "id": "frontend-graph-canvas-has-survivor-always-false",
+  "description": "hasSurvivor never finds a survivor, so every watch-mode re-push of the same project rebuilds Sigma from scratch, losing layout and camera (T11-1).",
+  "target": {
+    "file": "packages/frontend/src/graph/GraphCanvas.tsx",
+    "find": "    if (live.hasNode(node.id)) return true;",
+    "replace": "    if (live.hasNode(node.id)) return false;"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/GraphCanvas.test.tsx"]
+  },
+  "expect": "killed"
+}

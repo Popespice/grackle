@@ -1,0 +1,15 @@
+{
+  "id": "frontend-graph-canvas-teardown-layout-not-killed",
+  "description": "The unmount teardown forgets the FA2 layout's kill(): its Web Worker leaks on every unmount (T11-1).",
+  "target": {
+    "file": "packages/frontend/src/graph/GraphCanvas.tsx",
+    "find": "      fa2Ref.current?.kill();\n      fa2Ref.current = null;\n      sigmaRef.current?.kill();",
+    "replace": "      fa2Ref.current = null;\n      sigmaRef.current?.kill();"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/GraphCanvas.test.tsx"]
+  },
+  "expect": "killed"
+}

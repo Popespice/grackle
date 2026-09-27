@@ -1,0 +1,15 @@
+{
+  "id": "frontend-graph-canvas-teardown-settle-timer-not-cleared",
+  "description": "The unmount teardown leaves the 5 s initial-settle timer pending, so it fires into a killed layout after unmount (T11-1).",
+  "target": {
+    "file": "packages/frontend/src/graph/GraphCanvas.tsx",
+    "find": "      if (initialSettleTimerRef.current !== null)\n        clearTimeout(initialSettleTimerRef.current);\n",
+    "replace": ""
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/GraphCanvas.test.tsx"]
+  },
+  "expect": "killed"
+}

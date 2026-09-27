@@ -1,0 +1,15 @@
+{
+  "id": "frontend-graph-canvas-teardown-sigma-not-killed",
+  "description": "The unmount teardown forgets sigma.kill(): the renderer, its WebGL contexts and its click handlers outlive the component, and a stray event still drives the store (T11-1).",
+  "target": {
+    "file": "packages/frontend/src/graph/GraphCanvas.tsx",
+    "find": "      sigmaRef.current?.kill();\n      sigmaRef.current = null;\n      graphologyRef.current = null;",
+    "replace": "      sigmaRef.current = null;\n      graphologyRef.current = null;"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/GraphCanvas.test.tsx"]
+  },
+  "expect": "killed"
+}

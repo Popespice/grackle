@@ -1,0 +1,15 @@
+{
+  "id": "frontend-graph-canvas-raf-loop-never-stops",
+  "description": "The animation tick always requests another frame, so the rAF loop runs (and refreshes Sigma) forever after the first diff animation (T11-1).",
+  "target": {
+    "file": "packages/frontend/src/graph/GraphCanvas.tsx",
+    "find": "rafIdRef.current = active ? requestAnimationFrame(tick) : null;",
+    "replace": "rafIdRef.current = requestAnimationFrame(tick);"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/GraphCanvas.test.tsx"]
+  },
+  "expect": "killed"
+}

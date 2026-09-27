@@ -1,0 +1,15 @@
+{
+  "id": "frontend-graph-canvas-click-stage-keeps-highlight",
+  "description": "Clicking the empty stage clears the selection but leaves the cycle highlight on (T11-1).",
+  "target": {
+    "file": "packages/frontend/src/graph/GraphCanvas.tsx",
+    "find": "      selectNode(null);\n      setHighlightedNodes(null);",
+    "replace": "      selectNode(null);"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/GraphCanvas.test.tsx"]
+  },
+  "expect": "killed"
+}
