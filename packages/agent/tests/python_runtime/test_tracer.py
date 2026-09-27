@@ -468,3 +468,46 @@ def test_sink_exception_still_calls_stop(tmp_path: Path) -> None:
     fresh = Tracer(resolver2, TraceOptions())
     events = fresh.run(script)
     assert len(events) > 0
+
+
+# ---------------------------------------------------------------------------
+# Test campaign T5-1 (docs/test-campaigns/phase-12.md): an interrupt during
+# _start() leaks the sys.monitoring tool registration process-wide
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "T5-1: _start() runs before run()'s try, so an interrupt after "
+        "use_tool_id() skips _stop() and leaks the tool id "
+        "(docs/test-campaigns/phase-12.md)"
+    ),
+)
+def test_interrupt_during_start_releases_the_monitoring_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Ctrl-C landing inside _start(), after use_tool_id() claimed the tool
+    but before the callbacks are wired, must still release the tool —
+    otherwise every later Tracer in the process fails at use_tool_id() with
+    "tool 3 is already in use"."""
+    mon = sys.monitoring
+    real_register = mon.register_callback
+
+    def _register_then_interrupt(tool_id: int, event: int, func: object) -> object:
+        if tool_id == _GRACKLE_TOOL_ID and func is not None:
+            raise KeyboardInterrupt
+        return real_register(tool_id, event, func)  # type: ignore[arg-type]
+
+    try:
+        with monkeypatch.context() as m:
+            m.setattr(mon, "register_callback", _register_then_interrupt)
+            with pytest.raises(KeyboardInterrupt):
+                _make_tracer().run(_SCRIPT)
+        assert mon.get_tool(_GRACKLE_TOOL_ID) is None
+    finally:
+        # Today the tool DOES leak; release it so the rest of the session's
+        # tracer tests are not poisoned by this expected failure.
+        if mon.get_tool(_GRACKLE_TOOL_ID) is not None:
+            mon.set_events(_GRACKLE_TOOL_ID, 0)
+            mon.free_tool_id(_GRACKLE_TOOL_ID)

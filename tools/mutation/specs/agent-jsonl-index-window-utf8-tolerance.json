@@ -1,0 +1,20 @@
+{
+  "id": "agent-jsonl-index-window-utf8-tolerance",
+  "description": "T5-5 pin: JsonlIndex.read_window stops tolerating an undecodable line, so a salvaged .part torn mid-UTF-8-sequence raises out of every seek window that touches its tail instead of costing only the torn line.",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/jsonl_index.py",
+    "find": "                except (json.JSONDecodeError, UnicodeDecodeError):",
+    "replace": "                except json.JSONDecodeError:"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/python_runtime/test_jsonl_index.py",
+      "-k",
+      "torn_utf8"
+    ]
+  },
+  "expect": "killed"
+}

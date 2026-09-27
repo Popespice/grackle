@@ -1,0 +1,15 @@
+{
+  "id": "agent-live-ingest-recording-not-closed-at-session-end",
+  "description": "T5-3 pin: the recording sink ignores trace_session_end and keeps teeing until the producer disconnects, so events sent after the end land in the recording. The pin says a recording is exactly the start..end window whose count agrees with the producer's own event_count.",
+  "target": {
+    "file": "packages/agent/src/grackle/server.py",
+    "find": "                    elif etype == \"trace_session_end\":\n                        if recorder is not None:\n                            await recorder.finalize()\n                            recorder = None",
+    "replace": "                    elif etype == \"trace_session_end\":\n                        pass"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_server_trace_live.py", "-k", "after_session_end"]
+  },
+  "expect": "killed"
+}

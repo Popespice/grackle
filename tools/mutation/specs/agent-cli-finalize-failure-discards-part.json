@@ -1,0 +1,15 @@
+{
+  "id": "agent-cli-finalize-failure-discards-part",
+  "description": "T5-6 pin: the CLI adopts RecordingSink's discard policy on a finalize failure, deleting the .part its own error message says was kept — for a user-invoked trace the file IS the product.",
+  "target": {
+    "file": "packages/agent/src/grackle/cli.py",
+    "find": "    except Exception as exc:\n        return click.ClickException(\n            f\"could not write {output}: {exc}; partial data kept at {writer.part_path}\"",
+    "replace": "    except Exception as exc:\n        writer.discard()\n        return click.ClickException(\n            f\"could not write {output}: {exc}; partial data kept at {writer.part_path}\""
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_cli_trace.py", "-k", "replace_failure_keeps"]
+  },
+  "expect": "killed"
+}

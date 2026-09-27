@@ -16,7 +16,7 @@ import json
 import subprocess
 import sys
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from click.testing import CliRunner
@@ -1468,25 +1468,21 @@ def test_trace_streaming_writes_incrementally_as_events_arrive(tmp_path: Path) -
     assert out.exists()
 
 
-def test_trace_kill_mid_run_keeps_events_written_so_far(tmp_path: Path) -> None:
-    """The headline Phase 12.0 test: SIGKILL of the tracing PROCESS (not the
-    traced script) must keep every fully-flushed event on disk. This test
-    FAILS against the pre-12.0 buffered -o path, which loses everything on a
-    mid-run process kill (the whole run was held in memory) — that is the
-    regression this chunk fixes.
-    """
-    root = tmp_path
+def _kill_trace_mid_run(root: Path, func_name: str = "hot") -> Path:
+    """Run `grackle trace -o` in a subprocess over a 3000-call hot loop of
+    *func_name*, SIGKILL it once the loop is half done, and return the path
+    of the .part the kill left behind."""
     marker = root / "marker"
     script = root / "script.py"
     script.write_text(
         "import pathlib\n"
         "import time\n"
         "\n"
-        "def hot(i):\n"
+        f"def {func_name}(i):\n"
         "    return i\n"
         "\n"
         "for _n in range(3000):\n"
-        "    hot(_n)\n"
+        f"    {func_name}(_n)\n"
         "    if _n == 1500:\n"
         f"        pathlib.Path({str(marker)!r}).write_text('go', encoding='utf-8')\n"
         "\n"
@@ -1524,8 +1520,18 @@ def test_trace_kill_mid_run_keeps_events_written_so_far(tmp_path: Path) -> None:
             proc.kill()
             proc.wait(timeout=10)
 
-    part = root / "trace.jsonl.part"
     assert not out.exists()
+    return root / "trace.jsonl.part"
+
+
+def test_trace_kill_mid_run_keeps_events_written_so_far(tmp_path: Path) -> None:
+    """The headline Phase 12.0 test: SIGKILL of the tracing PROCESS (not the
+    traced script) must keep every fully-flushed event on disk. This test
+    FAILS against the pre-12.0 buffered -o path, which loses everything on a
+    mid-run process kill (the whole run was held in memory) — that is the
+    regression this chunk fixes.
+    """
+    part = _kill_trace_mid_run(tmp_path)
     assert part.exists()
     raw = part.read_text(encoding="utf-8")
     assert raw  # non-empty: SIGKILL did not lose everything
@@ -1540,3 +1546,303 @@ def test_trace_kill_mid_run_keeps_events_written_so_far(tmp_path: Path) -> None:
     assert len(complete_lines) > 0
     for line in complete_lines:
         json.loads(line)
+
+
+def test_trace_kill_mid_run_with_non_ascii_names_is_readable_after_salvage(
+    tmp_path: Path,
+) -> None:
+    """Test campaign T5-5 (docs/test-campaigns/phase-12.md), end to end: a
+    real SIGKILL's .part, with non-ASCII node names, read line by line as
+    every salvage-path reader does, yields every complete event.
+
+    A torn tail is rarer than T5-5 assumed: the BufferedWriter flushes its
+    whole buffer BEFORE buffering a line that does not fit, so the kernel
+    only ever receives whole lines. A tear needs the kill to land inside the
+    write(2) itself (Linux can cut one short at a page boundary on a fatal
+    signal) or a short write on a full disk (T5-4) — 0 of 8 kills tore
+    during the campaign probe. The torn-mid-UTF-8 case is therefore pinned
+    deterministically in python_runtime/test_jsonl_index.py, not here."""
+    from grackle.python_runtime.aggregates import build_seekable
+
+    part = _kill_trace_mid_run(tmp_path, func_name="热点")
+    raw_lines = part.read_bytes().split(b"\n")
+    complete = [json.loads(line.decode("utf-8")) for line in raw_lines[:-1]]
+    assert any(e["node_id"].endswith(":热点") for e in complete)
+
+    idx, _ = build_seekable(part)
+    assert idx.read_window(0, len(idx)) == complete
+
+
+# ---------------------------------------------------------------------------
+# Test campaign T5-1 (docs/test-campaigns/phase-12.md): a Ctrl-C that lands
+# OUTSIDE the traced script's own frames
+# ---------------------------------------------------------------------------
+#
+# test_trace_keyboard_interrupt_mid_run_still_writes_events_so_far above
+# covers the one window that already worked: a KeyboardInterrupt raised by
+# the traced script's own code, which Tracer.run() absorbs. A real Ctrl-C
+# lands wherever the interpreter happens to be — the project parse in
+# _build_tracer (the longest window in the whole command), the tracer's own
+# setup/teardown, or grackle's sink on the hot path. Each of those escaped
+# the -o block, orphaned the .part, and bricked the next run at the same -o
+# path behind the exclusive-create refusal — whose message then describes
+# the wrong scenario ("another trace is writing" / "a previous run was
+# killed").
+
+_T5_1 = pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "T5-1: a KeyboardInterrupt outside the traced script's frames skips "
+        "finalize and orphans the .part (docs/test-campaigns/phase-12.md)"
+    ),
+)
+
+
+def _hot_loop_script(root: Path, *, handles_interrupt: bool = False) -> Path:
+    """A script whose `hot` calls give the sink a steady event stream. With
+    *handles_interrupt*, the loop catches KeyboardInterrupt and then calls
+    `after()` — a program that deliberately survives a Ctrl-C."""
+    root.mkdir(parents=True, exist_ok=True)
+    script = root / "script.py"
+    loop = "for _n in range(20):\n    hot(_n)\n"
+    if handles_interrupt:
+        loop = (
+            "try:\n"
+            "    for _n in range(20):\n"
+            "        hot(_n)\n"
+            "except KeyboardInterrupt:\n"
+            "    pass\n"
+            "after()\n"
+        )
+    script.write_text(
+        "def hot(i):\n    return i\n\ndef after():\n    return 0\n\n" + loop,
+        encoding="utf-8",
+    )
+    return script
+
+
+def _raise_keyboard_interrupt(*_args: object, **_kwargs: object) -> None:
+    raise KeyboardInterrupt
+
+
+def _interrupt_sink_on_call(monkeypatch: pytest.MonkeyPatch, n: int) -> None:
+    """Deliver a KeyboardInterrupt while JsonlPartWriter.write is on the
+    stack, on its *n*-th call — where a real Ctrl-C lands whenever the
+    traced program is hot, since grackle's sink runs on every call/return."""
+    from grackle.python_runtime.writer import JsonlPartWriter
+
+    real_write = JsonlPartWriter.write
+    calls = 0
+
+    def _write(self: JsonlPartWriter, event: Any) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == n:
+            raise KeyboardInterrupt
+        real_write(self, event)
+
+    monkeypatch.setattr(JsonlPartWriter, "write", _write)
+
+
+def _read_events(path: Path) -> list[dict[str, Any]]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+@_T5_1
+def test_trace_output_interrupt_during_project_parse_leaves_no_part(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Ctrl-C during _build_tracer's full project parse: nothing was traced,
+    so nothing may be left behind — no .part to brick the next run, and an
+    existing trace at -o is not clobbered by an empty one."""
+    from grackle.python_runtime.adapter import PythonRuntimeAdapter
+
+    script = _hot_loop_script(tmp_path)
+    out = tmp_path / "trace.jsonl"
+    prior = b'{"event": "call", "node_id": "prior_run.py:f"}\n'
+    out.write_bytes(prior)
+
+    with monkeypatch.context() as m:
+        m.setattr(PythonRuntimeAdapter, "_build_tracer", _raise_keyboard_interrupt)
+        interrupted = CliRunner().invoke(
+            main, ["trace", str(script), "--root", str(tmp_path), "--output", str(out)]
+        )
+    assert interrupted.exit_code != 0  # the user aborted; that is not success
+
+    assert not (tmp_path / "trace.jsonl.part").exists()
+    assert out.read_bytes() == prior
+
+    rerun = CliRunner().invoke(
+        main, ["trace", str(script), "--root", str(tmp_path), "--output", str(out)]
+    )
+    assert rerun.exit_code == 0, rerun.output
+
+
+@_T5_1
+def test_trace_output_interrupt_during_tracer_teardown_keeps_events(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Ctrl-C during Tracer._stop(), after the whole script ran: every event
+    was already written, so they are finalized into -o, not stranded."""
+    from grackle.python_runtime.tracer import Tracer
+
+    real_stop = Tracer._stop  # noqa: SLF001
+
+    def _stop_then_interrupt(self: Tracer) -> None:
+        real_stop(self)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(Tracer, "_stop", _stop_then_interrupt)
+
+    script = _hot_loop_script(tmp_path)
+    out = tmp_path / "trace.jsonl"
+    result = CliRunner().invoke(
+        main, ["trace", str(script), "--root", str(tmp_path), "--output", str(out)]
+    )
+    assert result.exit_code != 0
+
+    assert not (tmp_path / "trace.jsonl.part").exists()
+    hot_calls = [
+        e for e in _read_events(out) if e["event"] == "call" and e["node_id"].endswith(":hot")
+    ]
+    assert len(hot_calls) == 20
+
+
+@_T5_1
+def test_trace_output_interrupt_inside_sink_matches_interrupt_in_script(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A Ctrl-C delivered while grackle's sink is on the stack must behave
+    exactly like one delivered a bytecode earlier, in the script's own
+    frame (the pinned case above): the run ends, the events written so far
+    are finalized into -o, exit 0. Which frame a Ctrl-C lands in is a race
+    the user cannot see or control."""
+    _interrupt_sink_on_call(monkeypatch, 8)
+
+    script = _hot_loop_script(tmp_path)
+    out = tmp_path / "trace.jsonl"
+    result = CliRunner().invoke(
+        main, ["trace", str(script), "--root", str(tmp_path), "--output", str(out)]
+    )
+    assert result.exit_code == 0, result.output
+
+    assert not (tmp_path / "trace.jsonl.part").exists()
+    events = _read_events(out)
+    # Writes 1-7 are the module's call and hot(0..2)'s call/return pairs; the
+    # 8th — hot(3)'s call — is the one interrupted, so it never lands.
+    assert [e["event"] for e in events if e["node_id"].endswith(":hot")].count("call") == 3
+    # The interrupt then unwinds through the program and is traced doing so,
+    # just as one raised in the script's own frame is.
+    assert events[-1]["event"] == "exception"
+    assert events[-1]["metadata"]["exc_type"] == "KeyboardInterrupt"
+
+
+@_T5_1
+def test_trace_output_interrupt_the_program_handles_is_not_re_raised(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A tracer must not change the semantics of what it observes. If the
+    traced program catches the KeyboardInterrupt and carries on, tracing
+    carries on with it — the tracer must not latch the interrupt and
+    re-raise it after the program has already handled it."""
+    _interrupt_sink_on_call(monkeypatch, 8)
+
+    script = _hot_loop_script(tmp_path, handles_interrupt=True)
+    out = tmp_path / "trace.jsonl"
+    result = CliRunner().invoke(
+        main, ["trace", str(script), "--root", str(tmp_path), "--output", str(out)]
+    )
+    assert result.exit_code == 0, result.output
+
+    assert not (tmp_path / "trace.jsonl.part").exists()
+    assert any(e["event"] == "call" and e["node_id"].endswith(":after") for e in _read_events(out))
+
+
+class _FakeStreamSender:
+    """Stands in for TraceStreamSender so the --stream tee path runs without
+    a server: accepts every event and reports a clean finish."""
+
+    def __init__(self, _url: str, _session_id: str) -> None:
+        self.finished = False
+
+    def start(self) -> None:
+        pass
+
+    def sink(self, _event: Any) -> None:
+        pass
+
+    def finish(self) -> int:
+        self.finished = True
+        return 0
+
+    @property
+    def connection_lost(self) -> bool:
+        return False
+
+
+@_T5_1
+def test_trace_stream_tee_interrupt_during_project_parse_leaves_no_part(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The --stream tee path has the same gap: its finalize sits after the
+    try/finally that stops the sender, so a Ctrl-C in the parse escapes it."""
+    from grackle.python_runtime import stream_sender
+    from grackle.python_runtime.adapter import PythonRuntimeAdapter
+
+    monkeypatch.setattr(stream_sender, "TraceStreamSender", _FakeStreamSender)
+    script = _hot_loop_script(tmp_path)
+    out = tmp_path / "trace.jsonl"
+    argv = [
+        "trace",
+        str(script),
+        "--root",
+        str(tmp_path),
+        "--connect",
+        "ws://127.0.0.1:1",
+        "--stream",
+        "--output",
+        str(out),
+    ]
+
+    with monkeypatch.context() as m:
+        m.setattr(PythonRuntimeAdapter, "_build_tracer", _raise_keyboard_interrupt)
+        interrupted = CliRunner().invoke(main, argv)
+    assert interrupted.exit_code != 0
+
+    assert not (tmp_path / "trace.jsonl.part").exists()
+    rerun = CliRunner().invoke(main, argv)
+    assert rerun.exit_code == 0, rerun.output
+
+
+def test_trace_output_replace_failure_keeps_the_complete_trace_and_says_where(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Test campaign T5-6 (docs/test-campaigns/phase-12.md), probed and
+    pinned: when the final .part -> -o rename fails (Windows refusing to
+    replace a destination another process holds open), the run fails
+    loudly, names the .part, and that .part holds the WHOLE trace — replace()
+    is the last step, after the close that flushed every event."""
+    from pathlib import Path as _Path
+
+    real_replace = _Path.replace
+
+    def _replace(self: _Path, target: Any) -> _Path:
+        if self.name == "trace.jsonl.part":
+            raise PermissionError(13, "destination is open in another process")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(_Path, "replace", _replace)
+    script = _hot_loop_script(tmp_path)
+    out = tmp_path / "trace.jsonl"
+    result = CliRunner().invoke(
+        main, ["trace", str(script), "--root", str(tmp_path), "--output", str(out)]
+    )
+    assert result.exit_code != 0
+    part = tmp_path / "trace.jsonl.part"
+    assert str(part) in result.output
+
+    assert not out.exists()
+    hot_calls = [
+        e for e in _read_events(part) if e["event"] == "call" and e["node_id"].endswith(":hot")
+    ]
+    assert len(hot_calls) == 20

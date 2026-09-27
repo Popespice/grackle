@@ -1,0 +1,20 @@
+{
+  "id": "agent-build-seekable-utf8-tolerance",
+  "description": "T5-5 pin: build_seekable's one-pass scan (serve --trace-source, session load, diff) stops tolerating an undecodable line, so one torn multi-byte sequence fails the whole salvaged file.",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/aggregates.py",
+    "find": "                    event = json.loads(stripped.decode(\"utf-8\"))\n                except (json.JSONDecodeError, UnicodeDecodeError):",
+    "replace": "                    event = json.loads(stripped.decode(\"utf-8\"))\n                except json.JSONDecodeError:"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/python_runtime/test_jsonl_index.py",
+      "-k",
+      "torn_utf8"
+    ]
+  },
+  "expect": "killed"
+}

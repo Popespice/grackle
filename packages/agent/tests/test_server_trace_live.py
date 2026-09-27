@@ -550,6 +550,59 @@ async def test_two_sessions_back_to_back(
     assert (recordings_dir / "rec-b.jsonl").exists()
 
 
+async def test_events_after_session_end_are_broadcast_but_not_recorded(
+    store_server: tuple[int, SessionStore, Path],
+) -> None:
+    """Test campaign T5-3 (docs/test-campaigns/phase-12.md) — pinned as
+    documented behavior, not ledgered as a defect.
+
+    A producer that keeps sending trace_events after its trace_session_end is
+    misbehaving; grackle's own TraceStreamSender cannot, since the CLI only
+    calls finish() — which enqueues the end — after the tracer has stopped.
+    The server keeps broadcasting such events (live fan-out never
+    second-guesses a producer), but a recording is the session as the
+    protocol delimits it, start..end (ADR-0020 amendment), so they are not
+    in it, and its event_count agrees with the producer's own
+    trace_session_end.event_count.
+
+    The residual asymmetry is known and accepted: a UI connected at the time
+    appends those events after marking the session complete
+    (useGraphStore.addTraceEvents does not gate on traceSessionComplete), so
+    it shows two more events than the recording holds.
+    """
+    from grackle.python_runtime.writer import read_jsonl
+
+    port, store, recordings_dir = store_server
+
+    async with connect(f"ws://127.0.0.1:{port}") as consumer:
+        await consumer.send(json.dumps({"id": "c0", "type": "ping", "payload": {}}))
+        while json.loads(await asyncio.wait_for(consumer.recv(), timeout=5.0))["type"] != "pong":
+            pass
+
+        async with connect(f"ws://127.0.0.1:{port}") as producer:
+            await producer.send(_make_session_start("rec-late"))
+            for i in range(3):
+                await producer.send(_make_trace_event(i))
+            await producer.send(_make_session_end("rec-late", count=3))
+            for i in range(3, 5):
+                await producer.send(_make_trace_event(i))
+
+            # One producer's messages are handled strictly in order, so once
+            # the consumer holds the post-end events, the recording has
+            # already been finalized and registered.
+            types: list[str] = []
+            while types.count("trace_event") < 5:
+                msg = json.loads(await asyncio.wait_for(consumer.recv(), timeout=5.0))
+                types.append(msg["type"])
+
+    assert types[types.index("trace_session_end") + 1 :] == ["trace_event", "trace_event"]
+
+    meta = store.get_session("rec-late")
+    assert meta is not None
+    assert meta.event_count == 3
+    assert len(read_jsonl(recordings_dir / "rec-late.jsonl")) == 3
+
+
 async def test_replay_source_not_self_recorded(free_port: int, tmp_path: Path) -> None:
     """With --trace-source AND --store set, a pure consumer (no inbound trace
     messages) must not produce a recording beyond the register_trace_source

@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
+import pytest
+
 from grackle.python_runtime.jsonl_index import JsonlIndex
 
 if TYPE_CHECKING:
@@ -272,3 +274,79 @@ def test_two_builds_of_same_file_are_independent(tmp_path: Path) -> None:
     assert idx1 is not idx2
     assert len(idx1) == len(idx2) == 5
     assert idx1.read_window(0, 5) == idx2.read_window(0, 5)
+
+
+# ---------------------------------------------------------------------------
+# Test campaign T5-5 / T5-7 (docs/test-campaigns/phase-12.md): a salvaged
+# .part whose tail was torn mid-UTF-8-sequence
+# ---------------------------------------------------------------------------
+#
+# A .part's last line is torn when a write(2) was cut short — a full disk
+# (T5-4), or a SIGKILL landing inside the syscall itself (rare: the write
+# buffer only ever hands the kernel whole lines; see
+# test_trace_kill_mid_run_with_non_ascii_names_is_readable_after_salvage).
+# With non-ASCII node names the cut can fall inside a multi-byte UTF-8
+# sequence. The CLI's own refusal message tells the user to "move it aside
+# (a torn last line is expected)" — so the readers a salvaged file actually
+# reaches must cope with exactly this.
+
+_SALVAGED_COMPLETE_LINES = 5
+
+
+def _write_salvaged_part(path: Path) -> None:
+    """Five complete events with non-ASCII node names, then a sixth line cut
+    one byte into a three-byte UTF-8 sequence."""
+    lines = [
+        json.dumps({**_make_event(i), "node_id": f"热点.py:计算_{i}"}, ensure_ascii=False)
+        for i in range(_SALVAGED_COMPLETE_LINES)
+    ]
+    torn = json.dumps({**_make_event(5), "node_id": "热点.py:计算_5"}, ensure_ascii=False)
+    torn_bytes = torn.encode("utf-8")
+    cut = torn_bytes.index("点".encode()) + 1
+    path.write_bytes(("\n".join(lines) + "\n").encode("utf-8") + torn_bytes[:cut])
+
+
+def test_salvaged_part_with_torn_utf8_tail_is_readable_line_by_line(tmp_path: Path) -> None:
+    """T5-5 (premise refuted, pinned): the torn sequence costs only its own
+    line. Every salvage-path reader decodes per line — build_seekable
+    (serve --trace-source, session load, diff) and read_window here;
+    grackle learn's heat_from_jsonl is pinned the same way in packages/nn —
+    so the five complete events all come back. Only read_jsonl decodes the
+    whole file at once, and it rejects any malformed line by contract and is
+    reached by no salvage path."""
+    from grackle.python_runtime.aggregates import build_seekable
+
+    part = tmp_path / "trace.jsonl.part"
+    _write_salvaged_part(part)
+
+    idx, agg = build_seekable(part)
+    events = idx.read_window(0, 100)
+    assert [e["node_id"] for e in events] == [
+        f"热点.py:计算_{i}" for i in range(_SALVAGED_COMPLETE_LINES)
+    ]
+    assert agg.cumulative_heat_all(len(agg)) == {
+        f"热点.py:计算_{i}": 1 for i in range(_SALVAGED_COMPLETE_LINES)
+    }
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "T5-7: the index gives a torn, unterminated final line an event slot, "
+        "so a salvaged .part advertises one event more than it holds "
+        "(docs/test-campaigns/phase-12.md)"
+    ),
+)
+def test_salvaged_part_torn_tail_is_not_counted_as_an_event(tmp_path: Path) -> None:
+    """len(index) is what serve --trace-source and session load send as
+    trace_session_end.event_count, and what the timeline takes as the
+    trace's total. A torn tail is not an event: counting it advertises a
+    last slot that every read_window silently comes back short on."""
+    from grackle.python_runtime.aggregates import build_seekable
+
+    part = tmp_path / "trace.jsonl.part"
+    _write_salvaged_part(part)
+
+    idx, _ = build_seekable(part)
+    assert len(idx) == _SALVAGED_COMPLETE_LINES
+    assert len(JsonlIndex.build(part)) == _SALVAGED_COMPLETE_LINES

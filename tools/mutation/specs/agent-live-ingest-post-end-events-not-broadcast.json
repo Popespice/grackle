@@ -1,0 +1,15 @@
+{
+  "id": "agent-live-ingest-post-end-events-not-broadcast",
+  "description": "T5-3 pin (docs/test-campaigns/phase-12.md): someone 'fixes' the recording/broadcast asymmetry by dropping trace_events that arrive after a session_end from the live fan-out. test_events_after_session_end_are_broadcast_but_not_recorded pins that live fan-out never second-guesses a producer, so it must go red.",
+  "target": {
+    "file": "packages/agent/src/grackle/server.py",
+    "find": "                await broadcast(msg, connections, exclude=ws)",
+    "replace": "                if not (etype == \"trace_event\" and recorder is None and recordings_dir is not None):\n                    await broadcast(msg, connections, exclude=ws)"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_server_trace_live.py", "-k", "after_session_end"]
+  },
+  "expect": "killed"
+}

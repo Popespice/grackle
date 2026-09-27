@@ -201,6 +201,37 @@ async def test_save_session_failure_does_not_raise(tmp_path: Path) -> None:
     store.close()
 
 
+async def test_replace_failure_discards_and_does_not_register(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Test campaign T5-6 (docs/test-campaigns/phase-12.md): a finalize that
+    fails at the last step — the .part -> .jsonl rename, e.g. Windows
+    refusing to replace a destination another process holds open — follows
+    the same discard policy as any other finalize failure: no row, and no
+    lingering .part to block a later recording under the same session id."""
+    from pathlib import Path as _Path
+
+    real_replace = _Path.replace
+
+    def _replace(self: _Path, target: Any) -> _Path:
+        if self.name.endswith(".jsonl.part"):
+            raise PermissionError(13, "destination is open in another process")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(_Path, "replace", _replace)
+    store = SessionStore.open(tmp_path / "sessions.db")
+    recordings_dir = tmp_path / "recordings"
+    recordings_dir.mkdir()
+
+    sink = RecordingSink(recordings_dir, "sess-replace-fail", store, "python")
+    sink.write(_payload(0))
+    await sink.finalize()  # must not raise
+
+    assert store.get_session("sess-replace-fail") is None
+    assert list(recordings_dir.iterdir()) == []
+    store.close()
+
+
 def test_duplicate_session_id_raises_file_exists_error(tmp_path: Path) -> None:
     """Two RecordingSinks for the same session_id must not silently
     truncate each other's file -- the second open fails loudly."""
