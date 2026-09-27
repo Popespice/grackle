@@ -1,0 +1,15 @@
+{
+  "id": "frontend-beacon-node-method-class-guard-dropped",
+  "description": "The no-class-qualifier guard is dropped, so a module-level `layers.py:forward` function is taken for a layer's forward method and advances the network view's sweep.",
+  "target": {
+    "file": "packages/frontend/src/graph/beaconNode.ts",
+    "find": "  if (dot === -1) return false;\n",
+    "replace": ""
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/beaconNode.test.ts"]
+  },
+  "expect": "killed"
+}

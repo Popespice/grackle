@@ -1,0 +1,15 @@
+{
+  "id": "frontend-layer-activity-backward-token-off-by-one",
+  "description": "The right-to-left backward token index is off by one, so the backward sweep highlights the layer left of the one actually running and ends on token -1 (no highlight).",
+  "target": {
+    "file": "packages/frontend/src/graph/layerActivity.ts",
+    "find": "push(i, \"backward\", tokenCount - state.backwardCount);",
+    "replace": "push(i, \"backward\", tokenCount - 1 - state.backwardCount);"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/layerActivity.test.ts"]
+  },
+  "expect": "killed"
+}

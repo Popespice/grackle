@@ -1,0 +1,15 @@
+{
+  "id": "frontend-network-layout-glyph-column-off-by-one",
+  "description": "An activation glyph is anchored one column right of the column it belongs on (the preceding linear's output), and a trailing activation has no column at all and is silently dropped.",
+  "target": {
+    "file": "packages/frontend/src/graph/networkLayout.ts",
+    "find": "      const columnIndex = linearsSoFar;",
+    "replace": "      const columnIndex = linearsSoFar + 1;"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/networkLayout.test.ts"]
+  },
+  "expect": "killed"
+}

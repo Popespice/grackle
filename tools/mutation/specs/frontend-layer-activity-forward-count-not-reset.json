@@ -1,0 +1,15 @@
+{
+  "id": "frontend-layer-activity-forward-count-not-reset",
+  "description": "Opening Sequential.forward no longer resets the forward-call counter, so every pass after the first keeps counting past the last token and the forward highlight runs off the network.",
+  "target": {
+    "file": "packages/frontend/src/graph/layerActivity.ts",
+    "find": "      state.forward = openFrame(ev);\n      state.forwardCount = 0;",
+    "replace": "      state.forward = openFrame(ev);"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/layerActivity.test.ts"]
+  },
+  "expect": "killed"
+}

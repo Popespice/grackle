@@ -1,0 +1,15 @@
+{
+  "id": "frontend-network-layout-segment-clamp-removed",
+  "description": "distanceToSegment() measures to the infinite line instead of the clamped segment, so a pointer in the padding beyond a column, collinear with any bundle line, reports a bundle hit with no line under it.",
+  "target": {
+    "file": "packages/frontend/src/graph/networkLayout.ts",
+    "find": "  t = Math.max(0, Math.min(1, t));\n",
+    "replace": ""
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/networkLayout.test.ts"]
+  },
+  "expect": "killed"
+}

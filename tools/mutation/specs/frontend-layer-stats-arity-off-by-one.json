@@ -1,0 +1,15 @@
+{
+  "id": "frontend-layer-stats-arity-off-by-one",
+  "description": "buildStatsRegex() builds one float group too few, so the arity-exact regex never matches a real `1 + 2L` record_layer_stats tuple and the network view loses every per-layer weight stat.",
+  "target": {
+    "file": "packages/frontend/src/graph/layerStats.ts",
+    "find": "{ length: 2 * linearCount },",
+    "replace": "{ length: 2 * linearCount - 1 },"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/layerStats.test.ts"]
+  },
+  "expect": "killed"
+}

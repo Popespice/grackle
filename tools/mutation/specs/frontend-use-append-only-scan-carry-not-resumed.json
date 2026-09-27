@@ -1,0 +1,15 @@
+{
+  "id": "frontend-use-append-only-scan-carry-not-resumed",
+  "description": "An incremental resume drops the scanner's carry, so stateful scanners restart mid-trace — layerActivity forgets its open frames and the drop counters reset with every appended batch.",
+  "target": {
+    "file": "packages/frontend/src/graph/useAppendOnlyScan.ts",
+    "find": "const step = scan(events, startIndex, stillValid ? cache.carry : undefined);",
+    "replace": "const step = scan(events, startIndex, undefined);"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/useAppendOnlyScan.test.ts"]
+  },
+  "expect": "killed"
+}

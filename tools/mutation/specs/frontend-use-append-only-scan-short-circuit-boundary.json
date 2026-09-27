@@ -1,0 +1,15 @@
+{
+  "id": "frontend-use-append-only-scan-short-circuit-boundary",
+  "description": "The already-scanned short-circuit flips to `>`, so a repeat render over the same array (StrictMode's double invoke, a replayed concurrent render) calls `scan` again instead of returning the cache.",
+  "target": {
+    "file": "packages/frontend/src/graph/useAppendOnlyScan.ts",
+    "find": "if (stillValid && cache.scanned >= events.length) {",
+    "replace": "if (stillValid && cache.scanned > events.length) {"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/useAppendOnlyScan.test.ts"]
+  },
+  "expect": "killed"
+}

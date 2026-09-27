@@ -1,0 +1,15 @@
+{
+  "id": "frontend-beacon-node-slash-guard-dropped",
+  "description": "matchesBeaconNode() drops the path-separator requirement, so `pkg/mymetrics.py:record_epoch` — a different module — is accepted as the `metrics.py:record_epoch` beacon.",
+  "target": {
+    "file": "packages/frontend/src/graph/beaconNode.ts",
+    "find": "return nodeId === suffix || nodeId.endsWith(`/${suffix}`);",
+    "replace": "return nodeId === suffix || nodeId.endsWith(suffix);"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/beaconNode.test.ts"]
+  },
+  "expect": "killed"
+}

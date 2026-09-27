@@ -1,0 +1,15 @@
+{
+  "id": "frontend-network-spec-truncated-guard-dropped",
+  "description": "The ret_truncated skip is dropped, so a value the tracer cut short at its repr budget is parsed as if complete — a truncated token string can yield a plausible-looking but wrong (shorter) network.",
+  "target": {
+    "file": "packages/frontend/src/graph/networkSpec.ts",
+    "find": "    if (ev.values?.ret_truncated === true) continue;\n",
+    "replace": ""
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/networkSpec.test.ts"]
+  },
+  "expect": "killed"
+}

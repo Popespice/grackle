@@ -1,0 +1,15 @@
+{
+  "id": "frontend-playhead-lookup-last-item-unreachable",
+  "description": "The binary search's upper bound is off by one, so the last item can never be returned — at or past the final epoch the lookup holds the second-to-last point.",
+  "target": {
+    "file": "packages/frontend/src/graph/playheadLookup.ts",
+    "find": "let hi = items.length - 1;",
+    "replace": "let hi = items.length - 2;"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/playheadLookup.test.ts"]
+  },
+  "expect": "killed"
+}
