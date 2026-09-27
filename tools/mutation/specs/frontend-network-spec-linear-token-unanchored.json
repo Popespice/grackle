@@ -1,0 +1,15 @@
+{
+  "id": "frontend-network-spec-linear-token-unanchored",
+  "description": "The linear-token regex loses its `$` anchor, so a foreign three-part token like `linear:8:3:1` half-parses as a linear layer instead of degrading to an activation glyph.",
+  "target": {
+    "file": "packages/frontend/src/graph/networkSpec.ts",
+    "find": "const LINEAR_TOKEN_RE = /^linear:(\\d+):(\\d+)$/;",
+    "replace": "const LINEAR_TOKEN_RE = /^linear:(\\d+):(\\d+)/;"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/networkSpec.test.ts"]
+  },
+  "expect": "killed"
+}

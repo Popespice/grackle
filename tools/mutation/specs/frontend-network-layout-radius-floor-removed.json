@@ -1,0 +1,15 @@
+{
+  "id": "frontend-network-layout-radius-floor-removed",
+  "description": "The NEURON_RADIUS_MIN floor is dropped, so a dense column in a short canvas (64 rows in 80px) paints neurons about 0.16px in radius — effectively invisible and un-hoverable by eye.",
+  "target": {
+    "file": "packages/frontend/src/graph/networkLayout.ts",
+    "find": "  return Math.max(\n    NEURON_RADIUS_MIN,\n    Math.min(NEURON_RADIUS_MAX, spacing * 0.32)\n  );",
+    "replace": "  return Math.min(NEURON_RADIUS_MAX, spacing * 0.32);"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/networkLayout.test.ts"]
+  },
+  "expect": "killed"
+}

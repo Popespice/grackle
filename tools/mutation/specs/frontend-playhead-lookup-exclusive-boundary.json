@@ -1,0 +1,15 @@
+{
+  "id": "frontend-playhead-lookup-exclusive-boundary",
+  "description": "lastIndexAtOrBefore() goes exclusive — the item AT the playhead is treated as not yet happened, reintroducing the one-event disagreement between panels that this shared helper was extracted to end.",
+  "target": {
+    "file": "packages/frontend/src/graph/playheadLookup.ts",
+    "find": "if (keyOf(item) <= playhead) {",
+    "replace": "if (keyOf(item) < playhead) {"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/playheadLookup.test.ts"]
+  },
+  "expect": "killed"
+}

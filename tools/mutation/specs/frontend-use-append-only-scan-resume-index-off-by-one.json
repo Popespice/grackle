@@ -1,0 +1,15 @@
+{
+  "id": "frontend-use-append-only-scan-resume-index-off-by-one",
+  "description": "The incremental resume re-scans the last already-scanned event, so a beacon landing at the end of one batch is reported twice (a duplicated epoch point, a double-counted drop).",
+  "target": {
+    "file": "packages/frontend/src/graph/useAppendOnlyScan.ts",
+    "find": "const startIndex = stillValid ? cache.scanned : 0;",
+    "replace": "const startIndex = stillValid ? cache.scanned - 1 : 0;"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/useAppendOnlyScan.test.ts"]
+  },
+  "expect": "killed"
+}

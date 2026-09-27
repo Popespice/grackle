@@ -1,0 +1,15 @@
+{
+  "id": "frontend-layer-stats-carry-ignored",
+  "description": "The non-finite drop counter restarts at zero on every incremental call instead of resuming from `carry`, so a live-streamed diverged run under-reports its dropped epochs.",
+  "target": {
+    "file": "packages/frontend/src/graph/layerStats.ts",
+    "find": "let dropped = carry ?? 0;",
+    "replace": "let dropped = 0;"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/layerStats.test.ts"]
+  },
+  "expect": "killed"
+}

@@ -1,0 +1,15 @@
+{
+  "id": "frontend-epoch-series-nan-literal-dropped",
+  "description": "The shared FLOAT grammar stops recognising `nan`, so a diverged epoch no longer matches the tuple shape and is ignored as foreign instead of counted in `dropped` — the divergence warning under-reports.",
+  "target": {
+    "file": "packages/frontend/src/graph/epochSeries.ts",
+    "find": "export const FLOAT = String.raw`-?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?|-?inf|nan`;",
+    "replace": "export const FLOAT = String.raw`-?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?|-?inf`;"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/epochSeries.test.ts"]
+  },
+  "expect": "killed"
+}

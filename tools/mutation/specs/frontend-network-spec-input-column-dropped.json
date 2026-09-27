@@ -1,0 +1,15 @@
+{
+  "id": "frontend-network-spec-input-column-dropped",
+  "description": "The first linear layer's inDim is left out of `columns` — an off-by-one that loses the input column, so every bundle's src/dst column index points one column too far right.",
+  "target": {
+    "file": "packages/frontend/src/graph/networkSpec.ts",
+    "find": "const columns = [first.inDim, ...linears.map((l) => l.outDim)];",
+    "replace": "const columns = linears.map((l) => l.outDim);"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/networkSpec.test.ts"]
+  },
+  "expect": "killed"
+}

@@ -1,0 +1,15 @@
+{
+  "id": "frontend-epoch-series-final-run-uncounted",
+  "description": "The trailing-run count flips its boundary, so a final run holding a single epoch is not counted — a one-epoch trace reports zero runs.",
+  "target": {
+    "file": "packages/frontend/src/graph/epochSeries.ts",
+    "find": "if (currentRun.length > 0) {",
+    "replace": "if (currentRun.length > 1) {"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/epochSeries.test.ts"]
+  },
+  "expect": "killed"
+}

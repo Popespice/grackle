@@ -1,0 +1,15 @@
+{
+  "id": "frontend-layer-stats-w-dw-swapped",
+  "description": "Each (wRms, dwRms) pair is read in swapped order, so the forward sweep's weight-magnitude encoding shows the weight-change RMS and the backward sweep shows the weight RMS.",
+  "target": {
+    "file": "packages/frontend/src/graph/layerStats.ts",
+    "find": "      const wRms = nums[k];\n      const dwRms = nums[k + 1];",
+    "replace": "      const wRms = nums[k + 1];\n      const dwRms = nums[k];"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/layerStats.test.ts"]
+  },
+  "expect": "killed"
+}

@@ -1,0 +1,15 @@
+{
+  "id": "frontend-beacon-node-method-first-colon",
+  "description": "matchesBeaconMethod() splits on the first colon instead of the last, so a colon anywhere in the path mis-splits file from qualname and a genuine layer call stops matching.",
+  "target": {
+    "file": "packages/frontend/src/graph/beaconNode.ts",
+    "find": "const colon = nodeId.lastIndexOf(\":\");",
+    "replace": "const colon = nodeId.indexOf(\":\");"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/beaconNode.test.ts"]
+  },
+  "expect": "killed"
+}

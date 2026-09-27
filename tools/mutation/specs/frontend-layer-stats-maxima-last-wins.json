@@ -1,0 +1,15 @@
+{
+  "id": "frontend-layer-stats-maxima-last-wins",
+  "description": "maxima() keeps the last wRms seen instead of the running maximum, so each bundle's opacity normaliser is its final value rather than its historical peak.",
+  "target": {
+    "file": "packages/frontend/src/graph/layerStats.ts",
+    "find": "wRms[i] = Math.max(wRms[i] ?? 0, stat.wRms);",
+    "replace": "wRms[i] = stat.wRms;"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/layerStats.test.ts"]
+  },
+  "expect": "killed"
+}

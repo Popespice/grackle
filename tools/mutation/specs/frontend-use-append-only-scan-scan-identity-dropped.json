@@ -1,0 +1,15 @@
+{
+  "id": "frontend-use-append-only-scan-scan-identity-dropped",
+  "description": "A changed scan closure (e.g. a new layer count after a different architecture loads) no longer invalidates the cache, so results computed by the old scanner are served as the new one's.",
+  "target": {
+    "file": "packages/frontend/src/graph/useAppendOnlyScan.ts",
+    "find": "      cache.scan === scan &&\n",
+    "replace": ""
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/useAppendOnlyScan.test.ts"]
+  },
+  "expect": "killed"
+}

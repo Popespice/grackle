@@ -1,0 +1,15 @@
+{
+  "id": "frontend-network-spec-chain-check-disabled",
+  "description": "extractNetworkSpec() stops checking that each linear layer's inDim equals the previous layer's outDim, so a corrupt or foreign beacon (e.g. linear:2:32 then linear:64:16) renders as a nonsensical network instead of degrading to null.",
+  "target": {
+    "file": "packages/frontend/src/graph/networkSpec.ts",
+    "find": "if (!prev || !cur || cur.inDim !== prev.outDim) return null;",
+    "replace": "if (!prev || !cur) return null;"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/networkSpec.test.ts"]
+  },
+  "expect": "killed"
+}
