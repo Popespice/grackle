@@ -1,0 +1,20 @@
+{
+  "id": "agent-orphan-sweep-spares-no-fresh-part",
+  "description": "The sweep's age threshold drops below zero, so a peer server's startup sweep deletes a .part that a live recording opened a moment ago and that session is lost -- the case the 30 s guard exists for (campaign T6-2).",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/recording_sink.py",
+    "find": "min_age_s: float = 30.0",
+    "replace": "min_age_s: float = -1.0"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_orphan_sweep_faults.py",
+      "-k",
+      "spares_a_fresh_live_recording"
+    ]
+  },
+  "expect": "killed"
+}

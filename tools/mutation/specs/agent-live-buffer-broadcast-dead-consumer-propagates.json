@@ -1,0 +1,20 @@
+{
+  "id": "agent-live-buffer-broadcast-dead-consumer-propagates",
+  "description": "broadcast() stops swallowing ConnectionClosed, so a consumer that dies while a send to it is blocked ends the PRODUCER's receive loop: the rest of the session never reaches the other consumers and the recording is finalized short (campaign T6-3).",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/live_buffer.py",
+    "find": "with contextlib.suppress(websockets.exceptions.ConnectionClosed):",
+    "replace": "with contextlib.suppress():"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_server_ingest_faults.py",
+      "-k",
+      "recovers_intact"
+    ]
+  },
+  "expect": "killed"
+}
