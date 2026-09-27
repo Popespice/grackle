@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useGraphStore } from "../graph/useGraphStore";
+import { restoreInitialState } from "../test/storeReset";
 import { TimelinePanel } from "./TimelinePanel";
 
 afterEach(cleanup);
@@ -12,6 +13,8 @@ function mkEv(node_id: string, event = "call") {
 const EVENTS = [mkEv("a", "call"), mkEv("b", "call"), mkEv("a", "return")];
 
 beforeEach(() => {
+  // Full-replace first (campaign T11-4), then the fields these tests assume.
+  restoreInitialState(useGraphStore);
   useGraphStore.setState({
     graph: null,
     traceEvents: [],

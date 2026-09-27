@@ -2,6 +2,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useGraphStore } from "../graph/useGraphStore";
 import { _resetSourceCacheForTest } from "../source/useSource";
+import { restoreInitialState } from "../test/storeReset";
 import { useGrackleClient } from "../ws/client";
 import { SourceViewer } from "./SourceViewer";
 
@@ -28,6 +29,11 @@ vi.mock("../source/highlighter", () => ({
 }));
 
 beforeEach(() => {
+  // Full-replace BOTH stores first (campaign T11-4): the client-store merge
+  // below stubs the sendReadSource ACTION, and a partial merge alone would
+  // never restore it.
+  restoreInitialState(useGraphStore);
+  restoreInitialState(useGrackleClient);
   useGraphStore.setState({
     graph: MOCK_GRAPH,
     selectedNodeId: null,

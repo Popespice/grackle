@@ -380,13 +380,22 @@ describe("CausalPathPanel", () => {
     const before = screen.getAllByText(
       /later\s+firings are not collected/
     ).length;
-    // Step all the way to the last firing.
+    // Step all the way to the last firing. The query is hoisted out of the
+    // loop (campaign T11-5): React reconciles the button in place, so one
+    // node serves every click — re-running getByRole's full accessibility-tree
+    // scan 199 times is what pushed this test past the default 5s timeout on
+    // Windows CI.
+    const next = screen.getByRole("button", { name: "firing ▶" });
     for (let i = 0; i < MAX_FIRINGS - 1; i++) {
-      fireEvent.click(screen.getByRole("button", { name: "firing ▶" }));
+      fireEvent.click(next);
     }
     expect(
       screen.getByText(`${MAX_FIRINGS} / ${MAX_FIRINGS}`)
     ).toBeInTheDocument();
+    // The hoisted node is still the live one: attached, and now disabled at
+    // the last firing.
+    expect(next).toBeInTheDocument();
+    expect(next).toBeDisabled();
     // No extra warning appeared from stepping onto the last firing.
     expect(
       screen.getAllByText(/later\s+firings are not collected/)

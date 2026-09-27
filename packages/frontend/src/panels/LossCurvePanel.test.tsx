@@ -1,5 +1,11 @@
 import type { TraceEvent } from "@grackle/shared-types";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import {
   afterAll,
   afterEach,
@@ -12,6 +18,11 @@ import {
 } from "vitest";
 import { type UseFullTraceResult, useFullTrace } from "../graph/useFullTrace";
 import { useGraphStore } from "../graph/useGraphStore";
+import {
+  type CanvasRecorder,
+  makeRecorder,
+  recordingGetContext,
+} from "../test/canvasRecorder";
 import { LossCurvePanel } from "./LossCurvePanel";
 
 vi.mock("../graph/useFullTrace");
@@ -31,8 +42,10 @@ function fullTrace(over: Partial<UseFullTraceResult> = {}): UseFullTraceResult {
 
 // jsdom reports clientWidth 0; give the container a fixed width so
 // layoutLossCurve yields a real, clickable layout. getContext is stubbed to
-// null (FlameGraphPanel precedent) so the paint effect no-ops — we test the
-// data/controls/interaction layer, not canvas pixels. Restored in afterAll:
+// null (FlameGraphPanel precedent) so the paint effect no-ops for the
+// data/controls/interaction tests; the "what actually gets painted" block
+// below swaps in a recording context to execute the real paint path
+// (campaign T11-2). Restored in afterAll:
 // these patch shared jsdom prototypes, and Vitest's default isolate:true is
 // what makes that safe today — a leaked patch would silently break layout
 // measurement in any other suite sharing the worker.
@@ -347,5 +360,206 @@ describe("LossCurvePanel", () => {
     useGraphStore.setState({ traceSessionId: "s2" });
     rerender(<LossCurvePanel />);
     expect(screen.getByText("2 epochs")).toBeInTheDocument();
+  });
+});
+
+describe("LossCurvePanel — what actually gets painted", () => {
+  // Literal colours from LossCurvePanel.
+  const LOSS = "#e86b20";
+  const ACC = "#29a669";
+  const PLAYHEAD = "#b794f6";
+  const GRID = "#334155";
+  const LABEL = "#94a3b8";
+
+  // Geometry for the stubbed 800px-wide, 160px-tall canvas: the plot band is
+  // x 40..760 (PADDING_LEFT/RIGHT 40) and y 12..136 (PADDING_TOP 12,
+  // PADDING_BOTTOM 24), so a value v on a [0, max] axis sits at
+  // y = 136 - (v / max) * 124. THREE_EPOCH_EVENTS' epochs 0/1/2 land at
+  // x = 40/400/760, and its max loss is 1.0.
+
+  let recorder: CanvasRecorder;
+  let originalDpr: number;
+
+  beforeEach(() => {
+    recorder = makeRecorder();
+    HTMLCanvasElement.prototype.getContext = recordingGetContext(recorder);
+    originalDpr = window.devicePixelRatio;
+  });
+
+  afterEach(() => {
+    HTMLCanvasElement.prototype.getContext = vi.fn(() => null);
+    Object.defineProperty(window, "devicePixelRatio", {
+      configurable: true,
+      value: originalDpr,
+    });
+  });
+
+  function paint(events: TraceEvent[], playhead = 0): void {
+    mockUseFullTrace.mockReturnValue(fullTrace({ events, loaded: true }));
+    useGraphStore.setState({
+      traceSessionId: "s1",
+      traceEvents: events,
+      tracePlayhead: playhead,
+    });
+    render(<LossCurvePanel />);
+  }
+
+  /** Round away float noise (e.g. 136 - 0.6 * 124) so vertices compare exactly. */
+  const r3 = (n: number) => Math.round(n * 1000) / 1000;
+
+  function strokesIn(style: string): number[][][] {
+    return recorder.strokes
+      .filter((s) => s.style === style)
+      .map((s) => s.points.map((p) => [r3(p.x), r3(p.y)]));
+  }
+
+  function labelsAligned(align: string): [string, number, number][] {
+    return recorder.labels
+      .filter((l) => l.align === align)
+      .map((l) => [l.text, r3(l.x), r3(l.y)]);
+  }
+
+  it("strokes the loss and accuracy polylines through every epoch, each on its own axis", () => {
+    paint(THREE_EPOCH_EVENTS);
+    // loss 1.0 / 0.6 / 0.2 on the [0, 1.0] left axis.
+    expect(strokesIn(LOSS)).toEqual([
+      [
+        [40, 12],
+        [400, 61.6],
+        [760, 111.2],
+      ],
+    ]);
+    // accuracy 0.5 / 0.7 / 0.9 on the fixed [0, 1] right axis.
+    expect(strokesIn(ACC)).toEqual([
+      [
+        [40, 74],
+        [400, 49.2],
+        [760, 24.4],
+      ],
+    ]);
+    const curves = recorder.strokes.filter(
+      (s) => s.style === LOSS || s.style === ACC
+    );
+    expect(curves.map((s) => s.lineWidth)).toEqual([1.5, 1.5]);
+  });
+
+  it("rules one gridline per loss tick across the plot band, on the half pixel", () => {
+    paint(THREE_EPOCH_EVENTS);
+    // Loss ticks at 0, 1/3, 2/3 and 1 of the max.
+    expect(strokesIn(GRID)).toEqual([
+      [
+        [40, 136.5],
+        [760, 136.5],
+      ],
+      [
+        [40, 95.167],
+        [760, 95.167],
+      ],
+      [
+        [40, 53.833],
+        [760, 53.833],
+      ],
+      [
+        [40, 12.5],
+        [760, 12.5],
+      ],
+    ]);
+    expect(
+      recorder.strokes.filter((s) => s.style === GRID).map((s) => s.lineWidth)
+    ).toEqual([1, 1, 1, 1]);
+  });
+
+  it("labels all three axes, each in its own alignment and position", () => {
+    paint(THREE_EPOCH_EVENTS);
+    // Epoch ticks centred under the plot band.
+    expect(labelsAligned("center")).toEqual([
+      ["0", 40, 148],
+      ["1", 400, 148],
+      ["2", 760, 148],
+    ]);
+    // Loss ticks right-aligned against the left axis.
+    expect(labelsAligned("right")).toEqual([
+      ["0.00", 34, 136],
+      ["0.33", 34, 94.667],
+      ["0.67", 34, 53.333],
+      ["1.00", 34, 12],
+    ]);
+    // Accuracy ticks left-aligned against the right axis.
+    expect(labelsAligned("left")).toEqual([
+      ["0%", 766, 136],
+      ["25%", 766, 105],
+      ["50%", 766, 74],
+      ["75%", 766, 43],
+      ["100%", 766, 12],
+    ]);
+    expect(recorder.labels).toHaveLength(12); // no label outside the three axes
+    expect(recorder.labels.every((l) => l.fill === LABEL)).toBe(true);
+    // A literal font stack: the 2D context cannot resolve a CSS var().
+    expect(recorder.labels[0]?.font).toMatch(/^10px ui-monospace/);
+  });
+
+  it("draws no playhead marker before the first epoch is reached", () => {
+    paint(THREE_EPOCH_EVENTS, 0); // epoch 0's return is event 1
+    expect(strokesIn(PLAYHEAD)).toEqual([]);
+    // The curves themselves were painted — this is not an empty frame.
+    expect(strokesIn(LOSS)).toHaveLength(1);
+  });
+
+  it("moves the playhead marker to the last epoch reached, inclusively", () => {
+    paint(THREE_EPOCH_EVENTS, 1); // exactly ON epoch 0's return event
+    expect(strokesIn(PLAYHEAD).at(-1)).toEqual([
+      [40, 12],
+      [40, 136],
+    ]);
+
+    act(() => useGraphStore.setState({ tracePlayhead: 4 })); // past epoch 1
+    expect(strokesIn(PLAYHEAD).at(-1)).toEqual([
+      [400, 12],
+      [400, 136],
+    ]);
+
+    act(() => useGraphStore.setState({ tracePlayhead: 5 })); // on epoch 2
+    expect(strokesIn(PLAYHEAD).at(-1)).toEqual([
+      [760, 12],
+      [760, 136],
+    ]);
+    // One marker per repaint — never a stale second line.
+    expect(strokesIn(PLAYHEAD)).toHaveLength(3);
+  });
+
+  it("draws an all-zero loss flat along the plot floor under a single 0 tick", () => {
+    // max loss 0 would make `loss / max` NaN — which canvas silently ignores.
+    paint([epochRet(0, 0, 0.5), epochRet(1, 0, 0.75)]);
+    expect(strokesIn(LOSS)).toEqual([
+      [
+        [40, 136],
+        [760, 136],
+      ],
+    ]);
+    expect(strokesIn(GRID)).toEqual([
+      [
+        [40, 136.5],
+        [760, 136.5],
+      ],
+    ]);
+    expect(labelsAligned("right")).toEqual([["0", 34, 136]]);
+  });
+
+  it("scales the backing store by devicePixelRatio and matches the transform", () => {
+    // A backing store at CSS size on a retina display is the classic blurry
+    // canvas; a transform that disagrees with it draws at the wrong scale.
+    Object.defineProperty(window, "devicePixelRatio", {
+      configurable: true,
+      value: 2,
+    });
+    paint(THREE_EPOCH_EVENTS);
+    const canvas = screen.getByLabelText(
+      "Loss curve canvas"
+    ) as HTMLCanvasElement;
+    expect(canvas.width).toBe(1600); // 800 css px * 2
+    expect(canvas.height).toBe(320); // 160 css px * 2
+    expect(recorder.transforms.at(-1)).toEqual([2, 0, 0, 2, 0, 0]);
+    // Cleared in CSS pixels — the transform already scales them.
+    expect(recorder.clears.at(-1)).toEqual([0, 0, 800, 160]);
   });
 });

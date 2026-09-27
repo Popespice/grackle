@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useGraphStore } from "../graph/useGraphStore";
+import { restoreInitialState } from "../test/storeReset";
 import { SearchFilterPanel } from "./SearchFilterPanel";
 
 afterEach(cleanup);
@@ -17,6 +18,8 @@ const MOCK_GRAPH = {
 };
 
 beforeEach(() => {
+  // Full-replace first (campaign T11-4), then the fields these tests assume.
+  restoreInitialState(useGraphStore);
   useGraphStore.setState({
     graph: MOCK_GRAPH,
     searchTerm: "",

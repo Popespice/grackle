@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type UseFullTraceResult, useFullTrace } from "../graph/useFullTrace";
 import { useGraphStore } from "../graph/useGraphStore";
+import { restoreInitialState } from "../test/storeReset";
 import { ValueInspectorPanel } from "./ValueInspectorPanel";
 
 vi.mock("../graph/useFullTrace");
@@ -50,6 +51,10 @@ afterEach(cleanup);
 
 beforeEach(() => {
   mockUseFullTrace.mockReturnValue(fullTrace());
+  // Full-replace first (campaign T11-4): several tests below stub an ACTION
+  // (selectNode / setHighlightedNodes / setPlayhead) via a partial merge,
+  // which a partial-merge reset would never restore.
+  restoreInitialState(useGraphStore);
   useGraphStore.setState({
     graph: null,
     selectedNodeId: null,
@@ -204,6 +209,17 @@ describe("ValueInspectorPanel", () => {
     render(<ValueInspectorPanel />);
     fireEvent.click(screen.getByRole("button", { name: /next/ }));
     expect(setPlayhead).toHaveBeenCalledWith(2); // skips the line at index 1
+  });
+
+  it("restores the real store actions between tests (no cross-test mock leakage)", () => {
+    // The PRECEDING tests stubbed selectNode, setHighlightedNodes and
+    // setPlayhead with vi.fn()s; beforeEach's full replace must have restored
+    // the real actions before this test ran.
+    const initial = useGraphStore.getInitialState();
+    const state = useGraphStore.getState();
+    expect(state.selectNode).toBe(initial.selectNode);
+    expect(state.setHighlightedNodes).toBe(initial.setHighlightedNodes);
+    expect(state.setPlayhead).toBe(initial.setPlayhead);
   });
 
   it("offers a Load call stack button for an unloaded seekable session", () => {
