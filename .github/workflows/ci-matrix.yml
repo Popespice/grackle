@@ -9,3 +9,57 @@ jobs:
     uses: ./.github/workflows/_checks.yml
     with:
       os-matrix: '["ubuntu-latest", "windows-latest", "macos-latest"]'
+
+  # Campaign T9-7 (docs/test-campaigns/phase-12.md): packages/nn declares
+  # numpy>=2,<3, but every other job installs the locked version (--frozen), so
+  # the floor of that range — the 2.0/2.1 regime the code's own comments worry
+  # about — is exercised by nothing. Each leg syncs the lock, swaps numpy down
+  # to one floor minor, and reruns the nn suite. Main-push only: nobody waits
+  # on it, and a failure here means the declared floor is a lie, not that a PR
+  # broke something.
+  nn-numpy-floor:
+    name: nn / numpy ${{ matrix.numpy }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        numpy: ["2.0.*", "2.1.*"]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install pnpm
+        run: corepack enable pnpm
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          # numpy 2.0 ships no wheels for 3.13; 3.12 is supported by every
+          # minor in the declared range.
+          python-version: "3.12"
+
+      # The nn suite imports grackle (an editable dev dependency), whose
+      # adapters import the generated protocol types.
+      - name: Install JS dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Codegen
+        run: pnpm codegen
+
+      - name: Sync, then swap numpy down to the floor
+        working-directory: packages/nn
+        run: |
+          uv sync --frozen
+          uv pip install "numpy==${{ matrix.numpy }}"
+          uv run --no-sync python -c "import numpy; print('numpy', numpy.__version__)"
+
+      - name: Pytest (nn) on the floor numpy
+        working-directory: packages/nn
+        run: uv run --no-sync pytest -q -ra
