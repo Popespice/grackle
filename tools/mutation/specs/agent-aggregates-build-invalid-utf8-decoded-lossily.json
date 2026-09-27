@@ -1,0 +1,20 @@
+{
+  "id": "agent-aggregates-build-invalid-utf8-decoded-lossily",
+  "description": "TraceAggregates.build decodes with errors='replace', so a line with invalid UTF-8 inside a string parses and is counted under a U+FFFD-mangled node id instead of being skipped like every other undecodable line (campaign T6-5).",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/aggregates.py",
+    "find": "                        event = json.loads(stripped.decode(\"utf-8\"))",
+    "replace": "                        event = json.loads(stripped.decode(\"utf-8\", \"replace\"))"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_malformed_corpus.py",
+      "-k",
+      "tolerant_trace_readers"
+    ]
+  },
+  "expect": "killed"
+}

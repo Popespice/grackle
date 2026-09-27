@@ -1,0 +1,15 @@
+{
+  "id": "agent-stream-sender-drain-decrement-unlocked",
+  "description": "The drain loop decrements _inflight (and counts _sent) without taking the counter lock, while sink() still takes it: the decrement can interleave with sink()'s increment, the lost update the lock's comment names (campaign T7-2).",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/stream_sender.py",
+    "find": "                    with self._counter_lock:\n                        self._sent += 1",
+    "replace": "                    if True:\n                        self._sent += 1"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_stream_sender_race.py"]
+  },
+  "expect": "killed"
+}
