@@ -1589,14 +1589,6 @@ def test_trace_kill_mid_run_with_non_ascii_names_is_readable_after_salvage(
 # the wrong scenario ("another trace is writing" / "a previous run was
 # killed").
 
-_T5_1 = pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "T5-1: a KeyboardInterrupt outside the traced script's frames skips "
-        "finalize and orphans the .part (docs/test-campaigns/phase-12.md)"
-    ),
-)
-
 
 def _hot_loop_script(root: Path, *, handles_interrupt: bool = False) -> Path:
     """A script whose `hot` calls give the sink a steady event stream. With
@@ -1648,7 +1640,6 @@ def _read_events(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
-@_T5_1
 def test_trace_output_interrupt_during_project_parse_leaves_no_part(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1678,7 +1669,6 @@ def test_trace_output_interrupt_during_project_parse_leaves_no_part(
     assert rerun.exit_code == 0, rerun.output
 
 
-@_T5_1
 def test_trace_output_interrupt_during_tracer_teardown_keeps_events(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1708,7 +1698,6 @@ def test_trace_output_interrupt_during_tracer_teardown_keeps_events(
     assert len(hot_calls) == 20
 
 
-@_T5_1
 def test_trace_output_interrupt_inside_sink_matches_interrupt_in_script(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1737,7 +1726,6 @@ def test_trace_output_interrupt_inside_sink_matches_interrupt_in_script(
     assert events[-1]["metadata"]["exc_type"] == "KeyboardInterrupt"
 
 
-@_T5_1
 def test_trace_output_interrupt_the_program_handles_is_not_re_raised(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1780,7 +1768,6 @@ class _FakeStreamSender:
         return False
 
 
-@_T5_1
 def test_trace_stream_tee_interrupt_during_project_parse_leaves_no_part(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -476,14 +476,6 @@ def test_sink_exception_still_calls_stop(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "T5-1: _start() runs before run()'s try, so an interrupt after "
-        "use_tool_id() skips _stop() and leaks the tool id "
-        "(docs/test-campaigns/phase-12.md)"
-    ),
-)
 def test_interrupt_during_start_releases_the_monitoring_tool(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -506,8 +498,8 @@ def test_interrupt_during_start_releases_the_monitoring_tool(
                 _make_tracer().run(_SCRIPT)
         assert mon.get_tool(_GRACKLE_TOOL_ID) is None
     finally:
-        # Today the tool DOES leak; release it so the rest of the session's
-        # tracer tests are not poisoned by this expected failure.
+        # Should this regress, release the leaked tool so the failure stays
+        # here instead of cascading into every later tracer test.
         if mon.get_tool(_GRACKLE_TOOL_ID) is not None:
             mon.set_events(_GRACKLE_TOOL_ID, 0)
             mon.free_tool_id(_GRACKLE_TOOL_ID)
