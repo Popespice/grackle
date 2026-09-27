@@ -1,0 +1,15 @@
+{
+  "id": "nn-heat-from-jsonl-utf8-tolerance",
+  "description": "T5-5 pin: grackle learn's heat_from_jsonl stops tolerating an undecodable line, so a salvaged trace torn mid-UTF-8-sequence cannot be learned from at all.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/ml/labels.py",
+    "find": "            except (json.JSONDecodeError, UnicodeDecodeError):",
+    "replace": "            except json.JSONDecodeError:"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/ml/test_labels.py", "-k", "torn"]
+  },
+  "expect": "killed"
+}

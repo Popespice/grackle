@@ -30,12 +30,13 @@ import pytest
 from websockets.asyncio.client import connect
 
 from grackle.python_runtime.live_buffer import trace_buffer_max_events, trim_ring_buffer
-from grackle.server import serve
 from grackle.session_store import SessionStore
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
     from pathlib import Path
+
+    from conftest import StartServer
 
 
 # ---------------------------------------------------------------------------
@@ -102,14 +103,10 @@ async def _drain_until(ws: Any, *, until_type: str, timeout: float = 5.0) -> lis
 
 
 @pytest.fixture
-async def live_server(free_port: int, tmp_path: Path) -> AsyncGenerator[int, None]:
+async def live_server(start_server: StartServer, tmp_path: Path) -> AsyncGenerator[int, None]:
     """Server with no trace_source (live-attach mode)."""
-    task = asyncio.create_task(serve("127.0.0.1", free_port, root=tmp_path))
-    await asyncio.sleep(0.05)
-    yield free_port
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
+    _, port = await start_server(root=tmp_path)
+    yield port
 
 
 # ---------------------------------------------------------------------------
@@ -359,18 +356,14 @@ def testtrace_buffer_max_events_non_integer_returns_none() -> None:
 
 @pytest.fixture
 async def capped_live_server(
-    free_port: int,
+    start_server: StartServer,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncGenerator[int, None]:
     """Server with GRACKLE_TRACE_BUFFER_MAX_EVENTS=3 (live-attach mode)."""
     monkeypatch.setenv("GRACKLE_TRACE_BUFFER_MAX_EVENTS", "3")
-    task = asyncio.create_task(serve("127.0.0.1", free_port, root=tmp_path))
-    await asyncio.sleep(0.05)
-    yield free_port
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
+    _, port = await start_server(root=tmp_path)
+    yield port
 
 
 async def test_late_consumer_receives_at_most_max_events(capped_live_server: int) -> None:
@@ -419,17 +412,13 @@ async def test_late_consumer_receives_at_most_max_events(capped_live_server: int
 
 @pytest.fixture
 async def store_server(
-    free_port: int, tmp_path: Path
+    start_server: StartServer, tmp_path: Path
 ) -> AsyncGenerator[tuple[int, SessionStore, Path], None]:
     """Server with --store set (live-attach mode + recording sink enabled)."""
     db_path = tmp_path / "sessions.db"
     store = SessionStore.open(db_path)
-    task = asyncio.create_task(serve("127.0.0.1", free_port, root=tmp_path, store=store))
-    await asyncio.sleep(0.05)
-    yield free_port, store, tmp_path / "recordings"
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
+    _, port = await start_server(root=tmp_path, store=store)
+    yield port, store, tmp_path / "recordings"
 
 
 async def test_live_session_recorded_to_store(
@@ -478,16 +467,15 @@ async def test_producer_disconnect_without_end_finalizes(
     assert not (recordings_dir / "rec-2.jsonl.part").exists()
 
 
-async def test_server_shutdown_cancel_finalizes(free_port: int, tmp_path: Path) -> None:
+async def test_server_shutdown_cancel_finalizes(start_server: StartServer, tmp_path: Path) -> None:
     """Cancelling the server task mid-stream (no session_end) still finalizes
     the in-flight recording via the shielded finally-block finalize."""
     db_path = tmp_path / "sessions.db"
     store = SessionStore.open(db_path)
     recordings_dir = tmp_path / "recordings"
-    task = asyncio.create_task(serve("127.0.0.1", free_port, root=tmp_path, store=store))
-    await asyncio.sleep(0.05)
+    task, port = await start_server(root=tmp_path, store=store)
 
-    async with connect(f"ws://127.0.0.1:{free_port}") as producer:
+    async with connect(f"ws://127.0.0.1:{port}") as producer:
         await producer.send(_make_session_start("rec-3"))
         for i in range(4):
             await producer.send(_make_trace_event(i))
@@ -550,7 +538,60 @@ async def test_two_sessions_back_to_back(
     assert (recordings_dir / "rec-b.jsonl").exists()
 
 
-async def test_replay_source_not_self_recorded(free_port: int, tmp_path: Path) -> None:
+async def test_events_after_session_end_are_broadcast_but_not_recorded(
+    store_server: tuple[int, SessionStore, Path],
+) -> None:
+    """Test campaign T5-3 (docs/test-campaigns/phase-12.md) — pinned as
+    documented behavior, not ledgered as a defect.
+
+    A producer that keeps sending trace_events after its trace_session_end is
+    misbehaving; grackle's own TraceStreamSender cannot, since the CLI only
+    calls finish() — which enqueues the end — after the tracer has stopped.
+    The server keeps broadcasting such events (live fan-out never
+    second-guesses a producer), but a recording is the session as the
+    protocol delimits it, start..end (ADR-0020 amendment), so they are not
+    in it, and its event_count agrees with the producer's own
+    trace_session_end.event_count.
+
+    The residual asymmetry is known and accepted: a UI connected at the time
+    appends those events after marking the session complete
+    (useGraphStore.addTraceEvents does not gate on traceSessionComplete), so
+    it shows two more events than the recording holds.
+    """
+    from grackle.python_runtime.writer import read_jsonl
+
+    port, store, recordings_dir = store_server
+
+    async with connect(f"ws://127.0.0.1:{port}") as consumer:
+        await consumer.send(json.dumps({"id": "c0", "type": "ping", "payload": {}}))
+        while json.loads(await asyncio.wait_for(consumer.recv(), timeout=5.0))["type"] != "pong":
+            pass
+
+        async with connect(f"ws://127.0.0.1:{port}") as producer:
+            await producer.send(_make_session_start("rec-late"))
+            for i in range(3):
+                await producer.send(_make_trace_event(i))
+            await producer.send(_make_session_end("rec-late", count=3))
+            for i in range(3, 5):
+                await producer.send(_make_trace_event(i))
+
+            # One producer's messages are handled strictly in order, so once
+            # the consumer holds the post-end events, the recording has
+            # already been finalized and registered.
+            types: list[str] = []
+            while types.count("trace_event") < 5:
+                msg = json.loads(await asyncio.wait_for(consumer.recv(), timeout=5.0))
+                types.append(msg["type"])
+
+    assert types[types.index("trace_session_end") + 1 :] == ["trace_event", "trace_event"]
+
+    meta = store.get_session("rec-late")
+    assert meta is not None
+    assert meta.event_count == 3
+    assert len(read_jsonl(recordings_dir / "rec-late.jsonl")) == 3
+
+
+async def test_replay_source_not_self_recorded(start_server: StartServer, tmp_path: Path) -> None:
     """With --trace-source AND --store set, a pure consumer (no inbound trace
     messages) must not produce a recording beyond the register_trace_source
     row for the replay file itself."""
@@ -574,19 +615,14 @@ async def test_replay_source_not_self_recorded(free_port: int, tmp_path: Path) -
     db_path = tmp_path / "sessions.db"
     store = SessionStore.open(db_path)
     recordings_dir = tmp_path / "recordings"
-    task = asyncio.create_task(
-        serve(
-            "127.0.0.1",
-            free_port,
-            root=tmp_path,
-            trace_source=trace_source,
-            store=store,
-            pace=False,
-        )
+    task, port = await start_server(
+        root=tmp_path,
+        trace_source=trace_source,
+        store=store,
+        pace=False,
     )
-    await asyncio.sleep(0.05)
 
-    async with connect(f"ws://127.0.0.1:{free_port}") as consumer:
+    async with connect(f"ws://127.0.0.1:{port}") as consumer:
         await consumer.send(json.dumps({"id": "c0", "type": "ping", "payload": {}}))
         while True:
             msg = json.loads(await asyncio.wait_for(consumer.recv(), timeout=5.0))

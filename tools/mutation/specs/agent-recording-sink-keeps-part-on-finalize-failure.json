@@ -1,0 +1,15 @@
+{
+  "id": "agent-recording-sink-keeps-part-on-finalize-failure",
+  "description": "T5-6 pin: RecordingSink stops discarding after a failed finalize, so a failed rename leaves a .part that blocks every later recording under the same session id until the next server restart's orphan sweep.",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/recording_sink.py",
+    "find": "                \"recording sink: finalize failed — discarding recording\",\n                session_id=self._session_id,\n                error=str(exc),\n            )\n            self._discard()",
+    "replace": "                \"recording sink: finalize failed — discarding recording\",\n                session_id=self._session_id,\n                error=str(exc),\n            )"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_recording_sink.py", "-k", "replace_failure"]
+  },
+  "expect": "killed"
+}

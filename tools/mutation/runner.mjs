@@ -51,7 +51,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -79,6 +79,42 @@ function restorePending() {
   // teardown must not retry it forever.
   pendingRestore = null;
   writeFileSync(path, original, "utf-8");
+  purgeBytecode(path);
+}
+
+// Writing the source is not enough for a Python target, in either direction.
+// CPython reuses a cached .pyc while the source's mtime — recorded in WHOLE
+// seconds — and size both match it, and a same-size mutant (two swapped
+// lines, say) can land in the same second as the bytecode it replaces:
+//   - after the mutant is written, a .pyc of the ORIGINAL compiled within
+//     that second still "matches", so the suite runs the original code and a
+//     real kill is reported as a survivor;
+//   - after the restore, the MUTANT's .pyc still "matches", so the mutant
+//     keeps running in every later test run and CLI invocation, invisible to
+//     `git status`, until the file is next edited.
+// Both were observed in campaign C2 (the second turned the pre-push gate red
+// on a clean tree). Deleting the target's cached bytecode after each write
+// forces a recompile from whatever source is actually on disk.
+function purgeBytecode(path) {
+  if (!path.endsWith(".py")) return;
+  const cacheDir = join(dirname(path), "__pycache__");
+  const prefix = `${basename(path, ".py")}.`;
+  let entries;
+  try {
+    entries = readdirSync(cacheDir);
+  } catch {
+    return; // no cache directory: nothing was ever compiled
+  }
+  for (const name of entries) {
+    if (name.startsWith(prefix) && name.endsWith(".pyc")) {
+      try {
+        unlinkSync(join(cacheDir, name));
+      } catch {
+        // Already gone. A file that cannot be removed is left for the
+        // mtime/size check to judge; there is no safer fallback here.
+      }
+    }
+  }
 }
 
 let lockHeld = false;
@@ -375,6 +411,7 @@ function runOne({ path, spec, loadError }) {
   let outcome;
   try {
     writeFileSync(targetPath, mutated, "utf-8");
+    purgeBytecode(targetPath);
     outcome = runSuite(spec.suite);
   } finally {
     restorePending();

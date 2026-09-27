@@ -1,8 +1,9 @@
 """Integration tests for server-side trace seek (Phase 7.3).
 
 All tests use a real grackle server via the ``live_server_with_trace`` fixture,
-which starts a server with a pre-built JSONL trace file.  The ``free_port``
-fixture (conftest.py) provides a collision-free port.
+which starts a server with a pre-built JSONL trace file.  The ``start_server``
+fixture (conftest.py) starts it on an OS-assigned port and waits until it is
+listening.
 
 Key scenarios:
 - ``trace_session_start`` includes ``seekable: true`` for file-replay mode.
@@ -22,11 +23,11 @@ from typing import TYPE_CHECKING, Any, cast
 import pytest
 from websockets.asyncio.client import connect
 
-from grackle.server import serve
-
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
     from pathlib import Path
+
+    from conftest import StartServer
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +110,7 @@ async def _send_seek(
 
 @pytest.fixture
 async def live_server_with_trace(
-    free_port: int, tmp_path: Path
+    start_server: StartServer, tmp_path: Path
 ) -> AsyncGenerator[tuple[int, Path], None]:
     """Start a grackle server with a 10-event JSONL trace file.
 
@@ -118,20 +119,12 @@ async def live_server_with_trace(
     """
     trace_path = tmp_path / "trace.jsonl"
     _write_trace(trace_path, 10)
-    task = asyncio.create_task(
-        serve(
-            "127.0.0.1",
-            free_port,
-            root=tmp_path,
-            trace_source=trace_path,
-            pace=False,
-        )
+    _, port = await start_server(
+        root=tmp_path,
+        trace_source=trace_path,
+        pace=False,
     )
-    await asyncio.sleep(0.05)
-    yield free_port, trace_path
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
+    yield port, trace_path
 
 
 # ---------------------------------------------------------------------------
@@ -355,12 +348,11 @@ async def test_seekable_session_sends_no_trace_events(
         assert session_end_msg["payload"]["event_count"] == 10
 
 
-async def test_live_mode_seek_returns_error(free_port: int, tmp_path: Path) -> None:
+async def test_live_mode_seek_returns_error(start_server: StartServer, tmp_path: Path) -> None:
     """In live-attach mode (no --trace-source), seek requests return trace_seek_error."""
-    task = asyncio.create_task(serve("127.0.0.1", free_port, root=tmp_path))
-    await asyncio.sleep(0.05)
+    task, port = await start_server(root=tmp_path)
     try:
-        async with connect(f"ws://127.0.0.1:{free_port}") as ws:
+        async with connect(f"ws://127.0.0.1:{port}") as ws:
             # Live-attach: no trace_session_start is sent automatically.
             # A seek request for any session_id must return trace_seek_error.
             reply = await _send_seek(ws, "any-session", 0, 5)

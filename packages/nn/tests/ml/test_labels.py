@@ -35,6 +35,20 @@ def test_heat_from_jsonl_hand_written_eight_lines(tmp_path: Path) -> None:
     assert heat_from_jsonl(trace) == {"a": 4, "b": 3, "c": 1}
 
 
+def test_heat_from_jsonl_survives_a_tail_torn_mid_utf8_sequence(tmp_path: Path) -> None:
+    """Test campaign T5-5 (docs/test-campaigns/phase-12.md): a salvaged
+    `grackle trace -o` .part whose last write was cut short (a full disk, or
+    a kill inside the write syscall) can end inside a multi-byte UTF-8
+    sequence. `grackle learn` on that file loses only the torn line."""
+    torn = '{"event": "call", "node_id": "热点.py:计算"}'.encode()
+    trace = tmp_path / "trace.jsonl.part"
+    trace.write_bytes(
+        '{"event": "call", "node_id": "热点.py:计算"}\n'.encode() * 2
+        + torn[: torn.index("点".encode()) + 1]
+    )
+    assert heat_from_jsonl(trace) == {"热点.py:计算": 2}
+
+
 @pytest.mark.parametrize(
     "fixture",
     ["tiny-python-app", "tiny-node-app", "tiny-go-app", "tiny-rust-app", "value-capture"],

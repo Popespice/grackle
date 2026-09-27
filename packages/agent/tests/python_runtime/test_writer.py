@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
+import errno
+import io
 import json
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -11,6 +15,8 @@ import pytest
 from grackle.python_runtime.writer import JsonlPartWriter, read_jsonl, write_jsonl
 
 if TYPE_CHECKING:
+    from collections.abc import Buffer
+
     from grackle.adapters.base import TraceEvent
 
 
@@ -364,4 +370,190 @@ def test_part_writer_discard_never_raises_on_missing_file(tmp_path: Path) -> Non
     writer._f.close()  # noqa: SLF001
     writer.part_path.unlink()  # simulate the file vanishing out from under it
     writer.discard()  # must not raise
+    assert not writer.part_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# Test campaign T5-4 (docs/test-campaigns/phase-12.md): disk-full surfaces
+# below the write buffer
+# ---------------------------------------------------------------------------
+
+
+class _DiskFullRaw(io.RawIOBase):
+    """The OS side of a filling disk, placed where the real one sits: BELOW
+    the BufferedWriter. Accepts *limit* bytes in total, short-writes whatever
+    still fits of the write that crosses it, then fails every later write
+    with ENOSPC — what write(2) does as a volume fills.
+
+    _FlakyFile above injects its failure ABOVE the buffer (it wraps the
+    BufferedWriter), where the failing write() is the one that raises. That
+    models a failure inside grackle's own write call, not a full disk."""
+
+    def __init__(self, path: Path, limit: int) -> None:
+        super().__init__()
+        self._file = path.open("r+b", buffering=0)
+        self._room = limit
+
+    def writable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return True
+
+    def write(self, b: Buffer) -> int:
+        if self._room <= 0:
+            raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
+        n = self._file.write(bytes(memoryview(b)[: self._room]))
+        self._room -= n
+        return n
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        return self._file.seek(offset, whence)
+
+    def tell(self) -> int:
+        return self._file.tell()
+
+    def truncate(self, size: int | None = None) -> int:
+        return self._file.truncate(size)
+
+    def fileno(self) -> int:
+        return self._file.fileno()
+
+    def close(self) -> None:
+        if not self.closed:
+            self._file.close()
+        super().close()
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "T5-4: ENOSPC surfaces at a later flush or at close(), so the "
+        "truncate-salvage never fires and the tracked offset/count overstate "
+        "what reached disk (docs/test-campaigns/phase-12.md)"
+    ),
+)
+@pytest.mark.parametrize(
+    ("limit", "n_events"),
+    [
+        # Everything fits in the 8 KiB buffer: every write() "succeeds" and
+        # the disk-full error first appears at finalize()'s close().
+        (1_000, 40),
+        # The first buffer flush fits, a later one does not: the error
+        # appears at some later write(), not the one whose bytes were lost.
+        (10_000, 150),
+    ],
+    ids=["surfaces-at-close", "surfaces-at-a-later-write"],
+)
+def test_part_writer_disk_full_below_the_buffer_leaves_only_complete_lines(
+    tmp_path: Path, limit: int, n_events: int
+) -> None:
+    """Whatever file survives a disk-full run — finalized or .part — holds
+    only complete lines, and writer.count (what the CLI reports as "wrote N
+    events" and RecordingSink registers as event_count) matches them."""
+    dest = tmp_path / "out.jsonl"
+    writer = JsonlPartWriter(dest)
+    writer._f.close()  # noqa: SLF001
+    writer._f = io.BufferedWriter(_DiskFullRaw(writer.part_path, limit))  # noqa: SLF001
+
+    for event in _events(n_events):
+        try:
+            writer.write(event)
+        except OSError:
+            break
+    with contextlib.suppress(OSError):
+        writer.finalize()
+
+    data = (dest if dest.exists() else writer.part_path).read_bytes()
+    assert data.endswith(b"\n"), f"torn tail survived: {data[-40:]!r}"
+    lines = data.decode("utf-8").splitlines()
+    for line in lines:
+        json.loads(line)
+    assert writer.count == len(lines)
+
+
+# ---------------------------------------------------------------------------
+# Test campaign T5-6 (docs/test-campaigns/phase-12.md): finalize() failing
+# at replace()
+# ---------------------------------------------------------------------------
+
+
+def _fail_part_replace_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the first .part -> final rename fail the way Windows refuses to
+    replace a destination another process holds open; later renames go
+    through (the other process let go)."""
+    real_replace = Path.replace
+    failed = False
+
+    def _replace(self: Path, target: Any) -> Path:
+        nonlocal failed
+        if self.name.endswith(".part") and not failed:
+            failed = True
+            raise PermissionError(13, "destination is open in another process")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", _replace)
+
+
+def test_part_writer_replace_failure_keeps_a_complete_closed_part(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """T5-6 (probed, pinned): replace() is the last step, so by then the
+    .part is already closed and complete — finalize() raises, the .part
+    holds every event, and nothing still has it open (Windows refuses to
+    unlink or rename a file with an open handle)."""
+    _fail_part_replace_once(monkeypatch)
+    dest = tmp_path / "out.jsonl"
+    writer = JsonlPartWriter(dest)
+    for event in _events(3):
+        writer.write(event)
+
+    with pytest.raises(PermissionError):
+        writer.finalize()
+
+    assert not dest.exists()
+    assert writer._f.closed  # noqa: SLF001
+    assert read_jsonl(writer.part_path) == _events(3)
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        False,
+        pytest.param(
+            True,
+            marks=pytest.mark.xfail(
+                strict=True,
+                reason=(
+                    "T5-6: a retried finalize() on a broken writer re-runs "
+                    "truncate() on the already-closed handle and raises "
+                    "ValueError (docs/test-campaigns/phase-12.md)"
+                ),
+            ),
+        ),
+    ],
+    ids=["intact-writer", "broken-writer"],
+)
+def test_part_writer_finalize_retry_after_replace_failure_completes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, broken: bool
+) -> None:
+    """finalize() leaves the .part in place on failure, so a caller can retry
+    once whatever blocked the rename lets go. Its contract is "raises
+    OSError and leaves .part in place if any step fails" — a retry that
+    raises ValueError instead escapes any caller written to that contract.
+    No caller retries today, which is why this is latent."""
+    _fail_part_replace_once(monkeypatch)
+    dest = tmp_path / "out.jsonl"
+    writer = JsonlPartWriter(dest)
+    writer.write(_events(1)[0])
+    if broken:
+        writer._f = _FlakyFile(writer._f, fail_after=0)  # type: ignore[assignment]  # noqa: SLF001
+        with pytest.raises(OSError, match="disk full"):
+            writer.write(_events(1)[0])
+
+    with pytest.raises(PermissionError):
+        writer.finalize()
+    writer.finalize()
+
+    assert read_jsonl(dest) == _events(1)
     assert not writer.part_path.exists()

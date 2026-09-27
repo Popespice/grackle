@@ -134,7 +134,7 @@ class Tracer:
         # If the sink raises, the exception propagates through sys.monitoring
         # into the script and is caught by run()'s BaseException handler.
         # We store it here so it can be re-raised after _stop() completes.
-        self._sink_exc: BaseException | None = None
+        self._sink_exc: Exception | None = None
         # Value capture (ADR-0025). Built once from options rather than per
         # call/return — ValueCaptureLimits is frozen and shared safely since
         # safe_repr()/format_arg() construct their own per-call formatter state.
@@ -161,11 +161,13 @@ class Tracer:
         with Ctrl-C (raises ``KeyboardInterrupt``) still get a clean
         teardown and a populated event list. ``TraceCapExceeded`` is
         re-raised because callers need to know the cap fired.  If the sink
-        raises, the exception propagates out after ``_stop()`` completes.
+        raises an ``Exception``, it propagates out after ``_stop()``
+        completes; a ``KeyboardInterrupt`` delivered while the sink is on the
+        stack is the script's interrupt, handled as above (see ``_emit``).
 
         Raises:
             TraceCapExceeded: if ``options.max_events`` is set and reached.
-            BaseException: if the sink raises (re-raised after teardown).
+            Exception: if the sink raises one (re-raised after teardown).
         """
         import runpy
 
@@ -194,19 +196,29 @@ class Tracer:
         mon = sys.monitoring
         mon.use_tool_id(_GRACKLE_TOOL_ID, _TOOL_NAME)
 
-        event_set = (
-            mon.events.PY_START | mon.events.PY_RETURN | mon.events.PY_UNWIND | mon.events.RAISE
-        )
-        if self._options.include_line_events:
-            event_set |= mon.events.LINE
-        mon.set_events(_GRACKLE_TOOL_ID, event_set)
+        # Once use_tool_id() has claimed the tool, anything that stops setup
+        # short — a Ctrl-C lands between any two of these calls — must give
+        # it back: run() only reaches its finally after _start() returns, and
+        # a leaked tool id fails every later Tracer in the process at
+        # use_tool_id(). Not a try around the use_tool_id() call itself: if
+        # that raises, the tool is someone else's and must not be freed.
+        try:
+            event_set = (
+                mon.events.PY_START | mon.events.PY_RETURN | mon.events.PY_UNWIND | mon.events.RAISE
+            )
+            if self._options.include_line_events:
+                event_set |= mon.events.LINE
+            mon.set_events(_GRACKLE_TOOL_ID, event_set)
 
-        mon.register_callback(_GRACKLE_TOOL_ID, mon.events.PY_START, self._on_call)
-        mon.register_callback(_GRACKLE_TOOL_ID, mon.events.PY_RETURN, self._on_return)
-        mon.register_callback(_GRACKLE_TOOL_ID, mon.events.PY_UNWIND, self._on_unwind)
-        mon.register_callback(_GRACKLE_TOOL_ID, mon.events.RAISE, self._on_raise)
-        if self._options.include_line_events:
-            mon.register_callback(_GRACKLE_TOOL_ID, mon.events.LINE, self._on_line)
+            mon.register_callback(_GRACKLE_TOOL_ID, mon.events.PY_START, self._on_call)
+            mon.register_callback(_GRACKLE_TOOL_ID, mon.events.PY_RETURN, self._on_return)
+            mon.register_callback(_GRACKLE_TOOL_ID, mon.events.PY_UNWIND, self._on_unwind)
+            mon.register_callback(_GRACKLE_TOOL_ID, mon.events.RAISE, self._on_raise)
+            if self._options.include_line_events:
+                mon.register_callback(_GRACKLE_TOOL_ID, mon.events.LINE, self._on_line)
+        except BaseException:
+            self._stop()
+            raise
 
     def _stop(self) -> None:
         # Order matters: clear events first so no more callbacks fire, then
@@ -386,10 +398,21 @@ class Tracer:
         if self._sink is not None:
             try:
                 self._sink(event)
-            except BaseException as exc:
+            except Exception as exc:
                 # Store the first sink exception so run() can re-raise it
                 # after _stop() completes.  Re-raise here so sys.monitoring
                 # propagates it through the monitored code, stopping execution.
+                #
+                # Exception, not BaseException: a sink *failure* is an
+                # Exception. A KeyboardInterrupt raised here is a Ctrl-C that
+                # happened to land while the sink was on the stack — the
+                # traced program's interrupt, not the sink's. Left unlatched,
+                # it propagates into the program exactly as it would have one
+                # bytecode earlier or later: the program may handle it and
+                # carry on, and if it does not, run() absorbs it like any
+                # other interrupt of the script. Latching it made a Ctrl-C's
+                # outcome depend on which frame it raced into, and re-raised
+                # interrupts the program had already handled.
                 if self._sink_exc is None:
                     self._sink_exc = exc
                 raise

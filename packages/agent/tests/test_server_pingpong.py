@@ -1,24 +1,25 @@
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import json
-from collections.abc import AsyncGenerator
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 from websockets.asyncio.client import connect
 
-from grackle.server import serve
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+    from pathlib import Path
+
+    from conftest import StartServer
 
 
 @pytest.fixture
-async def agent_server(free_port: int, tmp_path: Path) -> AsyncGenerator[int, None]:
+async def agent_server(start_server: StartServer, tmp_path: Path) -> AsyncGenerator[int, None]:
     # tmp_path is an empty dir — no Python files detected, no static_graph pushed.
-    task = asyncio.create_task(serve("127.0.0.1", free_port, root=tmp_path))
-    await asyncio.sleep(0.05)  # let the server bind and start listening
-    yield free_port
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
+    _, port = await start_server(root=tmp_path)
+    yield port
 
 
 async def test_ping_returns_pong(agent_server: int) -> None:

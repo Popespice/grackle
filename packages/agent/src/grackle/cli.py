@@ -158,6 +158,31 @@ def _finalize_output(writer: JsonlPartWriter, output: Path) -> click.ClickExcept
     return None
 
 
+def _settle_interrupted_output(writer: JsonlPartWriter, output: Path) -> None:
+    """Leave *output* in a sane state when a Ctrl-C escapes the trace.
+
+    ``Tracer.run()`` absorbs an interrupt that lands in the traced script
+    (or in grackle's sink, on the script's behalf), so the run completes and
+    finalizes normally. One that lands in grackle's own setup or teardown —
+    the full project parse in the adapter, the tracer's ``_stop()`` —
+    escapes instead, and the caller invokes this on the way out, just before
+    re-raising it.
+
+    Events captured so far are finalized into *output* exactly as a
+    completed run's would be: the file IS the product. With none captured
+    (the interrupt landed before tracing began) the ``.part`` is discarded
+    instead, so an aborted run leaves *output* as it found it rather than
+    replacing a previous trace there with an empty file. Either way no
+    ``.part`` survives to make the next run at this path refuse to start.
+    """
+    if writer.count == 0:
+        writer.discard()
+        return
+    error = _finalize_output(writer, output)
+    if error is not None:
+        click.echo(f"Error: {error.format_message()}", err=True)
+
+
 def _raise_combined(held: Sequence[click.ClickException | None]) -> None:
     """Raise the one held error, or a single combined error when several failed.
 
@@ -533,6 +558,14 @@ def trace(
             _err_exc = click.ClickException(str(exc))
         except Exception as exc:
             _err_exc = click.ClickException(f"trace error: {exc}")
+        except BaseException:
+            # A Ctrl-C in grackle's own setup/teardown (see
+            # _settle_interrupted_output). The finally below still stops the
+            # sender; the .part must be settled here, because the finalize
+            # after this block is skipped on the way out.
+            if writer is not None and output is not None:
+                _settle_interrupted_output(writer, output)
+            raise
         finally:
             sent = sender.finish()
 
@@ -598,6 +631,11 @@ def trace(
             # that survives when TraceCapExceeded fires afterwards (Tracer.run
             # re-raises the cap before it checks its own _sink_exc).
             _incr_err_exc = click.ClickException(f"trace error: {exc}")
+        except BaseException:
+            # A Ctrl-C in grackle's own setup/teardown (see
+            # _settle_interrupted_output) — the finalize below never runs.
+            _settle_interrupted_output(writer, output)
+            raise
 
         _raise_combined((_incr_cap_exc, _incr_err_exc, _finalize_output(writer, output)))
 

@@ -1,0 +1,20 @@
+{
+  "id": "agent-part-writer-rename-before-close",
+  "description": "T5-6 pin: finalize() renames the .part before closing it. Harmless on POSIX, but if the rename fails the .part is left with an open handle — which on Windows blocks the unlink/rename a user or the orphan sweep would do next.",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/writer.py",
+    "find": "        self._f.close()\n        self.part_path.replace(self.final_path)",
+    "replace": "        self.part_path.replace(self.final_path)\n        self._f.close()"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/python_runtime/test_writer.py",
+      "-k",
+      "replace_failure_keeps"
+    ]
+  },
+  "expect": "killed"
+}
