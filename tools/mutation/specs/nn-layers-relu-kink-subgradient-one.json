@@ -1,0 +1,15 @@
+{
+  "id": "nn-layers-relu-kink-subgradient-one",
+  "description": "T9-4: ReLU's mask becomes x >= 0, so the subgradient at exactly 0 is 1 instead of the pinned 0. The gradcheck deliberately avoids the kink and no other test fed ReLU an exact zero.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/layers.py",
+    "find": "        self._mask = x > 0.0",
+    "replace": "        self._mask = x >= 0.0"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/test_layers_boundary.py"]
+  },
+  "expect": "killed"
+}

@@ -1,0 +1,15 @@
+{
+  "id": "nn-layers-relu-nan-unit-passes-gradient",
+  "description": "T9-4: ReLU's mask is written ~(x <= 0), identical on every ordered value, but nan <= 0 is False, so a nan unit now counts as active and passes its upstream gradient instead of blocking it.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/layers.py",
+    "find": "        self._mask = x > 0.0",
+    "replace": "        self._mask = ~(x <= 0.0)"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/test_layers_boundary.py"]
+  },
+  "expect": "killed"
+}

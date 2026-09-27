@@ -1,0 +1,15 @@
+{
+  "id": "nn-model-checkpoint-stray-key",
+  "description": "T9-6: Sequential.save writes one extra array next to p0..pN, the shape of the numpy 2.0/2.1 allow_pickle bug its own comment describes. Sequential.load only checks that p0..pN exist, so the round-trip tests stay green.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/model.py",
+    "find": "            np.savez(fh, **params)  # type: ignore[arg-type]",
+    "replace": "            np.savez(fh, stray=np.array(False), **params)  # type: ignore[arg-type]"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/test_model_checkpoint_keys.py"]
+  },
+  "expect": "killed"
+}

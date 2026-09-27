@@ -1,0 +1,15 @@
+{
+  "id": "nn-heat-model-checkpoint-stray-key",
+  "description": "T9-6: HeatModel.save writes one extra array into every checkpoint, the shape of the numpy 2.0/2.1 allow_pickle bug. load() and the agent's predict_scores ignore unknown keys, so every round-trip test stays green; only the exact key-set pin sees it.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/ml/heat_model.py",
+    "find": "                feature_version=FEATURE_VERSION,\n",
+    "replace": "                feature_version=FEATURE_VERSION,\n                stray=np.array(False),\n"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/ml/test_checkpoint_pins.py"]
+  },
+  "expect": "killed"
+}
