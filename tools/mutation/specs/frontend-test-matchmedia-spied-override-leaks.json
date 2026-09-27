@@ -1,0 +1,15 @@
+{
+  "id": "frontend-test-matchmedia-spied-override-leaks",
+  "description": "The per-test matchMedia reset stops installing a fresh stub — an implementation a test set through vi.spyOn (which returns the shared stub itself) overrides the stub, and the helper, for the rest of the file (T11-7 guard-of-the-guard).",
+  "target": {
+    "file": "packages/frontend/src/test/matchMedia.ts",
+    "find": "  resetMatchingMediaQueries();\n  installMatchMediaStub();",
+    "replace": "  resetMatchingMediaQueries();"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/test/matchMedia.test.ts"]
+  },
+  "expect": "killed"
+}

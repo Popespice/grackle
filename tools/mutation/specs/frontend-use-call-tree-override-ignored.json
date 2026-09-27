@@ -1,0 +1,15 @@
+{
+  "id": "frontend-use-call-tree-override-ignored",
+  "description": "useCallTree ignores the override events — the flame graph of a seekable session shows only the loaded window, never the paged full trace (T11-6).",
+  "target": {
+    "file": "packages/frontend/src/graph/useCallTree.ts",
+    "find": "const events = overrideEvents ?? storeEvents;",
+    "replace": "const events = storeEvents;"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/useCallTree.test.ts"]
+  },
+  "expect": "killed"
+}

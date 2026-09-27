@@ -1,0 +1,15 @@
+{
+  "id": "frontend-panels-init-session-library-moved",
+  "description": "The session library is registered into the right sidebar instead of the left — a layout change nobody asked for (T11-6).",
+  "target": {
+    "file": "packages/frontend/src/panels/init.ts",
+    "find": "slot: \"left-sidebar\",\n  id: \"session-library-panel\",",
+    "replace": "slot: \"right-sidebar\",\n  id: \"session-library-panel\","
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/panels/init.test.ts"]
+  },
+  "expect": "killed"
+}

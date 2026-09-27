@@ -1,0 +1,15 @@
+{
+  "id": "frontend-use-theme-color-scheme-query-inverted",
+  "description": "useTheme consults the dark color-scheme query where it means light — an OS light preference starts the app dark (T11-7).",
+  "target": {
+    "file": "packages/frontend/src/theme/useTheme.ts",
+    "find": "window.matchMedia(\"(prefers-color-scheme: light)\").matches",
+    "replace": "window.matchMedia(\"(prefers-color-scheme: dark)\").matches"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/theme/useTheme.colorScheme.test.ts"]
+  },
+  "expect": "killed"
+}

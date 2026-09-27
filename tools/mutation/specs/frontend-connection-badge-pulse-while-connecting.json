@@ -1,0 +1,15 @@
+{
+  "id": "frontend-connection-badge-pulse-while-connecting",
+  "description": "ConnectionBadge pulses whenever the socket is not down — a half-open 'connecting' socket looks alive (T11-6).",
+  "target": {
+    "file": "packages/frontend/src/components/ConnectionBadge.tsx",
+    "find": "status === \"connected\"\n            ? \"badge-pulse",
+    "replace": "status !== \"disconnected\"\n            ? \"badge-pulse"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/components/ConnectionBadge.test.tsx"]
+  },
+  "expect": "killed"
+}

@@ -1,0 +1,15 @@
+{
+  "id": "frontend-use-heatmap-agent-heat-in-sliding-mode",
+  "description": "useHeatmap substitutes the agent's cumulative counts in sliding mode too — the sliding window is ignored in every seekable session (T11-6).",
+  "target": {
+    "file": "packages/frontend/src/graph/useHeatmap.ts",
+    "find": "if (traceSeekable && traceHeatMode === \"cumulative\" && agentHeat !== null) {",
+    "replace": "if (traceSeekable && agentHeat !== null) {"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/useHeatmap.test.tsx"]
+  },
+  "expect": "killed"
+}

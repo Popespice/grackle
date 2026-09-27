@@ -1,0 +1,15 @@
+{
+  "id": "frontend-session-library-panel-load-sends-label",
+  "description": "SessionLibraryPanel sends the session's label as its id — every load request names a session the store does not have (T11-6).",
+  "target": {
+    "file": "packages/frontend/src/panels/SessionLibraryPanel.tsx",
+    "find": "onClick={() => sendSessionLoad(s.id)}",
+    "replace": "onClick={() => sendSessionLoad(s.label)}"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/panels/SessionLibraryPanel.test.tsx"]
+  },
+  "expect": "killed"
+}

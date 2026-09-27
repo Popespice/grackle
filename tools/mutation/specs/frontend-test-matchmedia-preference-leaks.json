@@ -1,0 +1,15 @@
+{
+  "id": "frontend-test-matchmedia-preference-leaks",
+  "description": "The per-test matchMedia reset stops clearing the matching set — a reduced-motion or light preference set in one test holds for every later test in the file (T11-7 guard-of-the-guard).",
+  "target": {
+    "file": "packages/frontend/src/test/matchMedia.ts",
+    "find": "  resetMatchingMediaQueries();\n  installMatchMediaStub();",
+    "replace": "  installMatchMediaStub();"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/test/matchMedia.test.ts"]
+  },
+  "expect": "killed"
+}

@@ -1,0 +1,15 @@
+{
+  "id": "frontend-use-trace-playback-end-one-frame-late",
+  "description": "useTracePlayback treats reaching the end as not-yet-past-it — playback sits at the last event for an extra frame before pausing (T11-6).",
+  "target": {
+    "file": "packages/frontend/src/graph/useTracePlayback.ts",
+    "find": "if (next >= bound) {",
+    "replace": "if (next > bound) {"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/useTracePlayback.test.ts"]
+  },
+  "expect": "killed"
+}

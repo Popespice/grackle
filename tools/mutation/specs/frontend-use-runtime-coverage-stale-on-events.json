@@ -1,0 +1,15 @@
+{
+  "id": "frontend-use-runtime-coverage-stale-on-events",
+  "description": "useRuntimeCoverage memoizes on the graph alone — coverage freezes at its first (empty) result as trace events arrive, the exact failure ADR-0015 made it a hook to avoid (T11-6).",
+  "target": {
+    "file": "packages/frontend/src/graph/useRuntimeCoverage.ts",
+    "find": "}, [graph, traceEvents]);",
+    "replace": "}, [graph]);"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/useRuntimeCoverage.test.ts"]
+  },
+  "expect": "killed"
+}
