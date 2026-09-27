@@ -1,0 +1,20 @@
+{
+  "id": "agent-node-launcher-coverage-count-ts-swapped",
+  "description": "run_coverage passes coverage_event's count and ts_ns positionally in the wrong order, so each live event reports a monotonic-clock reading as its call count. Only the upper bound of the F-1 assertion (counts summed over polls never exceed the program's true call count) catches this, so this spec shows that bound is not vacuous (campaign C5, F-1).",
+  "target": {
+    "file": "packages/agent/src/grackle/node_runtime/launcher.py",
+    "find": "sink(coverage_event(node_id, delta[\"delta\"], ts_ns))",
+    "replace": "sink(coverage_event(node_id, ts_ns, delta[\"delta\"]))"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/node_runtime/test_e2e.py",
+      "-k",
+      "coverage_emits_live_heat"
+    ]
+  },
+  "expect": "killed"
+}

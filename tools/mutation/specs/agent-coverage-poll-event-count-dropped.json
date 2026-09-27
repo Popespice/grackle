@@ -1,0 +1,20 @@
+{
+  "id": "agent-coverage-poll-event-count-dropped",
+  "description": "coverage_event stops attaching the per-poll call delta, so a live Node coverage event says a function ran but not how often. The bounded F-1 assertion in the Node e2e test must still kill this: every event must carry a positive int count (campaign C5, F-1).",
+  "target": {
+    "file": "packages/agent/src/grackle/node_runtime/coverage_poll.py",
+    "find": "{\"live\": True, \"count\": delta})",
+    "replace": "{\"live\": True})"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/node_runtime/test_e2e.py",
+      "-k",
+      "coverage_emits_live_heat"
+    ]
+  },
+  "expect": "killed"
+}
