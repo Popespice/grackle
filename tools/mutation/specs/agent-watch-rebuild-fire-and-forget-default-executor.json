@@ -1,0 +1,20 @@
+{
+  "id": "agent-watch-rebuild-fire-and-forget-default-executor",
+  "description": "T6-4 (docs/test-campaigns/phase-12.md): the watch rebuild is submitted to the loop's multi-worker default executor and not awaited (broadcast from a done-callback), so the loop pulls the next change while a rebuild is still running and two _build_static_graph calls race the unlocked caches. Both serialization mechanisms are gone at once, which is what it takes: see the two 'survives' siblings.",
+  "target": {
+    "file": "packages/agent/src/grackle/server.py",
+    "find": "            graph = await loop.run_in_executor(\n                executor, _build_static_graph, root, meta_cache, predicted_ctx\n            )",
+    "replace": "            _rebuild = loop.run_in_executor(\n                None, _build_static_graph, root, meta_cache, predicted_ctx\n            )\n            _rebuild.add_done_callback(\n                lambda f: f.cancelled()\n                or f.exception() is not None\n                or f.result() is None\n                or asyncio.ensure_future(\n                    broadcast(protocol.make_static_graph(f.result()), connections)\n                )\n            )\n            graph = None"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_watch_faults.py",
+      "-k",
+      "never_overlap_when_edits_land"
+    ]
+  },
+  "expect": "killed"
+}

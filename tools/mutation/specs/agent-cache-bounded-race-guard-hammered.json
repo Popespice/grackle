@@ -1,0 +1,22 @@
+{
+  "id": "agent-cache-bounded-race-guard-hammered",
+  "description": "T7-4 (docs/test-campaigns/phase-12.md): the T4-4 calibration mutant (agent-cache-bounded-race-guard, which still survives its own suite), run against a genuine two-thread race on a plain dict through the real _cache_bounded. The race reaches the guard, so the narrowed catch lets 'dictionary changed size during iteration' escape: the guard is load-bearing, not dead code.",
+  "target": {
+    "file": "packages/agent/src/grackle/server.py",
+    "find": "        except (StopIteration, RuntimeError):  # raced by the other thread",
+    "replace": "        except StopIteration:  # raced by the other thread"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "-m",
+      "hammer",
+      "tests/test_concurrency_parsers_caches.py",
+      "-k",
+      "plain_dict_race_hammer"
+    ]
+  },
+  "expect": "killed"
+}

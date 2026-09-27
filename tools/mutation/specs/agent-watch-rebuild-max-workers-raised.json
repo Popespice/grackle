@@ -1,0 +1,20 @@
+{
+  "id": "agent-watch-rebuild-max-workers-raised",
+  "description": "T6-4 (docs/test-campaigns/phase-12.md): the watch executor gets four workers. Expected to SURVIVE: _watch_loop awaits each rebuild before pulling the next change, so only one rebuild is ever submitted at a time and the worker count cannot matter. This records that the await alone serializes rebuilds. If this spec starts reporting 'killed', the await has been lost and max_workers=1 is now the only thing keeping rebuilds apart.",
+  "target": {
+    "file": "packages/agent/src/grackle/server.py",
+    "find": "max_workers=1, thread_name_prefix=\"grackle-watch-rebuild\"",
+    "replace": "max_workers=4, thread_name_prefix=\"grackle-watch-rebuild\""
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_watch_faults.py",
+      "-k",
+      "never_overlap_when_edits_land"
+    ]
+  },
+  "expect": "survives"
+}
