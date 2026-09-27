@@ -1,0 +1,15 @@
+{
+  "id": "frontend-loss-curve-panel-playhead-before-first",
+  "description": "LossCurvePanel draws a playhead marker (clamped onto epoch 0) even before the playhead has reached any epoch (T11-2).",
+  "target": {
+    "file": "packages/frontend/src/panels/LossCurvePanel.tsx",
+    "find": "if (markerIndex >= 0) {",
+    "replace": "if (markerIndex >= -1) {"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/panels/LossCurvePanel.test.tsx"]
+  },
+  "expect": "killed"
+}

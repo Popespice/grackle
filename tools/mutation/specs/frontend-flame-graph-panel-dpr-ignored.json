@@ -1,0 +1,15 @@
+{
+  "id": "frontend-flame-graph-panel-dpr-ignored",
+  "description": "FlameGraphPanel sizes the backing store at CSS width while the transform still scales by devicePixelRatio — a blurry, half-drawn flame graph on every retina display (T11-2).",
+  "target": {
+    "file": "packages/frontend/src/panels/FlameGraphPanel.tsx",
+    "find": "canvas.width = Math.max(1, Math.floor(width * dpr));",
+    "replace": "canvas.width = Math.max(1, Math.floor(width));"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/panels/FlameGraphPanel.test.tsx"]
+  },
+  "expect": "killed"
+}

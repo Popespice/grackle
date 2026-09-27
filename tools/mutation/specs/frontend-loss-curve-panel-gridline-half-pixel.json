@@ -1,0 +1,15 @@
+{
+  "id": "frontend-loss-curve-panel-gridline-half-pixel",
+  "description": "LossCurvePanel rules its gridlines on the integer pixel instead of the half pixel, so every 1px line straddles two device rows and renders as a blurred 2px band (T11-2).",
+  "target": {
+    "file": "packages/frontend/src/panels/LossCurvePanel.tsx",
+    "find": "ctx.lineTo(width - PADDING_RIGHT, tick.pos + 0.5);",
+    "replace": "ctx.lineTo(width - PADDING_RIGHT, tick.pos);"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/panels/LossCurvePanel.test.tsx"]
+  },
+  "expect": "killed"
+}

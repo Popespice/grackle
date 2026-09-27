@@ -1,0 +1,15 @@
+{
+  "id": "frontend-hub-score-order",
+  "description": "hubScore() sorts ascending instead of descending, so StatsPanel's 'Hub:' ranks the weakest hubs first. Before T11-3/T4-5 this SURVIVED StatsPanel.test.tsx — its disjunctive /Foo|baz/ passed under any ranking.",
+  "target": {
+    "file": "packages/frontend/src/graph/analysis/hubScore.ts",
+    "find": ".sort((a, b) => b.score - a.score);",
+    "replace": ".sort((a, b) => a.score - b.score);"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/panels/StatsPanel.test.tsx"]
+  },
+  "expect": "killed"
+}

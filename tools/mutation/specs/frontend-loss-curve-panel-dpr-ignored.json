@@ -1,0 +1,15 @@
+{
+  "id": "frontend-loss-curve-panel-dpr-ignored",
+  "description": "LossCurvePanel sizes the backing store at CSS height while the transform still scales by devicePixelRatio — the lower half of the chart is clipped on every retina display (T11-2).",
+  "target": {
+    "file": "packages/frontend/src/panels/LossCurvePanel.tsx",
+    "find": "canvas.height = Math.max(1, Math.floor(CANVAS_HEIGHT * dpr));",
+    "replace": "canvas.height = Math.max(1, Math.floor(CANVAS_HEIGHT));"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/panels/LossCurvePanel.test.tsx"]
+  },
+  "expect": "killed"
+}

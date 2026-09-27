@@ -1,0 +1,15 @@
+{
+  "id": "frontend-stats-top-in-degree-order",
+  "description": "topByInDegree() sorts ascending instead of descending, so StatsPanel's 'Top:' lists the least-depended-on nodes. Before T11-3/T4-5 this SURVIVED StatsPanel.test.tsx — its disjunctive /Foo|baz/ passed under any ranking.",
+  "target": {
+    "file": "packages/frontend/src/graph/stats.ts",
+    "find": ".sort((a, b) => b.inDegree - a.inDegree)",
+    "replace": ".sort((a, b) => a.inDegree - b.inDegree)"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/panels/StatsPanel.test.tsx"]
+  },
+  "expect": "killed"
+}

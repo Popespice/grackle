@@ -1,0 +1,15 @@
+{
+  "id": "frontend-flame-graph-panel-label-unclipped",
+  "description": "FlameGraphPanel drops fillText's maxWidth, so a long frame label runs past its bar into its neighbours (T11-2).",
+  "target": {
+    "file": "packages/frontend/src/panels/FlameGraphPanel.tsx",
+    "find": "ctx.fillText(r.frame.label, r.x + 3, r.y + r.h / 2, r.w - 6);",
+    "replace": "ctx.fillText(r.frame.label, r.x + 3, r.y + r.h / 2);"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/panels/FlameGraphPanel.test.tsx"]
+  },
+  "expect": "killed"
+}

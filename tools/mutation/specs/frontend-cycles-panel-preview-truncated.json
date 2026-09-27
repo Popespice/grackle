@@ -1,0 +1,15 @@
+{
+  "id": "frontend-cycles-panel-preview-truncated",
+  "description": "CyclesPanel previews only the first member of each cycle instead of the first three. Before T11-3/T4-5 this SURVIVED CyclesPanel.test.tsx — its disjunctive /alpha|beta|gamma/ passed with any one member shown.",
+  "target": {
+    "file": "packages/frontend/src/panels/CyclesPanel.tsx",
+    "find": ".slice(0, 3)",
+    "replace": ".slice(0, 1)"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/panels/CyclesPanel.test.tsx"]
+  },
+  "expect": "killed"
+}

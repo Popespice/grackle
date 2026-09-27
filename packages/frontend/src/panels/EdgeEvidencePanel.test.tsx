@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useGraphStore } from "../graph/useGraphStore";
 import { type SourceState, useSource } from "../source/useSource";
+import { restoreInitialState } from "../test/storeReset";
 import { EdgeEvidencePanel } from "./EdgeEvidencePanel";
 
 vi.mock("../source/useSource");
@@ -51,6 +52,8 @@ afterEach(cleanup);
 
 beforeEach(() => {
   mockUseSource.mockReturnValue(loaded("a.py", A_SRC));
+  // Full-replace first (campaign T11-4), then the fields these tests assume.
+  restoreInitialState(useGraphStore);
   useGraphStore.setState({
     graph: null,
     selectedNodeId: null,

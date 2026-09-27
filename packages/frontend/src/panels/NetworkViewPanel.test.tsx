@@ -12,6 +12,7 @@ import {
 } from "vitest";
 import { type UseFullTraceResult, useFullTrace } from "../graph/useFullTrace";
 import { useGraphStore } from "../graph/useGraphStore";
+import { makeRecorder } from "../test/canvasRecorder";
 import { NetworkViewPanel } from "./NetworkViewPanel";
 
 vi.mock("../graph/useFullTrace");
@@ -296,65 +297,6 @@ describe("NetworkViewPanel — no-beacon degrade", () => {
     ).toBeNull();
   });
 });
-
-/**
- * A recording stand-in for a 2D context. jsdom has no canvas, and the rest of
- * this file stubs `getContext` to null so the paint effect no-ops — which left
- * `paintNetwork` (five draw passes, the active-bundle overdraw, the
- * highlight-column choice, every caption and label) with no coverage at all.
- * This records enough to assert what was drawn and in what colour.
- *
- * Neuron/glyph circles stroke an arc-only path, so `segments` stays 0 for them
- * and `strokes` isolates the edge-bundle passes.
- */
-function makeRecorder() {
-  const strokes: { style: string; alpha: number; segments: number }[] = [];
-  const arcs: { x: number; y: number; fill: string }[] = [];
-  const texts: string[] = [];
-  const transforms: number[][] = [];
-  let segments = 0;
-  let lastArc: { x: number; y: number } | null = null;
-  const ctx = {
-    strokeStyle: "",
-    fillStyle: "",
-    globalAlpha: 1,
-    lineWidth: 1,
-    font: "",
-    textAlign: "",
-    textBaseline: "",
-    clearRect: () => {},
-    setTransform: (...args: number[]) => {
-      transforms.push(args);
-    },
-    beginPath: () => {
-      segments = 0;
-      lastArc = null;
-    },
-    moveTo: () => {},
-    lineTo: () => {
-      segments += 1;
-    },
-    arc: (x: number, y: number) => {
-      lastArc = { x, y };
-    },
-    fill: () => {
-      if (lastArc) arcs.push({ ...lastArc, fill: String(ctx.fillStyle) });
-    },
-    stroke: () => {
-      if (segments > 0) {
-        strokes.push({
-          style: String(ctx.strokeStyle),
-          alpha: ctx.globalAlpha,
-          segments,
-        });
-      }
-    },
-    fillText: (text: string) => {
-      texts.push(text);
-    },
-  };
-  return { ctx, strokes, arcs, texts, transforms };
-}
 
 describe("NetworkViewPanel — what actually gets painted", () => {
   const FORWARD_TRAIN = "#e86b20";

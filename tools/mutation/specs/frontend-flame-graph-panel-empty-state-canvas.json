@@ -1,0 +1,15 @@
+{
+  "id": "frontend-flame-graph-panel-empty-state-canvas",
+  "description": "FlameGraphPanel mounts (and paints) a blank canvas instead of its empty-state message when the session has no call events (T11-2).",
+  "target": {
+    "file": "packages/frontend/src/panels/FlameGraphPanel.tsx",
+    "find": "{empty ? (",
+    "replace": "{false ? ("
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/panels/FlameGraphPanel.test.tsx"]
+  },
+  "expect": "killed"
+}

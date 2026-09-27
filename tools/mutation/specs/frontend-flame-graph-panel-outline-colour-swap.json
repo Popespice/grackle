@@ -1,0 +1,15 @@
+{
+  "id": "frontend-flame-graph-panel-outline-colour-swap",
+  "description": "FlameGraphPanel swaps the selection and hot-path outline colours — the selected frame is outlined as merely hot and vice versa (T11-2).",
+  "target": {
+    "file": "packages/frontend/src/panels/FlameGraphPanel.tsx",
+    "find": "ctx.strokeStyle = selected ? \"#b794f6\" : \"#fff3c4\";",
+    "replace": "ctx.strokeStyle = selected ? \"#fff3c4\" : \"#b794f6\";"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/panels/FlameGraphPanel.test.tsx"]
+  },
+  "expect": "killed"
+}

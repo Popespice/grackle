@@ -1,0 +1,15 @@
+{
+  "id": "frontend-loss-curve-panel-accuracy-plots-loss",
+  "description": "LossCurvePanel strokes the loss points in the accuracy colour — the green curve silently shows loss, and accuracy is never drawn (T11-2).",
+  "target": {
+    "file": "packages/frontend/src/panels/LossCurvePanel.tsx",
+    "find": "drawPolyline(ctx, layout.accPoints, ACC_COLOR);",
+    "replace": "drawPolyline(ctx, layout.lossPoints, ACC_COLOR);"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/panels/LossCurvePanel.test.tsx"]
+  },
+  "expect": "killed"
+}

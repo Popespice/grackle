@@ -1,0 +1,15 @@
+{
+  "id": "frontend-loss-curve-panel-loss-labels-misaligned",
+  "description": "LossCurvePanel left-aligns the loss-axis labels at PADDING_LEFT - 6, so they run rightward into the plot over the curves instead of hugging the axis (T11-2).",
+  "target": {
+    "file": "packages/frontend/src/panels/LossCurvePanel.tsx",
+    "find": "ctx.textAlign = \"right\";",
+    "replace": "ctx.textAlign = \"left\";"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/panels/LossCurvePanel.test.tsx"]
+  },
+  "expect": "killed"
+}
