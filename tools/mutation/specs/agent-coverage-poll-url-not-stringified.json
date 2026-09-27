@@ -1,0 +1,20 @@
+{
+  "id": "agent-coverage-poll-url-not-stringified",
+  "description": "iter_coverage_deltas passes a script's url through without str(), so a non-string url in a coverage payload reaches the resolver, which raises AttributeError on it and aborts the --stream session (campaign T6-5).",
+  "target": {
+    "file": "packages/agent/src/grackle/node_runtime/coverage_poll.py",
+    "find": "        url = str(script.get(\"url\", \"\"))",
+    "replace": "        url = script.get(\"url\", \"\")"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_malformed_corpus.py",
+      "-k",
+      "coverage_polling_survives"
+    ]
+  },
+  "expect": "killed"
+}

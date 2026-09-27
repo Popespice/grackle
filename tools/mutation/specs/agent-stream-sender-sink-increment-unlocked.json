@@ -1,0 +1,15 @@
+{
+  "id": "agent-stream-sender-sink-increment-unlocked",
+  "description": "sink() checks the cap and increments _inflight without taking the counter lock, while the drain loop still takes it for its decrement: a lock held on one side only excludes nothing, so the race of campaign T7-2 is open again.",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/stream_sender.py",
+    "find": "        with self._counter_lock:\n            if self._inflight >= self._max_inflight:",
+    "replace": "        if True:\n            if self._inflight >= self._max_inflight:"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_stream_sender_race.py"]
+  },
+  "expect": "killed"
+}

@@ -1,0 +1,20 @@
+{
+  "id": "agent-llvm-cov-non-object-function-entry",
+  "description": "_parse_function drops its non-object guard, so one functions[] entry that is not a JSON object raises AttributeError out of parse_export and loses every function in the export (campaign T6-5).",
+  "target": {
+    "file": "packages/agent/src/grackle/rust_runtime/llvm_cov_parse.py",
+    "find": "    if not isinstance(fn, dict):\n        return None\n",
+    "replace": ""
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_malformed_corpus.py",
+      "-k",
+      "llvm_cov_parser_and_resolver"
+    ]
+  },
+  "expect": "killed"
+}

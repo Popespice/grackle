@@ -1,0 +1,20 @@
+{
+  "id": "agent-covdata-line-not-stripped",
+  "description": "parse_textfmt matches each textfmt line without stripping it, so a line with leading whitespace yields an import path that starts with it (and resolves nowhere), and one with trailing whitespace fails the end anchor and is dropped (campaign T6-5).",
+  "target": {
+    "file": "packages/agent/src/grackle/go_runtime/covdata_parse.py",
+    "find": "        line = raw.strip()",
+    "replace": "        line = raw"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_malformed_corpus.py",
+      "-k",
+      "covdata_parser_and_resolver"
+    ]
+  },
+  "expect": "killed"
+}

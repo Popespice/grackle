@@ -1,0 +1,15 @@
+{
+  "id": "agent-profile-reconstruct-parent-cycle-unbounded",
+  "description": "reconstruct's walk up the parent chain loses its seen-guard, so a profile whose children lists form a cycle loops forever (growing memory) instead of stopping at the repeat (campaign T6-5). The suite is narrowed to the one bounded cycle test.",
+  "target": {
+    "file": "packages/agent/src/grackle/node_runtime/profile_reconstruct.py",
+    "find": "        while cur is not None and cur not in seen:",
+    "replace": "        while cur is not None:"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_malformed_corpus.py", "-k", "parent_cycle"]
+  },
+  "expect": "killed"
+}
