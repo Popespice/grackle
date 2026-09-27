@@ -13,7 +13,6 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import {
   cp,
   mkdtemp,
@@ -26,13 +25,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { main as runCodegen } from "./codegen.mjs";
+import { generatesPython, main as runCodegen } from "./codegen.mjs";
 import { diffSets, schemaMessageTypes } from "./verify-parity.mjs";
 
 const SCRIPT_DIR = fileURLToPath(new URL(".", import.meta.url));
 const SCHEMA_DIR = join(SCRIPT_DIR, "..", "schema");
 const MESSAGES_SCHEMA = join(SCHEMA_DIR, "messages.schema.json");
-const AGENT_DIR = join(SCRIPT_DIR, "..", "..", "agent");
 
 /**
  * The two codegen tests below need a real Python toolchain and the agent
@@ -44,7 +42,7 @@ const AGENT_DIR = join(SCRIPT_DIR, "..", "..", "agent");
  * Node availability, and the go/rust runtime suites' equivalents).
  */
 function pythonCodegenUnavailable() {
-  if (!existsSync(AGENT_DIR)) {
+  if (!generatesPython()) {
     return "packages/agent not present — codegen emits no Python output";
   }
   const probe = spawnSync("uvx", ["--version"], { encoding: "utf-8" });
@@ -54,7 +52,23 @@ function pythonCodegenUnavailable() {
   return false;
 }
 
-const PY_CODEGEN_SKIP = pythonCodegenUnavailable();
+const PY_CODEGEN_UNAVAILABLE = pythonCodegenUnavailable();
+
+// Skipping is a laptop convenience only. In CI a missing toolchain is a
+// misconfiguration, and a skip there would silently stop the determinism guard
+// from running while every check stayed green — so in CI these tests always run
+// (and fail with the real error), and the test below names the cause.
+const PY_CODEGEN_SKIP = process.env.CI ? false : PY_CODEGEN_UNAVAILABLE;
+
+test("CI provides the Python codegen toolchain (codegen tests never skip there)", {
+  skip: !process.env.CI && "not running in CI",
+}, () => {
+  assert.equal(
+    PY_CODEGEN_UNAVAILABLE,
+    false,
+    `CI must be able to run Python codegen: ${PY_CODEGEN_UNAVAILABLE}`
+  );
+});
 
 /**
  * Run `fn` (sync) with console.log/console.error captured instead of printed,
@@ -138,9 +152,8 @@ test("T3-1: diffSets reports failure when a type is removed from one side", asyn
     1,
     `expected one DRIFT line, got ${JSON.stringify(errors)}`
   );
-  assert.match(
-    errors[0],
-    new RegExp(`in schemaSide not tsSide: ${removed}`),
+  assert.ok(
+    errors[0].includes(`in schemaSide not tsSide: ${removed}`),
     `removed type must be reported as present in the first set only; got: ${errors[0]}`
   );
 });
@@ -160,9 +173,8 @@ test("T3-1: diffSets reports failure when a type is renamed", async () => {
   // A rename is the case that actually distinguishes the two directions: the
   // old name must be reported as schema-only and the new name as ts-only.
   const joined = errors.join("\n");
-  assert.match(
-    joined,
-    new RegExp(`in schemaSide not tsSide: ${target}`),
+  assert.ok(
+    joined.includes(`in schemaSide not tsSide: ${target}`),
     `old name must be reported against the first set; got: ${joined}`
   );
   assert.match(
@@ -285,21 +297,22 @@ test("KNOWN GAP (T3-3): duplicate type consts across different $defs collapse si
 //    Runs against a single representative schema (messages.schema.json) via
 //    a temp schema-dir copy, not the whole schema directory, to bound wall-time.
 //
-//    SCOPE, precisely: both runs happen inside one process and therefore
-//    necessarily resolve the SAME datamodel-code-generator version, so this
-//    proves only *intra-run* determinism — no embedded timestamp, no
-//    iteration-order or hash-seed dependence. It structurally CANNOT catch
-//    the other drift vector, a different generator version resolving between
-//    two CI runs, because `uvx --from datamodel-code-generator` is
-//    deliberately unpinned. That vector is real and was observed live during
+//    SCOPE, precisely: both runs happen inside one process, and codegen.mjs
+//    pins every datamodel-codegen call in a process to the one version it
+//    resolves and logs (`datamodel-code-generator==<ver>`), so both runs use
+//    the same generator by construction. This therefore proves only
+//    *intra-run* determinism — no embedded timestamp, no iteration-order or
+//    hash-seed dependence. It structurally CANNOT catch the other drift
+//    vector, a different generator version resolving between two CI runs,
+//    because across processes the requirement is still deliberately unpinned. That vector is real and was observed live during
 //    the C1 review (0.74.0 and 0.75.1 resolving minutes apart on one
 //    machine; outputs happened to match, so check-parity survived on luck).
-//    Mitigation today is visibility only — codegen.mjs logs the resolved
-//    version. A genuine cross-version guard remains open; see tier T3-6 in
+//    Mitigation today is visibility only — codegen.mjs logs the version each
+//    run is pinned to. A genuine cross-version guard remains open; see tier T3-6 in
 //    docs/test-campaigns/phase-12.md.
 // ---------------------------------------------------------------------------
 
-test("T3-6: codegen is byte-for-byte deterministic within a run (same resolved generator version)", {
+test("T3-6: codegen is byte-for-byte deterministic within a run (both runs pinned to one generator version)", {
   skip: PY_CODEGEN_SKIP,
 }, async () => {
   const schemaTmp = await mkdtemp(join(tmpdir(), "grackle-codegen-schema-"));

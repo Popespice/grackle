@@ -97,7 +97,7 @@ function unionMessageTypes(src) {
 export function diffSets(label, a, b, aName, bName) {
   if (a.size === 0 && b.size === 0) {
     console.error(
-      `  DRIFT    ${label}: both sides extracted zero message types — the guard compared nothing; this usually means the extraction regex broke silently, not that the schema is genuinely empty`
+      `  BROKEN   ${label}: both sides extracted zero message types — the guard compared nothing. This usually means an extraction regex in verify-parity.mjs broke silently, not that the schema is genuinely empty; re-running \`pnpm codegen\` will NOT fix it`
     );
     return 1;
   }
@@ -212,7 +212,9 @@ export async function main() {
   failures += await checkCanonicalParity();
 
   if (failures > 0) {
-    console.error(`\nparity: ${failures} file(s) out of sync`);
+    console.error(
+      `\nparity: ${failures} check(s) failed — see the MISSING/DRIFT/BROKEN lines above for each remedy`
+    );
     process.exit(1);
   }
   console.log("\nparity: all files up to date");

@@ -38,6 +38,11 @@ const DEFAULT_PY_OUT = join(
 );
 const AGENT_DIR = join(ROOT, "packages", "agent");
 
+/** Whether codegen emits Python output at all (it skips it without the agent package). */
+export function generatesPython() {
+  return existsSync(AGENT_DIR);
+}
+
 const TS_HEADER =
   "// GENERATED — do not edit by hand. Run `pnpm codegen` to regenerate.\n" +
   "// Source: packages/shared-types/schema/\n";
@@ -46,29 +51,25 @@ const PY_HEADER =
   "# GENERATED — do not edit by hand. Run `pnpm codegen` to regenerate.\n" +
   "# Source: packages/shared-types/schema/";
 
-/**
- * Run codegen. Accepts alternate output dirs so verify-parity can use a tmp dir,
- * and an alternate schema dir so tests can point codegen at a single schema (or
- * a temp copy of the schema dir) without touching the real one.
- * @param {{ tsOutDir?: string; pyOutDir?: string; schemaDir?: string }} [opts]
- */
-// Resolved once per process, not per main() call: the probe costs a full uvx
-// spawn (~1.3s, comparable to the generation it precedes), and verify-parity's
-// tests call main() several times in one process.
-let resolvedGeneratorVersion = null;
+// Resolved once per process: the generator version this process pins every
+// datamodel-codegen call to. `uvx --from datamodel-code-generator` is otherwise
+// unpinned, so two calls could resolve different releases; pinning each run to
+// the version it logs makes the logged version the one that produced the output.
+// The probe is not an extra cost in practice: the first unpinned resolution
+// (~1.5s cold) is paid by whichever call runs first, and pinned calls after it
+// hit uv's cache (~0.06s).
+let pinnedGenerator = null;
 
 /**
- * Log which datamodel-code-generator `uvx` actually resolved. The version is
- * deliberately unpinned, so recording it is the only thing making drift
- * visible after the fact.
+ * Resolve, log, and return the `--from` requirement for datamodel-code-generator.
  *
- * Never fatal. This is diagnostics, not generation — if it fails, the real
- * datamodel-codegen call later in the loop reports the real error, and the
- * TypeScript half of codegen (which needs no Python toolchain at all) still
- * completes rather than being blocked by a broken probe.
+ * Never fatal. This is diagnostics plus pinning, not generation — if the probe
+ * fails, generation falls back to the unpinned requirement and reports its own
+ * real error, and the TypeScript half of codegen (which needs no Python
+ * toolchain at all) still completes.
  */
-async function logResolvedGeneratorVersion() {
-  if (resolvedGeneratorVersion === null) {
+async function resolveGenerator() {
+  if (pinnedGenerator === null) {
     try {
       const { stdout } = await execFileAsync("uvx", [
         "--from",
@@ -76,21 +77,37 @@ async function logResolvedGeneratorVersion() {
         "datamodel-codegen",
         "--version",
       ]);
-      resolvedGeneratorVersion = stdout.trim();
+      const version = stdout.trim().match(/(\d+\.\d+\.\d+\S*)\s*$/)?.[1];
+      pinnedGenerator = version
+        ? { from: `datamodel-code-generator==${version}`, label: version }
+        : {
+            from: "datamodel-code-generator",
+            label: `unparsed (${stdout.trim()}) — generation unpinned`,
+          };
     } catch (err) {
-      resolvedGeneratorVersion = `unavailable (${err.message ?? err})`;
+      pinnedGenerator = {
+        from: "datamodel-code-generator",
+        label: `unavailable (${err.message ?? err}) — generation unpinned`,
+      };
     }
   }
   console.log(
-    `  Py  \u24d8 datamodel-code-generator resolved version: ${resolvedGeneratorVersion}`
+    `  Py  \u24d8 datamodel-code-generator pinned for this run: ${pinnedGenerator.label}`
   );
+  return pinnedGenerator.from;
 }
 
+/**
+ * Run codegen. Accepts alternate output dirs so verify-parity can use a tmp dir,
+ * and an alternate schema dir so tests can point codegen at a single schema (or
+ * a temp copy of the schema dir) without touching the real one.
+ * @param {{ tsOutDir?: string; pyOutDir?: string; schemaDir?: string }} [opts]
+ */
 export async function main(opts = {}) {
   const tsOutDir = opts.tsOutDir ?? DEFAULT_TS_OUT;
   const pyOutDir = opts.pyOutDir ?? DEFAULT_PY_OUT;
   const schemaDir = opts.schemaDir ?? SCHEMA_DIR;
-  const generatePython = existsSync(AGENT_DIR);
+  const generatePython = generatesPython();
 
   await mkdir(tsOutDir, { recursive: true });
 
@@ -98,9 +115,8 @@ export async function main(opts = {}) {
     .filter((f) => f.endsWith(".schema.json"))
     .sort();
 
-  if (generatePython && schemaFiles.length > 0) {
-    await logResolvedGeneratorVersion();
-  }
+  const generatorFrom =
+    generatePython && schemaFiles.length > 0 ? await resolveGenerator() : null;
 
   for (const schemaFile of schemaFiles) {
     const schemaPath = join(schemaDir, schemaFile);
@@ -128,7 +144,7 @@ export async function main(opts = {}) {
       await mkdir(pyOutDir, { recursive: true });
       await execFileAsync("uvx", [
         "--from",
-        "datamodel-code-generator",
+        generatorFrom,
         "datamodel-codegen",
         "--input",
         schemaPath,
