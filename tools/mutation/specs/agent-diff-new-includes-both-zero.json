@@ -1,0 +1,15 @@
+{
+  "id": "agent-diff-new-includes-both-zero",
+  "description": "The `new` rule loosens from cb > 0 to cb >= 0, so a node absent from both sessions (explicit node_ids universe) is reported as new instead of same.",
+  "target": {
+    "file": "packages/agent/src/grackle/diff.py",
+    "find": "        if ca == 0 and cb > 0:",
+    "replace": "        if ca == 0 and cb >= 0:"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_diff.py"]
+  },
+  "expect": "killed"
+}

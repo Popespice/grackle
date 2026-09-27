@@ -880,3 +880,38 @@ def test_char_budget_does_not_double_count_nested_content() -> None:
     result = safe_repr(structure, limits)
     assert result.truncated is False
     assert leaf in result.text
+
+
+# ---------------------------------------------------------------------------
+# 19. Exact bounds (test campaign T4-2, docs/test-campaigns/phase-12.md): the
+#     rows above check "far over the limit truncates" and "well under it
+#     doesn't"; these pin the boundary itself, where an off-by-one lives.
+# ---------------------------------------------------------------------------
+
+
+def test_container_of_exactly_max_items_is_shown_whole() -> None:
+    # At exactly max_items the value is complete: no "..." and not flagged
+    # truncated. One more element is where elision starts.
+    limits = ValueCaptureLimits(max_items=3)
+    assert safe_repr([1, 2, 3], limits) == ReprResult("[1, 2, 3]", False)
+    assert safe_repr((1, 2, 3), limits) == ReprResult("(1, 2, 3)", False)
+    assert safe_repr({"a": 1, "b": 2, "c": 3}, limits) == ReprResult(
+        "{'a': 1, 'b': 2, 'c': 3}", False
+    )
+    assert safe_repr([1, 2, 3, 4], limits) == ReprResult("[1, 2, 3, ...]", True)
+    assert safe_repr({"a": 1, "b": 2, "c": 3, "d": 4}, limits) == ReprResult(
+        "{'a': 1, 'b': 2, 'c': 3, ...}", True
+    )
+
+
+def test_scalar_repr_exactly_max_len_is_not_elided() -> None:
+    # A scalar whose repr is exactly max_len characters fits: shown whole,
+    # not flagged. One character more is where middle-elision starts.
+    limits = ValueCaptureLimits(max_len=20)
+    exact = 10**19  # 20 digits
+    assert safe_repr(exact, limits) == ReprResult(str(exact), False)
+
+    over = safe_repr(10**20, limits)  # 21 digits
+    assert over.truncated is True
+    assert len(over.text) == 20
+    assert "..." in over.text

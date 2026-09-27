@@ -1,0 +1,15 @@
+{
+  "id": "agent-writer-count-advanced-before-write",
+  "description": "JsonlPartWriter bumps count before the write instead of after, so a failed write still counts its event and the reported event count overstates what is on disk.",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/writer.py",
+    "find": "            self._f.write(data)\n            # Advance count and offset together, only on a fully successful\n            # write, so they can never disagree — a partial/failed write\n            # leaves both untouched, and finalize()'s truncate discards\n            # exactly the partial bytes.\n            self.count += 1\n",
+    "replace": "            self.count += 1\n            self._f.write(data)\n            # Advance count and offset together, only on a fully successful\n            # write, so they can never disagree — a partial/failed write\n            # leaves both untouched, and finalize()'s truncate discards\n            # exactly the partial bytes.\n"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/python_runtime/test_writer.py", "-k", "part_writer"]
+  },
+  "expect": "killed"
+}

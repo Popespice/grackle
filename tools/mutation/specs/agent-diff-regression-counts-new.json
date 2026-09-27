@@ -1,0 +1,15 @@
+{
+  "id": "agent-diff-regression-counts-new",
+  "description": "has_regression also fires on `new` nodes, so grackle diff exits 1 whenever a run exercises a code path the baseline didn't. ADR-0021 defines a regression as any hotter node and nothing else.",
+  "target": {
+    "file": "packages/agent/src/grackle/diff.py",
+    "find": "    return any(e[\"status\"] == \"hotter\" for e in entries)",
+    "replace": "    return any(e[\"status\"] in (\"hotter\", \"new\") for e in entries)"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_diff.py"]
+  },
+  "expect": "killed"
+}

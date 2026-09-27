@@ -1,0 +1,15 @@
+{
+  "id": "agent-writer-torn-tail-not-truncated",
+  "description": "finalize() on a broken writer skips the truncate, so the torn half-line from the failed write is renamed into the final trace and read_jsonl rejects the whole file.",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/writer.py",
+    "find": "        if self.broken:\n            self._f.truncate(self._last_good_offset)",
+    "replace": "        if self.broken:\n            pass"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/python_runtime/test_writer.py", "-k", "part_writer"]
+  },
+  "expect": "killed"
+}

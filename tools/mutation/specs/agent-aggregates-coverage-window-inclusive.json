@@ -1,0 +1,15 @@
+{
+  "id": "agent-aggregates-coverage-window-inclusive",
+  "description": "coverage_count's bisect drops its `- 1`, so a node whose first event IS at_index counts as covered one event before it fires — the coverage overlay runs ahead of the playhead.",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/aggregates.py",
+    "find": "        return bisect.bisect_right(self._sorted_first, at_index - 1)",
+    "replace": "        return bisect.bisect_right(self._sorted_first, at_index)"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_aggregates.py", "-k", "coverage"]
+  },
+  "expect": "killed"
+}

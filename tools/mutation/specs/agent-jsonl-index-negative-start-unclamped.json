@@ -1,0 +1,20 @@
+{
+  "id": "agent-jsonl-index-negative-start-unclamped",
+  "description": "read_window stops clamping a negative start to 0, so Python's negative indexing reads events from the END of the trace for a seek before the first event.",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/jsonl_index.py",
+    "find": "        start = max(0, min(start, total))",
+    "replace": "        start = min(start, total)"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/python_runtime/test_jsonl_index.py",
+      "-k",
+      "read_window"
+    ]
+  },
+  "expect": "killed"
+}

@@ -78,6 +78,18 @@ class TestDiffTraceVsStatic:
         entries = diff_trace_vs_static([], agg)
         assert entries == []
 
+    def test_at_index_zero_is_the_start_not_the_whole_session(self) -> None:
+        """at_index=0 is an explicit, empty window (playhead at the start), not
+        a missing argument — so every node is cold. A truthiness default
+        (``at_index or len(...)``) would read it as the whole session
+        (campaign T4-2)."""
+        agg = make_aggregates({"a": [0], "b": [1]}, total=2)
+        entries = diff_trace_vs_static(["a", "b"], agg, at_index=0)
+        assert [(e["node_id"], e["status"], e["count_a"]) for e in entries] == [
+            ("a", "cold", 0),
+            ("b", "cold", 0),
+        ]
+
 
 # ---------------------------------------------------------------------------
 # diff_trace_vs_trace
@@ -164,6 +176,21 @@ class TestDiffTraceVsTrace:
         entries = diff_trace_vs_trace(agg_a, agg_b, at_index_a=5, at_index_b=10)
         assert entries[0]["status"] == "hotter"
 
+    def test_rows_within_a_bucket_are_sorted_by_node_id(self) -> None:
+        """ADR-0021: severity first, then node_id, so grackle diff's output is
+        identical run to run. The universe is a set, so without the node_id
+        tie-break the in-bucket order follows the per-process hash seed —
+        twelve rows per bucket make an accidental sorted order ~1 in 479M
+        (campaign T4-2)."""
+        hot = [f"hot_{c}" for c in "qwertyuiopas"]
+        same = [f"same_{c}" for c in "zxcvbnmlkjhg"]
+        agg_a = make_aggregates({nid: [0] for nid in hot + same})
+        agg_b = make_aggregates({**{nid: [0, 1] for nid in hot}, **{nid: [0] for nid in same}})
+
+        entries = diff_trace_vs_trace(agg_a, agg_b)
+
+        assert [e["node_id"] for e in entries] == sorted(hot) + sorted(same)
+
 
 # ---------------------------------------------------------------------------
 # has_regression
@@ -186,6 +213,16 @@ class TestHasRegression:
 
     def test_false_on_empty(self) -> None:
         assert has_regression([]) is False
+
+    def test_false_when_only_new_or_gone(self) -> None:
+        """ADR-0021: a regression is a hotter node and nothing else — new and
+        gone are coverage drift. A run that merely exercises a code path the
+        baseline didn't must not fail CI (campaign T4-2)."""
+        entries: list[DiffEntry] = [
+            DiffEntry(node_id="x", status="new", count_a=0, count_b=3, delta=3),
+            DiffEntry(node_id="y", status="gone", count_a=2, count_b=0, delta=-2),
+        ]
+        assert has_regression(entries) is False
 
 
 # ---------------------------------------------------------------------------

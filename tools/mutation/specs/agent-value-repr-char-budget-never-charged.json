@@ -1,0 +1,20 @@
+{
+  "id": "agent-value-repr-char-budget-never-charged",
+  "description": "repr1 stops charging leaf results against the total character budget, so it never runs out and a wide-and-deep value assembles ~max_items**max_depth leaves before the final clamp — the tracer hot path pays for text it throws away.",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/value_repr.py",
+    "find": "            self._chars_remaining -= len(result)",
+    "replace": "            pass"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/python_runtime/test_value_repr.py",
+      "-k",
+      "bounds_total_assembled"
+    ]
+  },
+  "expect": "killed"
+}

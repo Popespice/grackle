@@ -1,0 +1,15 @@
+{
+  "id": "agent-value-repr-depth-cap-off-by-one",
+  "description": "The list/tuple depth guard becomes `level < 0`, so sequences render one nesting level deeper than max_depth allows. Pinned end-to-end by the --max-value-depth CLI test (test_value_repr.py only checks far-over/well-under).",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/value_repr.py",
+    "find": "        if level <= 0 and n:",
+    "replace": "        if level < 0 and n:"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_cli_trace.py", "-k", "max_value_depth"]
+  },
+  "expect": "killed"
+}

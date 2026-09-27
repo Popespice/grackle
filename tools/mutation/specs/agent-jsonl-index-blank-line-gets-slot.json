@@ -1,0 +1,15 @@
+{
+  "id": "agent-jsonl-index-blank-line-gets-slot",
+  "description": "JsonlIndex.build tests the raw line instead of the stripped one, so a blank line gets an event slot — len() overstates the trace and every later index is shifted against the aggregates' event numbering.",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/jsonl_index.py",
+    "find": "                if stripped:\n                    offsets.append(offset)",
+    "replace": "                if raw_line:\n                    offsets.append(offset)"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/python_runtime/test_jsonl_index.py", "-k", "blank"]
+  },
+  "expect": "killed"
+}
