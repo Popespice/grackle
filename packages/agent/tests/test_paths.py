@@ -130,3 +130,23 @@ def test_case_handling_documented(tmp_path: Path) -> None:
     result = to_posix(f, tmp_path)
     # Whatever case resolve() yields, we don't lower-case it.
     assert result.lower() == "foo.py"
+
+
+def test_symlink_capability_present_on_posix(tmp_path: Path) -> None:
+    # test_symlink_resolves_to_target_under_root and
+    # test_symlink_pointing_outside_root_raises above both swallow OSError
+    # from symlink_to() into a pytest.skip, because on Windows without
+    # Developer Mode/admin that's expected, unavoidable variance — but a
+    # skip is invisible in default CI output (no -r flag), so if symlink
+    # creation ever broke on Linux/macOS CI for an unrelated reason
+    # (sandboxing regression, permissions change), those two tests would
+    # silently vanish into "skipped" instead of failing. This test has no
+    # try/except: on non-Windows platforms, an OSError here is a genuine
+    # capability regression and must fail loudly, not skip quietly.
+    if sys.platform == "win32":
+        pytest.skip("Windows requires Developer Mode or admin for symlinks; expected")
+    target = tmp_path / "target.py"
+    target.touch()
+    link = tmp_path / "link.py"
+    link.symlink_to(target)
+    assert link.resolve() == target.resolve()

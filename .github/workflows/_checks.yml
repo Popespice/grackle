@@ -68,8 +68,11 @@ jobs:
       - name: TypeScript
         run: pnpm typecheck
 
-      - name: Frontend tests
-        run: pnpm --filter @grackle/frontend test --run
+      # Every workspace package that defines a `test` script, not a hardcoded
+      # package name — otherwise a new package's suite silently never runs in
+      # CI (which is exactly what happened to shared-types' parity meta-tests).
+      - name: Workspace tests
+        run: pnpm test
 
       - name: Install Python dependencies
         working-directory: packages/agent
@@ -85,7 +88,7 @@ jobs:
 
       - name: Pytest
         working-directory: packages/agent
-        run: uv run pytest -q
+        run: uv run pytest -q -ra
 
       - name: Install Python dependencies (nn)
         working-directory: packages/nn
@@ -101,4 +104,4 @@ jobs:
 
       - name: Pytest (nn)
         working-directory: packages/nn
-        run: uv run pytest -q
+        run: uv run pytest -q -ra

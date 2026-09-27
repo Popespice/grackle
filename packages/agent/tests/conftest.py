@@ -16,6 +16,29 @@ def free_port() -> int:
 
 
 @pytest.fixture
+def agent_source_files() -> list[Path]:
+    """Every hand-written ``.py`` file in the agent package's source tree.
+
+    Shared by the two AST-scanning suites — ``test_ml_bridge_import_hygiene``
+    and ``test_path_discipline`` — which walk the same file set but apply
+    genuinely different traversals to it (module-scope-only vs whole-tree),
+    so only the enumeration is common. Keeping the ``_generated`` exclusion in
+    one place means adding or renaming a generated directory cannot leave one
+    scanner walking files it should skip.
+
+    A fixture rather than an importable helper for the same reason as
+    :func:`bump_mtime_forward` below: ``from conftest import ...`` only
+    resolves under pytest's default ``prepend`` import mode.
+    """
+    return _agent_source_files()
+
+
+def _agent_source_files() -> list[Path]:
+    src_dir = Path(__file__).parents[1] / "src" / "grackle"
+    return [p for p in sorted(src_dir.rglob("*.py")) if "_generated" not in p.parts]
+
+
+@pytest.fixture
 def bump_mtime_forward() -> Callable[..., None]:
     """The :func:`_bump_mtime_forward` helper, as a fixture.
 

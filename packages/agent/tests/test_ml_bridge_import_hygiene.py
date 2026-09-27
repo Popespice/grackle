@@ -97,11 +97,11 @@ def test_fresh_subprocess_importing_cli_and_server_never_pulls_in_grackle_nn_or_
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_no_module_scope_grackle_nn_import_anywhere_in_agent_source() -> None:
+def test_no_module_scope_grackle_nn_import_anywhere_in_agent_source(
+    agent_source_files: list[Path],
+) -> None:
     offenders = []
-    for path in sorted(_SRC_DIR.rglob("*.py")):
-        if "_generated" in path.parts:
-            continue
+    for path in agent_source_files:
         for hit in _find_module_level_grackle_nn_imports(path.read_text(encoding="utf-8")):
             offenders.append(f"{path.relative_to(_SRC_DIR)}: {hit}")
     assert not offenders, offenders
@@ -147,9 +147,10 @@ def test_ml_bridge_itself_has_zero_module_scope_grackle_nn_imports() -> None:
     assert _find_module_level_grackle_nn_imports(ml_bridge_source) == []
 
 
-def test_agent_source_files_actually_scanned_non_vacuous() -> None:
+def test_agent_source_files_actually_scanned_non_vacuous(
+    agent_source_files: list[Path],
+) -> None:
     # Guards the scan above against silently walking zero files (a bad glob
     # or moved directory), which would make it pass vacuously.
-    scanned = [p for p in _SRC_DIR.rglob("*.py") if "_generated" not in p.parts]
-    assert len(scanned) > 20
-    assert (_SRC_DIR / "ml_bridge.py") in scanned
+    assert len(agent_source_files) > 20
+    assert (_SRC_DIR / "ml_bridge.py") in agent_source_files

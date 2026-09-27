@@ -40,7 +40,7 @@ async function readIfExists(path) {
 }
 
 /** Collect every message `type` const from messages.schema.json. */
-function schemaMessageTypes(schema) {
+export function schemaMessageTypes(schema) {
   const out = new Set();
   for (const def of Object.values(schema.$defs ?? {})) {
     for (const branch of def.allOf ?? []) {
@@ -94,7 +94,13 @@ function unionMessageTypes(src) {
   return out;
 }
 
-function diffSets(label, a, b, aName, bName) {
+export function diffSets(label, a, b, aName, bName) {
+  if (a.size === 0 && b.size === 0) {
+    console.error(
+      `  BROKEN   ${label}: both sides extracted zero message types — the guard compared nothing. This usually means an extraction regex in verify-parity.mjs broke silently, not that the schema is genuinely empty; re-running \`pnpm codegen\` will NOT fix it`
+    );
+    return 1;
+  }
   const onlyA = [...a].filter((x) => !b.has(x)).sort();
   const onlyB = [...b].filter((x) => !a.has(x)).sort();
   if (onlyA.length === 0 && onlyB.length === 0) {
@@ -206,7 +212,9 @@ export async function main() {
   failures += await checkCanonicalParity();
 
   if (failures > 0) {
-    console.error(`\nparity: ${failures} file(s) out of sync`);
+    console.error(
+      `\nparity: ${failures} check(s) failed — see the MISSING/DRIFT/BROKEN lines above for each remedy`
+    );
     process.exit(1);
   }
   console.log("\nparity: all files up to date");
