@@ -1,0 +1,15 @@
+{
+  "id": "frontend-epoch-series-float-exponent-two-digits",
+  "description": "The shared FLOAT grammar caps the exponent at two digits, so every repr with a three-digit exponent (1.5e-100, 5e-324, 1.7976931348623157e+308) fails both tuple regexes and the point vanishes silently, not even counted as dropped. The pre-existing corpus only uses exponents of one or two digits.",
+  "target": {
+    "file": "packages/frontend/src/graph/epochSeries.ts",
+    "find": "export const FLOAT = String.raw`-?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?|-?inf|nan`;",
+    "replace": "export const FLOAT = String.raw`-?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d{1,2})?|-?inf|nan`;"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/beaconGrammar.sweep.test.ts"]
+  },
+  "expect": "killed"
+}

@@ -1,0 +1,15 @@
+{
+  "id": "frontend-network-spec-linear-dim-optional",
+  "description": "LINEAR_TOKEN_RE lets the in-dimension match nothing, so a token like `linear::32` becomes a linear layer with inDim NaN (a NaN neuron column) instead of an activation glyph. The pre-existing corpus has no empty-dimension token.",
+  "target": {
+    "file": "packages/frontend/src/graph/networkSpec.ts",
+    "find": "const LINEAR_TOKEN_RE = /^linear:(\\d+):(\\d+)$/;",
+    "replace": "const LINEAR_TOKEN_RE = /^linear:(\\d*):(\\d+)$/;"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/beaconGrammar.sweep.test.ts"]
+  },
+  "expect": "killed"
+}

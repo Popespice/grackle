@@ -1,0 +1,15 @@
+{
+  "id": "frontend-epoch-series-accuracy-finite-check-dropped",
+  "description": "record_epoch only checks the loss for finiteness, so a point with a finite loss and an inf/nan accuracy is plotted instead of counted as dropped. Every pre-existing non-finite case has a non-finite loss.",
+  "target": {
+    "file": "packages/frontend/src/graph/epochSeries.ts",
+    "find": "if (!Number.isFinite(loss) || !Number.isFinite(accuracy)) {",
+    "replace": "if (!Number.isFinite(loss)) {"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/beaconGrammar.sweep.test.ts"]
+  },
+  "expect": "killed"
+}
