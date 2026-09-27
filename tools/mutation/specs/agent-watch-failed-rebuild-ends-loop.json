@@ -1,0 +1,20 @@
+{
+  "id": "agent-watch-failed-rebuild-ends-loop",
+  "description": "T6-4 (docs/test-campaigns/phase-12.md): a rebuild that returns None (a file vanished mid-parse) ends _watch_loop instead of skipping one broadcast, so the next tick's recovery rebuild never runs and watch mode is silently dead.",
+  "target": {
+    "file": "packages/agent/src/grackle/server.py",
+    "find": "            if graph is None:\n                continue",
+    "replace": "            if graph is None:\n                break"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_watch_faults.py",
+      "-k",
+      "recovers_from_a_file_deleted"
+    ]
+  },
+  "expect": "killed"
+}

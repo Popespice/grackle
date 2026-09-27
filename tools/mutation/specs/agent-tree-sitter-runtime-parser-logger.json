@@ -1,0 +1,20 @@
+{
+  "id": "agent-tree-sitter-runtime-parser-logger",
+  "description": "T7-1 (docs/test-campaigns/phase-12.md): the cached Parser gets a (no-op) debug logger. Single-threaded nothing changes. But tree-sitter calls the logger on every lex/parse step, so Python runs mid-parse and the GIL can pass to another thread that enters the same singleton. Threads then overlap inside the non-reentrant C parser: the process crashes or the trees come back wrong.",
+  "target": {
+    "file": "packages/agent/src/grackle/tree_sitter_runtime.py",
+    "find": "    return Parser(lang)",
+    "replace": "    return Parser(lang, logger=lambda _kind, _msg: None)"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_concurrency_parsers_caches.py",
+      "-k",
+      "concurrent_parses"
+    ]
+  },
+  "expect": "killed"
+}
