@@ -389,3 +389,40 @@ def test_build_seekable_missing_file(tmp_path: Path) -> None:
     assert len(agg) == 0
     assert agg.cumulative_heat_all(100) == {}
     assert idx.read_window(0, 10) == []
+
+
+# ---------------------------------------------------------------------------
+# Test campaign T5-8 (docs/test-campaigns/phase-12.md): a valid-JSON line
+# that is not an object
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "T5-8: a JSON line that parses but is not an object raises "
+        "AttributeError out of the aggregate builders instead of being skipped "
+        "like an unparsable line (docs/test-campaigns/phase-12.md)"
+    ),
+)
+@pytest.mark.parametrize("line", ["[1, 2]", "42", '"str"', "null"])
+def test_non_object_json_line_is_skipped_like_a_malformed_one(tmp_path: Path, line: str) -> None:
+    """Both builders already skip a line that fails to parse, keeping its slot
+    so offsets and aggregate indices stay aligned. A line that parses to a
+    non-object is no more an event than an unparsable one — but `.get` on it
+    raises, so one such line fails `grackle diff`, `grackle learn`,
+    `serve --trace-source` and session load for the whole file."""
+    event = {
+        "event": "call",
+        "node_id": "a.py:f",
+        "ts_ns": 0,
+        "thread_id": 1,
+        "frame_depth": 0,
+        "metadata": {},
+    }
+    trace = tmp_path / "trace.jsonl"
+    trace.write_text(f"{json.dumps(event)}\n{line}\n{json.dumps(event)}\n", encoding="utf-8")
+
+    assert TraceAggregates.build(trace).cumulative_heat_all(3) == {"a.py:f": 2}
+    _, agg = build_seekable(trace)
+    assert agg.cumulative_heat_all(3) == {"a.py:f": 2}
