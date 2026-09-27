@@ -3,7 +3,7 @@
 **Date drafted**: 2026-08-20
 **Under test**: `v0.12.0-phase-12` (main `c305deb`) — the entire stack
 **Environment**: macOS 26.5 / arm64 primary; CI matrix Ubuntu + Windows (+ macOS on main-push), Python 3.12/3.13, Node 22
-**Status**: DESIGN — probes defined, execution chunked and pending approval; findings recorded here as tiers execute
+**Status**: EXECUTING — C0–C2 done, C3–C6 pending; findings recorded here as tiers execute
 
 ## Lineage and doctrine
 
@@ -111,16 +111,17 @@ the agent-side ledger, each entry written as a **failing test first**, committed
 
 | Probe | The defect | Status |
 |---|---|---|
-| T5-1: KeyboardInterrupt outside the script body skips finalize | **Confirmed REAL GAP.** The incremental `-o` block (`cli.py:584-602`) catches `Exception` but has no `finally` — and `Tracer.run`'s `except BaseException` protects only `runpy.run_path`, not `_build_tracer` (`adapter.py:98`), which does a **full project parse** — the longest window in the whole command. A Ctrl-C there propagates, `_finalize_output` never runs, the `.part` is orphaned, and the next run at the same `-o` path is **bricked** by the exclusive-create refusal with an error message describing the wrong scenario. Four distinct escape windows identified (`_build_tracer`; `Tracer._start()` before the try — which also leaks the `sys.monitoring` tool registration process-wide; `_stop()` in the finally; the sink-captured-BaseException re-raise). The `--stream` tee path has the identical gap (`cli.py:539-541` sits after its try/finally). Repro: monkeypatch `_build_tracer` to raise `KeyboardInterrupt`; assert final file exists / no `.part` survives — fails today. The existing KI test (`test_cli_trace.py:1293`) covers only KI raised *by the traced script*, the one window that already works. | **xfail, then fix** (fix is a `try/finally` — but the sink-re-raise window means semantics need deciding first, which is why the test comes first) |
-| T5-2: `serve()` has no readiness signal | The `test_two_sessions_back_to_back` Windows flake diagnosed: `create_task(serve(...)); await asyncio.sleep(0.05)` — nothing awaitable exists between task creation and socket listen, and the store-backed fixture does strictly more pre-listen work (mkdir + orphan sweep + `detect_language` filesystem walk). `[WinError 1225]` is `ERROR_CONNECTION_REFUSED`: nothing was listening. A second window: `free_port` releases the port before `serve()` rebinds (TOCTOU; asyncio sets no `SO_REUSEADDR` on Windows). A third, latent: finalize's two default-executor round-trips inside the test's 100ms sleep budget. **The same create-task-then-sleep pattern exists at 34 sites across 10 server test files.** Repro: wrap `_ws_serve` with an injected pre-bind delay > 50ms — converts a twice-a-year Windows flake into a 100% cross-platform failure. | **xfail, then fix** (an `asyncio.Event` readiness signal or `sock=` handoff in `serve()`, then migrate all 34 sites off the sleep) |
-| T5-3: events after `session_end` diverge recording from broadcast | `server.py:777-783`: after `trace_session_end`, subsequent `trace_event`s are still ring-buffered and broadcast but silently dropped from the recording — a misbehaving producer yields a recording whose `event_count` disagrees with what every connected UI showed. Repro: send end, then two more events; compare. | **xfail or pin as documented behavior** — the probe forces the decision |
-| T5-4: ENOSPC surfaces at the wrong layer | `JsonlPartWriter.write` writes through a **buffered** stream — ENOSPC doesn't surface at the failing `write()` but at a later implicit flush or at `close()` inside `finalize()`. So `broken` stays False, `_last_good_offset` is wrong, and the truncate-salvage guard never fires. The salvage design has an untested hole exactly at the buffering boundary. Repro: a small filesystem image or an injected flush-failure. | **xfail candidate** — likely a real defect |
-| T5-5: torn multi-byte UTF-8 kills the whole file | The SIGKILL path can tear mid-UTF-8-sequence; the kill test's script is ASCII-only and never asserts the surviving prefix decodes. `read_jsonl` does one whole-file `read_text(encoding="utf-8")` — an undecodable byte fails the **entire file**, not one line. Repro: kill mid-write of non-ASCII node names. | **xfail candidate** |
-| T5-6: `finalize()` failing at `replace()` | Only the `close()` failure is tested; a `replace()` failure (destination open in another process — realistic on Windows) leaves `_finalized` False and the `.part` orphaned with no open handle. | Open probe |
+| T5-1: KeyboardInterrupt outside the script body skips finalize | **Confirmed REAL GAP.** The incremental `-o` block (`cli.py:584-602`) catches `Exception` but has no `finally` — and `Tracer.run`'s `except BaseException` protects only `runpy.run_path`, not `_build_tracer` (`adapter.py:98`), which does a **full project parse** — the longest window in the whole command. A Ctrl-C there propagates, `_finalize_output` never runs, the `.part` is orphaned, and the next run at the same `-o` path is **bricked** by the exclusive-create refusal with an error message describing the wrong scenario. Four distinct escape windows identified (`_build_tracer`; `Tracer._start()` before the try — which also leaks the `sys.monitoring` tool registration process-wide; `_stop()` in the finally; the sink-captured-BaseException re-raise). The `--stream` tee path has the identical gap (`cli.py:539-541` sits after its try/finally). Repro: monkeypatch `_build_tracer` to raise `KeyboardInterrupt`; assert final file exists / no `.part` survives — fails today. The existing KI test (`test_cli_trace.py:1293`) covers only KI raised *by the traced script*, the one window that already works. **Confirmed (C2):** all four windows and the tee path reproduced — each left a `.part` that made the next run at the same `-o` refuse to start, and the `_start()` window also leaked tool id 3 process-wide. The probe surfaced a sharper fifth symptom: a Ctrl-C landing in the sink was latched and re-raised *even when the traced program caught it and carried on* — the tracer changing the semantics of what it observes. **Fixed (C2)**, with the semantics decided as: (1) a Ctrl-C delivered while grackle's sink is on the stack is the program's interrupt — `Tracer._emit` now latches only `Exception`, so the interrupt propagates into the program exactly as it would one bytecode earlier or later, with the same outcome as the pinned script-frame case (exit 0, trace finalized); (2) `_start()` releases the tool if interrupted after `use_tool_id()`; (3) an interrupt that still escapes (the project parse, `_stop()`) settles the `.part` before re-raising — events captured so far are finalized into `-o`, and with none the `.part` is discarded, so an aborted run leaves `-o` as it found it rather than replacing a previous trace with an empty file. Six regression pins (`test_cli_trace.py`, `python_runtime/test_tracer.py`). **Residual:** a Ctrl-C landing inside `_stop()`'s own `sys.monitoring` calls or inside the settle step itself is not defended further; the CLI process exits either way. | **Confirmed + fixed (C2)** |
+| T5-2: `serve()` has no readiness signal | The `test_two_sessions_back_to_back` Windows flake diagnosed: `create_task(serve(...)); await asyncio.sleep(0.05)` — nothing awaitable exists between task creation and socket listen, and the store-backed fixture does strictly more pre-listen work (mkdir + orphan sweep + `detect_language` filesystem walk). `[WinError 1225]` is `ERROR_CONNECTION_REFUSED`: nothing was listening. A second window: `free_port` releases the port before `serve()` rebinds (TOCTOU; asyncio sets no `SO_REUSEADDR` on Windows). A third, latent: finalize's two default-executor round-trips inside the test's 100ms sleep budget. **The same create-task-then-sleep pattern exists at 34 sites across 10 server test files.** Repro: wrap `_ws_serve` with an injected pre-bind delay > 50ms — converts a twice-a-year Windows flake into a 100% cross-platform failure. **Confirmed (C2):** the repro holds exactly — with a 100 ms injected pre-bind delay, the old pattern was refused 10/10. Site count corrected: **27 sites across 11 files** (the audit's "34 across 10" did not survive a recount). **Fixed (C2):** `serve(ready=...)`, an `asyncio.Future[int]` resolved with the bound port once the socket is listening; binding port 0 now works, which closes the `free_port` probe-then-rebind window; a new `start_server` fixture in `packages/agent/tests/conftest.py` waits on it, and all 27 sites were migrated off the sleep. `ready` resolves only after the watch task exists: that task snapshots its file-change baseline before its first await, so a caller woken by `ready` can never have an edit absorbed into the baseline. The old 0.05 s sleep had been covering that ordering without saying so. `test_server_readiness.py` promoted to a regression pin. **Not done:** the third, latent window (fixed post-send sleeps before asserting store rows) — never observed failing, left as is. | **Confirmed + fixed (C2); third window open** |
+| T5-3: events after `session_end` diverge recording from broadcast | `server.py:777-783`: after `trace_session_end`, subsequent `trace_event`s are still ring-buffered and broadcast but silently dropped from the recording — a misbehaving producer yields a recording whose `event_count` disagrees with what every connected UI showed. Repro: send end, then two more events; compare. **Probed (C2) — pinned as documented behavior, not ledgered.** The divergence is real: post-end events are broadcast and ring-buffered, the UI appends them after marking the session complete (`useGraphStore.addTraceEvents` does not gate on `traceSessionComplete`), and the recording omits them. Decided as behavior-by-design: the ADR-0020 amendment defines a recording as the `start..end` session, grackle's own producer cannot send after its end (the CLI calls `finish()`, which enqueues the end, only after the tracer stops), and the recording's `event_count` agrees with the producer's own `trace_session_end.event_count`. A `trace_event` carries no session id, so the only place a "fix" could live is the fan-out or UI dropping sessionless events — a product change, not a recorder defect. `test_events_after_session_end_are_broadcast_but_not_recorded` pins both halves, each backed by a mutation spec. | **Pinned as documented behavior (C2)** |
+| T5-4: ENOSPC surfaces at the wrong layer | `JsonlPartWriter.write` writes through a **buffered** stream — ENOSPC doesn't surface at the failing `write()` but at a later implicit flush or at `close()` inside `finalize()`. So `broken` stays False, `_last_good_offset` is wrong, and the truncate-salvage guard never fires. The salvage design has an untested hole exactly at the buffering boundary. Repro: a small filesystem image or an injected flush-failure. **Confirmed (C2), both shapes**, with a disk-full raw layer placed *below* the `BufferedWriter` — where a real ENOSPC happens; the existing salvage tests inject their failure *above* it, where the failing `write()` is the one that raises. (a) Everything fits in the 8 KiB buffer: all 40 writes "succeed" (`count` 40, `broken` False, offset 4320) while 1000 bytes reached disk, ending mid-line; the error first appears at `finalize()`'s `close()`. (b) A later flush crosses the limit: the error appears at some later `write()`, not the one whose bytes were lost. Either way the torn tail survives and `count` overstates what is on disk. Salvage cannot work through the buffered handle at all: `BufferedWriter.truncate()` flushes first, so even a writer already marked broken fails again on a still-full disk. Downstream, `RecordingSink` discards the whole recording (its finalize raises) instead of salvaging the complete prefix. Ledgered strict-xfail ×2 (`python_runtime/test_writer.py`). | **Confirmed, ledgered (C2)** |
+| T5-5: torn multi-byte UTF-8 kills the whole file | The SIGKILL path can tear mid-UTF-8-sequence; the kill test's script is ASCII-only and never asserts the surviving prefix decodes. `read_jsonl` does one whole-file `read_text(encoding="utf-8")` — an undecodable byte fails the **entire file**, not one line. Repro: kill mid-write of non-ASCII node names. **Premise refuted (C2); tolerance pinned.** Both halves checked. (a) "The SIGKILL path can tear mid-UTF-8-sequence" — rare in practice: `BufferedWriter` flushes its whole buffer *before* buffering a line that does not fit, so the kernel only ever receives whole lines. A tear needs the kill to land inside `write(2)` itself (Linux can cut one short at a page boundary on a fatal signal) or a short write on a full disk (T5-4); 0 of 8 real kills with CJK node names tore. (b) "An undecodable byte fails the entire file" — true only of `read_jsonl`, which is whole-file-strict by contract (it rejects any malformed line, ASCII or not) and is reached by no salvage path. Every salvage-path reader — `build_seekable` (serve `--trace-source`, session load, `diff`), `JsonlIndex.read_window`, and `grackle learn`'s `heat_from_jsonl` — decodes per line and loses only the torn line. Pinned by a constructed torn-tail test (`python_runtime/test_jsonl_index.py`), a real-kill non-ASCII test (`test_cli_trace.py`) and an nn-side test (`tests/ml/test_labels.py`), with three mutation specs. The probe surfaced T5-7. | **Refuted, pinned (C2)** |
+| T5-6: `finalize()` failing at `replace()` | Only the `close()` failure is tested; a `replace()` failure (destination open in another process — realistic on Windows) leaves `_finalized` False and the `.part` orphaned with no open handle. **Probed (C2).** The rename is the last step, after the `close()` that flushed every event, so a failed `replace()` leaves a complete, closed `.part`: the CLI fails loudly, names it, and keeps it; `RecordingSink` discards it so it cannot block a later same-id recording. Both pinned, with three mutation specs (one reorders rename-before-close, which is harmless on POSIX but leaves an open handle behind on Windows). **One latent defect ledgered:** a retried `finalize()` on a *broken* writer re-runs `truncate()` on the already-closed handle and raises `ValueError`, not the documented `OSError` — latent because no caller retries today. **Observation, not ledgered:** after a replace failure the CLI still says "partial data kept" when the `.part` holds the whole trace — a copy fix. | **Probed; 1 latent defect ledgered (C2)** |
+| T5-7 (new, C2): a torn tail is advertised as an event | Surfaced by the T5-5 probe. `JsonlIndex.build` and `build_seekable` give every non-blank line a slot — deliberately, so offset position equals aggregate index — including a torn, unterminated final line. A salvaged `.part` served with `--trace-source` or loaded from the store therefore advertises `event_count` N+1, and the timeline's last slot reads back empty. Repro: five complete lines plus a torn sixth → `len(index) == 6`. Chiefly downstream of T5-4, the realistic source of a torn tail. Fix direction: skip an *unterminated final* line that fails to parse, which keeps the alignment invariant intact for mid-file lines. Ledgered strict-xfail (`python_runtime/test_jsonl_index.py`). | **Confirmed, ledgered (C2)** |
 
-**Promotion protocol** (applies to all 15+ ledger entries, frontend and agent): an expected-fail
+**Promotion protocol** (applies to every ledger entry, frontend and agent): an expected-fail
 turning green (strict xfail XPASS / `it.fails` passing) is the signal the defect got fixed — the
-marker is removed in the fixing PR, promoting the test to a permanent regression pin.
+marker is removed in the fixing PR, promoting the test to a permanent regression pin. C2 did this for T5-1 (six tests) and T5-2 (one) in the same PR that ledgered them; the agent-side ledger still open after C2 is T5-4 (×2), T5-6's retry case, and T5-7.
 
 ### T6 — Fault injection and recovery
 
@@ -228,7 +229,7 @@ Following the phase-1 T8 tradition: claims vs reality.
 |---|---|---|
 | **C0** | Prerequisites P-1..P-4 + T13 doc fixes | PR gate (trivial) |
 | **C1** | T3 guard-of-the-guards (parity meta-test, path-discipline lint, codegen probes) + T2 census — **done, with three items explicitly deferred** (see tier tables above for per-probe outcomes): T2-2's per-OS skip-count assertion, T3-6(a) the typo'd-`$ref` degradation probe, and T3-6(b) a cross-version codegen determinism guard | PR gate — all sub-second, Ubuntu shadow |
-| **C2** | T5 expected-fail ledger (agent side: T5-1..T5-6 written as failing tests, committed strict-xfail) + the T5-1 and T5-2 **fixes** as follow-ups within the chunk if approved | PR gate |
+| **C2** | T5 expected-fail ledger — **done**: all six probes executed against the real system (see the T5 table for per-probe outcomes). T5-1 and T5-2 confirmed, fixed, and promoted in the same PR; T5-4, T5-6's retry case, and the new T5-7 ledgered strict-xfail; T5-3 pinned as documented behavior; T5-5's premise refuted and the tolerance it doubted pinned. Every passing pin is backed by a committed mutation spec (8 new, all killed). Findings F-2–F-6 below | PR gate |
 | **C3** | T4 mutation harness + specs + T4-5 vacuous-test fixes; T11-2..T11-5 (recorder port, vacuity, store-reset, perf cliff) | Harness runs nightly; specs' *presence* checked at PR gate |
 | **C4** | T6 fault injection + T7 concurrency battery | Fast cases PR gate; hammers nightly |
 | **C5** | T8 property batteries (if P-3 approved) + T9 numerics (telemetry + sweeps + numpy matrix in `ci-matrix.yml`) + `campaign.yml` (nightly: mutation sweep, margin sweep, property long-runs, hammer tests) | Nightly + main-push |
@@ -283,6 +284,145 @@ audit: grep the agent and nn suites for equality assertions on any quantity prod
 sampling profiler, a JIT-instrumented counter, or a wall-clock timer, and convert each to the
 invariant that survives optimization. This finding is one instance of a class.
 
+### F-2 — A Ctrl-C outside the traced script's frames orphans the `-o` `.part` (T5-1)
+
+**Location.** `packages/agent/src/grackle/cli.py` (the incremental `-o` block and the `--stream`
+tee block of `trace`), `packages/agent/src/grackle/python_runtime/tracer.py` (`Tracer._start`,
+`Tracer._emit`).
+
+**Reproducer.** Monkeypatch a `KeyboardInterrupt` into each window in turn —
+`PythonRuntimeAdapter._build_tracer`, `sys.monitoring.register_callback` (inside `_start`),
+`Tracer._stop`, and the eighth `JsonlPartWriter.write` call — then run
+`grackle trace script.py -o trace.jsonl` twice.
+
+**Observed.** Every window: exit 1 ("Aborted!"), `trace.jsonl.part` left behind, no
+`trace.jsonl`, and the second run refused with "`trace.jsonl.part` already exists — either another
+trace is writing this same -o path right now, or a previous run was killed" — neither of which
+happened. The `_start` window additionally left `sys.monitoring` tool 3 registered, so every later
+`Tracer` in the process would fail at `use_tool_id()`. And a traced program that *caught* the
+`KeyboardInterrupt` and carried on still had it re-raised by the tracer after it finished.
+
+**Expected.** Which frame a Ctrl-C lands in is a race the user can neither see nor control, so the
+outcome must not depend on it: the existing pinned case (an interrupt raised in the script's own
+frame) finalizes the trace and exits 0, and the other frames should match it. An interrupt before
+any event was captured should leave `-o` exactly as it was.
+
+**Fix (applied in C2).** See the T5-1 row: `_emit` latches only `Exception`; `_start` releases the
+tool on an interrupted setup; the CLI settles the `.part` (finalize if any events, discard if none)
+before re-raising an interrupt that still escapes.
+
+**Severity.** High. A Ctrl-C is the ordinary way to stop a long trace, and it most often lands in
+the parse (the longest window) or in the sink (where a hot program spends much of its time). Before
+the fix, the most common way of stopping a trace left the user unable to trace to the same path
+again, with an error message that misdiagnosed why.
+
+**Recommendation.** Done. Keep the six pins; the script-frame test remains the oracle the other
+windows are held to.
+
+### F-3 — `serve()` has no readiness signal; every server test raced its own bind (T5-2)
+
+**Location.** `packages/agent/src/grackle/server.py` (`serve`), and 27
+`create_task(serve(...)); await asyncio.sleep(0.05)` sites across 11 test files.
+
+**Reproducer.** Wrap `server._ws_serve` in a context manager that sleeps 100 ms before binding,
+then start the server the old way and connect.
+
+**Observed.** Connection refused 10 times out of 10 (`ConnectionRefusedError(61, ...)` on macOS;
+`[WinError 1225]` is the same condition on Windows — the diagnosed `test_two_sessions_back_to_back`
+flake).
+
+**Expected.** A caller can wait until the socket is listening.
+
+**Fix (applied in C2).** `serve(ready=...)` resolves an `asyncio.Future[int]` with the bound port
+once listening, and binding port 0 now works. Tests start servers through a new `start_server`
+fixture that waits on it, which also retires `free_port`'s probe-then-rebind window.
+
+**Severity.** Medium. Test-only in effect — no product caller needs the signal today — but it was
+a real, recurring red-CI source on Windows, the failure mode that trains people to re-run instead
+of read.
+
+**Recommendation.** Done. New server tests should use `start_server`; a bare
+`create_task(serve(...))` followed by a sleep is now the anti-pattern.
+
+### F-4 — A full disk surfaces below the write buffer, so the salvage guard never fires (T5-4)
+
+**Location.** `packages/agent/src/grackle/python_runtime/writer.py` (`JsonlPartWriter.write`,
+`JsonlPartWriter.finalize`).
+
+**Reproducer.** Replace the writer's handle with `io.BufferedWriter` over a raw layer that accepts
+1000 bytes, short-writes the crossing chunk, then raises ENOSPC; write 40 events; call
+`finalize()`. (`test_part_writer_disk_full_below_the_buffer_leaves_only_complete_lines`, two
+parametrizations.)
+
+**Observed.** All 40 `write()` calls return normally (`count` 40, `broken` False,
+`_last_good_offset` 4320). `finalize()` raises ENOSPC at `close()`. The `.part` holds 1000 bytes
+ending mid-line.
+
+**Expected.** The surviving file holds only complete lines, and `count` — what the CLI reports as
+"wrote N events" and `RecordingSink` registers as `event_count` — matches them.
+
+**Fix.** Not applied (ledgered). The bookkeeping tracks bytes handed to the buffer, not bytes the
+kernel accepted, and salvage cannot run through the buffered handle (`truncate()` flushes first).
+Candidate directions: track the offset of the last complete line actually flushed (flush-aware
+accounting), or on failure truncate the raw file descriptor back to its last newline. Either way,
+avoid a syscall per event on the hot path (ADR-0020).
+
+**Severity.** Medium. Disk-full is uncommon, but when it happens the server-side recording is thrown
+away wholesale instead of salvaged, and the CLI's `.part` ends torn — exactly the case the salvage
+design exists for, and the only one it cannot handle.
+
+**Recommendation.** Fix in its own chunk; the two strict xfails are already waiting to promote.
+
+### F-5 — A retried `finalize()` on a broken writer raises `ValueError` (T5-6)
+
+**Location.** `JsonlPartWriter.finalize` (`writer.py`).
+
+**Reproducer.** Break the writer with a failed write, make the first `.part` rename fail, call
+`finalize()` twice.
+
+**Observed.** The first call raises the rename's `PermissionError` as documented; the retry raises
+`ValueError: truncate of closed file`.
+
+**Expected.** The documented contract — "Raises OSError and leaves `.part` in place if any step
+fails" — holds on a retry too, or the retry completes the rename.
+
+**Fix.** Not applied (ledgered). Skip the truncate on a retry (it already ran before the close), or
+record which steps completed.
+
+**Severity.** Low — latent. No caller retries today; the first caller written to the documented
+contract would crash on the undocumented exception type.
+
+**Recommendation.** Fix alongside F-4, which reworks the same method.
+
+### F-6 — A salvaged `.part`'s torn tail is counted as an event (T5-7)
+
+**Location.** `packages/agent/src/grackle/python_runtime/jsonl_index.py` (`JsonlIndex.build`),
+`python_runtime/aggregates.py` (`build_seekable`).
+
+**Reproducer.** Five complete JSONL lines plus a sixth cut mid-UTF-8-sequence; `build_seekable`.
+
+**Observed.** `len(index) == 6`. That length is what `serve --trace-source` and session load send
+as `trace_session_end.event_count`, and what the timeline takes as the trace's total; a seek to the
+final slot returns nothing.
+
+**Expected.** 5.
+
+**Fix.** Not applied (ledgered). See the T5-7 row: skip an unterminated final line that fails to
+parse, and leave mid-file slot alignment as it is.
+
+**Severity.** Low. Off by one, and only on salvaged files — which after the T5-5 probe means
+chiefly after a full disk (F-4).
+
+**Recommendation.** Fix with or after F-4.
+
+### Open observation (C2) — one unexplained full-suite stall
+
+During C2, one `uv run pytest -q -ra` of the agent suite stalled for over 10 minutes (normally about
+20 s) and was killed. Four immediate re-runs — one verbose, three with the original flags plus
+`faulthandler_timeout=45` — all passed in 20–24 s, and no stack was captured. It is not attributed to
+any C2 change. **Recommendation:** set `faulthandler_timeout` in the agent's pytest config so the
+next stall dumps every thread's stack into the CI log instead of reaching the job timeout silently.
+
 ## What worked well
 
 *(Populated as tiers execute — positive evidence from active probing, per the phase-0 tradition.
@@ -291,3 +431,20 @@ model the other 8 seams should copy; the `predicted_heat` byte-identity + discri
 pair; `callTree.test.ts` and the DiffPanel persistence block as pre-12.4 tests that already meet
 the battery bar; the `_EIGHT_LINES` malformed-corpus template; `test_labels.py:69`'s 1-ULP sweep
 as the numeric-property precedent.)*
+
+**C2:**
+
+- **The script-frame interrupt pin (D12.0.9) served as the oracle for T5-1.** Rather than invent
+  Ctrl-C semantics, every other window was held to the behavior already pinned for the one window
+  that worked.
+- **`BufferedWriter` hands the kernel whole lines.** It flushes the whole buffer *before* buffering
+  a line that does not fit, which is why 0 of 8 real SIGKILLs tore a line. The existing kill test's
+  "a torn partial line if the kill landed exactly mid-write" is accurate, and rarer than it reads.
+- **Rename-last ordering in `JsonlPartWriter.finalize`.** Because `replace()` runs after the
+  `close()` that flushed everything, a failed rename always leaves a complete, closed `.part`: the
+  CLI and `RecordingSink` policies (keep vs. discard) both behave correctly on it with no special
+  case.
+- **Consistent per-line decoding across packages.** `jsonl_index`, `aggregates`, and nn's `labels`
+  all catch `(json.JSONDecodeError, UnicodeDecodeError)` per line, so a torn salvage costs exactly
+  one line wherever it is read.
+
