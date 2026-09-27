@@ -1,18 +1,15 @@
 import "@testing-library/jest-dom/vitest";
-import { vi } from "vitest";
+import { afterEach, vi } from "vitest";
+import { installMatchMediaStub, resetMatchMedia } from "./matchMedia";
 
-Object.defineProperty(window, "matchMedia", {
-  writable: true,
-  value: vi.fn().mockImplementation((query: string) => ({
-    matches: false,
-    media: query,
-    onchange: null,
-    addListener: vi.fn(),
-    removeListener: vi.fn(),
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-    dispatchEvent: vi.fn(),
-  })),
+// jsdom has no matchMedia. By default the stub answers `matches: false` to
+// every query; a test that needs a preference to hold (reduced motion, a light
+// color scheme) names it with `setMatchingMediaQueries` from `./matchMedia`
+// (campaign T11-7). The per-test reset clears that preference and installs a
+// fresh stub, so neither it nor anything a test did to the stub leaks forward.
+installMatchMediaStub();
+afterEach(() => {
+  resetMatchMedia();
 });
 
 // jsdom implements no layout, so Element.prototype.scrollIntoView is absent in

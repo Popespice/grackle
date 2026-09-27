@@ -1,0 +1,15 @@
+{
+  "id": "frontend-session-library-panel-no-request-on-connect",
+  "description": "SessionLibraryPanel fires its list request on 'connecting', where refresh() is a no-op — the list is never fetched when the socket opens (T11-6).",
+  "target": {
+    "file": "packages/frontend/src/panels/SessionLibraryPanel.tsx",
+    "find": "if (status === \"connected\") refresh();",
+    "replace": "if (status === \"connecting\") refresh();"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/panels/SessionLibraryPanel.test.tsx"]
+  },
+  "expect": "killed"
+}

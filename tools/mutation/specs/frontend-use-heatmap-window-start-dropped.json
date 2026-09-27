@@ -1,0 +1,15 @@
+{
+  "id": "frontend-use-heatmap-window-start-dropped",
+  "description": "useHeatmap stops passing traceWindowStart — in seekable mode the absolute playhead indexes the window as if it started at 0 (T11-6).",
+  "target": {
+    "file": "packages/frontend/src/graph/useHeatmap.ts",
+    "find": "      traceWindowSize,\n      traceWindowStart\n    );",
+    "replace": "      traceWindowSize\n    );"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/useHeatmap.test.tsx"]
+  },
+  "expect": "killed"
+}

@@ -1,0 +1,15 @@
+{
+  "id": "frontend-panels-init-slot-typo-invisible",
+  "description": "The stats panel is registered into a misspelt slot — an open-string no-op (ADR-0004), so it silently never renders (T11-6).",
+  "target": {
+    "file": "packages/frontend/src/panels/init.ts",
+    "find": "slot: \"bottom-status\",\n  id: \"stats-panel\",",
+    "replace": "slot: \"bottom_status\",\n  id: \"stats-panel\","
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/panels/init.test.ts"]
+  },
+  "expect": "killed"
+}
