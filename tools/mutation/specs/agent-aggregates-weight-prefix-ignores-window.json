@@ -1,0 +1,15 @@
+{
+  "id": "agent-aggregates-weight-prefix-ignores-window",
+  "description": "The weighted cumulative_heat returns the node's final prefix total (wp[-1]) instead of wp[pos - 1], so a count-weighted (Go/Rust) trace shows its end-of-run heat at every playhead position.",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/aggregates.py",
+    "find": "                return wp[pos - 1]",
+    "replace": "                return wp[-1]"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/python_runtime/test_aggregates_weighting.py"]
+  },
+  "expect": "killed"
+}

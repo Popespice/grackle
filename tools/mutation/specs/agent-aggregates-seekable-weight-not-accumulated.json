@@ -1,0 +1,15 @@
+{
+  "id": "agent-aggregates-seekable-weight-not-accumulated",
+  "description": "build_seekable stores each hit's own weight instead of the running prefix sum, so every node's heat is stuck at its latest event's count (1 for an unweighted trace) — serve --trace-source, session load and the session library's heat queries all under-report.",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/aggregates.py",
+    "find": "\n                        wp.append((wp[-1] if wp else 0) + count)",
+    "replace": "\n                        wp.append(count)"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_aggregates.py", "-k", "seekable"]
+  },
+  "expect": "killed"
+}

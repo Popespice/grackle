@@ -1,0 +1,15 @@
+{
+  "id": "agent-aggregates-heat-window-inclusive",
+  "description": "cumulative_heat's bisect drops its `- 1`, so the window becomes [0, at_index] instead of [0, at_index): the event under the playhead counts as already fired and every heat read (seek, heat map, diff) is one event early.",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/aggregates.py",
+    "find": "        pos = bisect.bisect_right(hits, at_index - 1)",
+    "replace": "        pos = bisect.bisect_right(hits, at_index)"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_aggregates.py"]
+  },
+  "expect": "killed"
+}

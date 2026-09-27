@@ -1,0 +1,15 @@
+{
+  "id": "agent-diff-static-at-index-zero-means-full",
+  "description": "diff_trace_vs_static defaults at_index by truthiness, so an explicit at_index=0 (playhead at the start) is read as 'whole session' and every node touched anywhere is reported touched instead of cold.",
+  "target": {
+    "file": "packages/agent/src/grackle/diff.py",
+    "find": "    idx = at_index if at_index is not None else len(aggregates)",
+    "replace": "    idx = at_index or len(aggregates)"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_diff.py"]
+  },
+  "expect": "killed"
+}

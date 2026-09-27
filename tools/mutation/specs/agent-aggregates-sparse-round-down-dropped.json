@@ -1,0 +1,15 @@
+{
+  "id": "agent-aggregates-sparse-round-down-dropped",
+  "description": "cumulative_heat drops the sparse round-down as redundant (only multiples of k are recorded anyway). It is not: mid-bucket queries now count the bucket-start hit, so the answer is no longer the documented as-of-floor(at/k)*k value.",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/aggregates.py",
+    "find": "        if self._sparse_k > 1:\n            # Round down to nearest multiple\n            at_index = (at_index // self._sparse_k) * self._sparse_k\n",
+    "replace": ""
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_aggregates.py", "-k", "sparse"]
+  },
+  "expect": "killed"
+}

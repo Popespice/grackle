@@ -1,0 +1,15 @@
+{
+  "id": "agent-value-repr-list-at-cap-marked-truncated",
+  "description": "A list/tuple holding exactly max_items elements gets a spurious '...' and truncated=True (`n >= maxiter`), so the inspector flags a fully shown value as elided.",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/value_repr.py",
+    "find": "        if n > maxiter:",
+    "replace": "        if n >= maxiter:"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/python_runtime/test_value_repr.py"]
+  },
+  "expect": "killed"
+}

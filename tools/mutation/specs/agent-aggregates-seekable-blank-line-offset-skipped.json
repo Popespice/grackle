@@ -1,0 +1,15 @@
+{
+  "id": "agent-aggregates-seekable-blank-line-offset-skipped",
+  "description": "build_seekable's blank-line branch skips a blank line without advancing the byte offset, so every seek-index offset after it points short of its line and read_window drops those events.",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/aggregates.py",
+    "find": "                if not stripped:\n                    offset += line_len\n                    continue",
+    "replace": "                if not stripped:\n                    continue"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_aggregates.py", "-k", "seekable"]
+  },
+  "expect": "killed"
+}
