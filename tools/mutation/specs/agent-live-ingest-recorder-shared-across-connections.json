@@ -1,0 +1,15 @@
+{
+  "id": "agent-live-ingest-recorder-shared-across-connections",
+  "description": "The per-connection recorder becomes one module-level recorder, so a second producer's session_start finalizes the first producer's recording early and both sessions' events land in one file. Sequential sessions on a single connection cannot tell (campaign T7-5).",
+  "target": {
+    "file": "packages/agent/src/grackle/server.py",
+    "find": "    recorder: RecordingSink | None = None",
+    "replace": "    global recorder\n    recorder = globals().get(\"recorder\")"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_server_ingest_faults.py", "-k", "interleaved"]
+  },
+  "expect": "killed"
+}
