@@ -400,3 +400,35 @@ broadcast to, and the next connect gets a fresh parse via `_push_static_graph` r
   and the subsequent stat/read) shared with every other filesystem-based check in this codebase;
   the fallback path (leave the prior entry as-is) bounds the resulting imperfection to at most
   one extra tick, never a crash or an infinite loop.
+
+## Amendment — test campaign C4 (2026-09-27)
+
+Three of the Known limitations above were probed by test campaign C4
+(`docs/test-campaigns/phase-12.md`, tiers T6-4, T7-1 and T7-4). Where this amendment and the
+text above disagree, this amendment wins.
+
+- **Parser thread-safety is audited, not unaudited.** py-tree-sitter 0.25.2 holds the GIL for
+  the whole `parse(bytes)` call, so concurrent callers never overlap inside the C parser: 8
+  threads × 4 parses on TS, TSX, Go and Rust matched the single-threaded trees exactly, and
+  concurrent walker runs matched too (`packages/agent/tests/test_concurrency_parsers_caches.py`).
+  The safety is the GIL's, not a lock's. When threads genuinely overlap on the shared `Parser` —
+  forced through the read-callback form of `parse` — the process crashed in 10 of 10 runs
+  (SIGSEGV/SIGBUS). That form is also the only one that accepts `progress_callback`, which
+  replaces the deprecated `timeout_micros`, so the "cooperatively cancellable parser" future-work
+  item above requires a per-thread `Parser` first. The same holds for a free-threaded CPython or a
+  binding that releases the GIL while parsing.
+- **`meta_cache` is bounded.** It has since gained FIFO eviction through `_cache_bounded`
+  (`_META_CACHE_MAX = 64`), so the "grows unboundedly" consequence and the "no eviction" limitation
+  are superseded. The `except (StopIteration, RuntimeError)` benign-race guard in
+  `_cache_bounded` is reachable from the watch executor racing the connect path — about once per
+  300k calls at the default switch interval — and is pinned. Without it, the connect-path push
+  silently loses `predicted_heat`, and the `meta_cache` race raises out of `_build_static_graph`,
+  which on the watch thread ends watch mode. The `StopIteration` half is unreachable (eviction
+  only runs above the cap).
+- **Two new watch-mode defects, ledgered as strict xfails (not fixed):**
+  - A file that vanishes between the walker's listing and its `CacheManager.get` hash aborts the
+    whole parse, so the rebuild is dropped (and a client connecting at that instant gets no
+    `static_graph`).
+  - A file that blinks out and back during a rebuild leaves every client stale until some
+    unrelated edit arrives, because the watcher has already advanced its snapshot past the
+    triggering edit when `_watch_loop` drops a failed rebuild with `continue`.
