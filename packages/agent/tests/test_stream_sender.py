@@ -12,7 +12,6 @@ Design notes:
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import time
 from typing import TYPE_CHECKING, Any
@@ -25,11 +24,12 @@ from grackle.python_runtime.stream_sender import (
     _SENTINEL,
     TraceStreamSender,
 )
-from grackle.server import serve
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
     from pathlib import Path
+
+    from conftest import StartServer
 
     from grackle.adapters.base import TraceEvent as _TraceEvent
 
@@ -56,14 +56,10 @@ def _make_event(i: int) -> _TraceEvent:
 
 
 @pytest.fixture
-async def live_server(free_port: int, tmp_path: Path) -> AsyncGenerator[int, None]:
+async def live_server(start_server: StartServer, tmp_path: Path) -> AsyncGenerator[int, None]:
     """Server with no trace_source (live-attach mode)."""
-    task = asyncio.create_task(serve("127.0.0.1", free_port, root=tmp_path))
-    await asyncio.sleep(0.05)
-    yield free_port
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
+    _, port = await start_server(root=tmp_path)
+    yield port
 
 
 async def _collect_until_end(

@@ -15,19 +15,19 @@ These exercise the full server over a real WebSocket with both a
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from websockets.asyncio.client import connect
 
-from grackle.server import serve
 from grackle.session_store import SessionStore
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
     from pathlib import Path
+
+    from conftest import StartServer
 
 
 def _make_event(node_id: str, i: int) -> dict[str, Any]:
@@ -77,7 +77,7 @@ async def _request(ws: Any, type_: str, payload: dict[str, Any], reply_type: str
 
 @pytest.fixture
 async def server_with_store(
-    free_port: int, tmp_path: Path
+    start_server: StartServer, tmp_path: Path
 ) -> AsyncGenerator[tuple[int, Path], None]:
     """Server started with a trace file + a session store."""
     trace_path = tmp_path / "trace.jsonl"
@@ -89,21 +89,13 @@ async def server_with_store(
         encoding="utf-8",
     )
     store = SessionStore.open(tmp_path / "sessions.db")
-    task = asyncio.create_task(
-        serve(
-            "127.0.0.1",
-            free_port,
-            root=tmp_path,
-            trace_source=trace_path,
-            pace=False,
-            store=store,
-        )
+    _, port = await start_server(
+        root=tmp_path,
+        trace_source=trace_path,
+        pace=False,
+        store=store,
     )
-    await asyncio.sleep(0.05)
-    yield free_port, trace_path
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
+    yield port, trace_path
 
 
 async def test_trace_query_cumulative_heat(server_with_store: tuple[int, Path]) -> None:

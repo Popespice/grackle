@@ -1,8 +1,10 @@
+import asyncio
+import contextlib
 import os
 import socket
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -13,6 +15,52 @@ def free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return cast("int", s.getsockname()[1])
+
+
+StartServer = Callable[..., Awaitable[tuple["asyncio.Task[None]", int]]]
+
+
+@pytest.fixture
+async def start_server() -> AsyncIterator[StartServer]:
+    """Start ``grackle.server.serve`` and return ``(task, port)`` once the
+    socket is listening. Keyword arguments pass through to ``serve()``.
+
+    Use this, never ``create_task(serve(...))`` followed by a sleep
+    (campaign T5-2, ``docs/test-campaigns/phase-12.md``): nothing awaitable
+    sits between task creation and the bind, so a fixed sleep is a race a
+    slow runner loses — the ``[WinError 1225]`` connect-refused flake. This
+    waits on ``serve()``'s readiness future instead, and binds port 0 so the
+    OS assigns the port at bind time; ``free_port`` probes a number and
+    releases it before ``serve()`` rebinds it, and another process can take
+    it in between.
+
+    Stop a server early with ``task.cancel()`` and await it; any still
+    running are stopped at teardown. A fixture rather than an importable
+    helper for the reason given at :func:`bump_mtime_forward`.
+    """
+    from grackle.server import serve
+
+    tasks: list[asyncio.Task[None]] = []
+
+    async def _start(**kwargs: Any) -> tuple[asyncio.Task[None], int]:
+        ready: asyncio.Future[int] = asyncio.get_running_loop().create_future()
+        task = asyncio.create_task(serve("127.0.0.1", 0, ready=ready, **kwargs))
+        tasks.append(task)
+        either: set[asyncio.Future[Any]] = {ready, task}
+        await asyncio.wait(either, timeout=30.0, return_when=asyncio.FIRST_COMPLETED)
+        if not ready.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task  # re-raises serve()'s own error if it died before the bind
+            raise TimeoutError("serve() was not listening within 30s")
+        return task, ready.result()
+
+    yield _start
+    for task in tasks:
+        task.cancel()
+    # return_exceptions: a serve() that died before its bind already raised
+    # out of _start(); re-raising it here would report the one failure twice.
+    await asyncio.gather(*tasks, return_exceptions=True)
 
 
 @pytest.fixture

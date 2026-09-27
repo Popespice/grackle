@@ -13,10 +13,11 @@ from typing import TYPE_CHECKING, Any
 from websockets.asyncio.client import connect
 
 import grackle.server as server_module
-from grackle.server import serve
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from conftest import StartServer
 
 
 async def _recv_json(ws: Any, timeout: float = 5.0) -> dict[str, Any]:
@@ -25,8 +26,12 @@ async def _recv_json(ws: Any, timeout: float = 5.0) -> dict[str, Any]:
     return result
 
 
-async def _start_watch_server(free_port: int, root: Path, watch_interval: float = 0.1) -> Any:
+async def _start_watch_server(
+    start_server: StartServer, root: Path, watch_interval: float = 0.1
+) -> tuple[asyncio.Task[None], int]:
     """Start `serve(watch=True, watch_poll=True)` and wait for it to come up.
+
+    Returns ``(task, port)`` — the port is OS-assigned (see ``start_server``).
 
     `watch_poll=True` forces the deterministic stdlib poller regardless of
     whether the optional `watchfiles` package is installed, so these tests
@@ -37,18 +42,12 @@ async def _start_watch_server(free_port: int, root: Path, watch_interval: float 
     at this point is part of the baseline (not a "change" the watcher will
     ever report), and only edits made *after* this returns are observable.
     """
-    task = asyncio.create_task(
-        serve(
-            "127.0.0.1",
-            free_port,
-            root=root,
-            watch=True,
-            watch_interval=watch_interval,
-            watch_poll=True,
-        )
+    return await start_server(
+        root=root,
+        watch=True,
+        watch_interval=watch_interval,
+        watch_poll=True,
     )
-    await asyncio.sleep(0.05)
-    return task
 
 
 async def _stop_server(task: Any) -> None:
@@ -57,11 +56,13 @@ async def _stop_server(task: Any) -> None:
         await task
 
 
-async def test_watch_add_file_rebroadcasts_growth(free_port: int, tmp_path: Path) -> None:
+async def test_watch_add_file_rebroadcasts_growth(
+    start_server: StartServer, tmp_path: Path
+) -> None:
     (tmp_path / "a.py").write_text("def f():\n    pass\n", encoding="utf-8")
-    task = await _start_watch_server(free_port, tmp_path)
+    task, port = await _start_watch_server(start_server, tmp_path)
     try:
-        async with connect(f"ws://127.0.0.1:{free_port}") as ws:
+        async with connect(f"ws://127.0.0.1:{port}") as ws:
             first = await _recv_json(ws)
             assert first["type"] == "static_graph"
             first_nodes = len(first["payload"]["nodes"])
@@ -75,12 +76,14 @@ async def test_watch_add_file_rebroadcasts_growth(free_port: int, tmp_path: Path
         await _stop_server(task)
 
 
-async def test_watch_identical_rewrite_produces_no_push(free_port: int, tmp_path: Path) -> None:
+async def test_watch_identical_rewrite_produces_no_push(
+    start_server: StartServer, tmp_path: Path
+) -> None:
     f = tmp_path / "a.py"
     f.write_text("def f():\n    pass\n", encoding="utf-8")
-    task = await _start_watch_server(free_port, tmp_path)
+    task, port = await _start_watch_server(start_server, tmp_path)
     try:
-        async with connect(f"ws://127.0.0.1:{free_port}") as ws:
+        async with connect(f"ws://127.0.0.1:{port}") as ws:
             first = await _recv_json(ws)
             assert first["type"] == "static_graph"
 
@@ -100,13 +103,15 @@ async def test_watch_identical_rewrite_produces_no_push(free_port: int, tmp_path
         await _stop_server(task)
 
 
-async def test_watch_delete_file_rebroadcasts_shrink(free_port: int, tmp_path: Path) -> None:
+async def test_watch_delete_file_rebroadcasts_shrink(
+    start_server: StartServer, tmp_path: Path
+) -> None:
     (tmp_path / "a.py").write_text("def f():\n    pass\n", encoding="utf-8")
     b = tmp_path / "b.py"
     b.write_text("def g():\n    pass\n", encoding="utf-8")
-    task = await _start_watch_server(free_port, tmp_path)
+    task, port = await _start_watch_server(start_server, tmp_path)
     try:
-        async with connect(f"ws://127.0.0.1:{free_port}") as ws:
+        async with connect(f"ws://127.0.0.1:{port}") as ws:
             first = await _recv_json(ws)
             assert first["type"] == "static_graph"
             first_nodes = len(first["payload"]["nodes"])
@@ -120,13 +125,15 @@ async def test_watch_delete_file_rebroadcasts_shrink(free_port: int, tmp_path: P
         await _stop_server(task)
 
 
-async def test_watch_broadcasts_to_all_connected_clients(free_port: int, tmp_path: Path) -> None:
+async def test_watch_broadcasts_to_all_connected_clients(
+    start_server: StartServer, tmp_path: Path
+) -> None:
     (tmp_path / "a.py").write_text("def f():\n    pass\n", encoding="utf-8")
-    task = await _start_watch_server(free_port, tmp_path)
+    task, port = await _start_watch_server(start_server, tmp_path)
     try:
         async with (
-            connect(f"ws://127.0.0.1:{free_port}") as ws1,
-            connect(f"ws://127.0.0.1:{free_port}") as ws2,
+            connect(f"ws://127.0.0.1:{port}") as ws1,
+            connect(f"ws://127.0.0.1:{port}") as ws2,
         ):
             first1 = await _recv_json(ws1)
             first2 = await _recv_json(ws2)
@@ -146,14 +153,14 @@ async def test_watch_broadcasts_to_all_connected_clients(free_port: int, tmp_pat
 
 
 async def test_watch_shutdown_with_pending_change_does_not_hang(
-    free_port: int, tmp_path: Path
+    start_server: StartServer, tmp_path: Path
 ) -> None:
     """Cancelling `serve()` must cancel+reap the watch task, never hang (ADR-0027 guard #2)."""
     (tmp_path / "a.py").write_text("def f():\n    pass\n", encoding="utf-8")
     # A long interval guarantees the watch loop is parked in its poll sleep
     # (not mid-tick) at the moment we cancel — the scenario most likely to
     # hang if the watch task were never cancelled in serve()'s finally.
-    task = await _start_watch_server(free_port, tmp_path, watch_interval=5.0)
+    task, _ = await _start_watch_server(start_server, tmp_path, watch_interval=5.0)
 
     (tmp_path / "b.py").write_text("def g():\n    pass\n", encoding="utf-8")  # a pending change
 
@@ -164,7 +171,7 @@ async def test_watch_shutdown_with_pending_change_does_not_hang(
 
 
 async def test_watch_rebuild_cancellation_does_not_block_shutdown(
-    free_port: int, tmp_path: Path, monkeypatch: Any
+    start_server: StartServer, tmp_path: Path, monkeypatch: Any
 ) -> None:
     """Cancelling serve() WHILE a rebuild is genuinely in-flight must not block on it.
 
@@ -207,9 +214,9 @@ async def test_watch_rebuild_cancellation_does_not_block_shutdown(
             rebuild_done.set()
 
     (tmp_path / "a.py").write_text("def f():\n    pass\n", encoding="utf-8")
-    task = await _start_watch_server(free_port, tmp_path, watch_interval=0.1)
+    task, port = await _start_watch_server(start_server, tmp_path, watch_interval=0.1)
 
-    async with connect(f"ws://127.0.0.1:{free_port}") as ws:
+    async with connect(f"ws://127.0.0.1:{port}") as ws:
         await _recv_json(ws)  # initial static_graph — unpatched, so this is fast
 
         # Patch only AFTER the initial connect-time push, so only the
@@ -245,7 +252,7 @@ async def test_watch_rebuild_cancellation_does_not_block_shutdown(
 
 
 async def test_watch_uses_a_dedicated_executor_not_the_loop_default(
-    free_port: int, tmp_path: Path, monkeypatch: Any
+    start_server: StartServer, tmp_path: Path, monkeypatch: Any
 ) -> None:
     """Regression test for a review finding: test_watch_rebuild_cancellation_does_not_block_shutdown
     cannot itself discriminate "a dedicated executor" from "loop.run_in_executor(None, ...)" (the
@@ -267,9 +274,9 @@ async def test_watch_uses_a_dedicated_executor_not_the_loop_default(
     monkeypatch.setattr(concurrent.futures.ThreadPoolExecutor, "__init__", _tracking_init)
 
     (tmp_path / "a.py").write_text("def f():\n    pass\n", encoding="utf-8")
-    task = await _start_watch_server(free_port, tmp_path)
+    task, port = await _start_watch_server(start_server, tmp_path)
     try:
-        async with connect(f"ws://127.0.0.1:{free_port}"):
+        async with connect(f"ws://127.0.0.1:{port}"):
             pass
     finally:
         await _stop_server(task)

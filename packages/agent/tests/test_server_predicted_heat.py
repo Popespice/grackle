@@ -18,10 +18,11 @@ from grackle import ml_bridge
 from grackle.adapters import registry
 from grackle.adapters.base import ParseOptions
 from grackle.python_runtime.aggregates import TraceAggregates
-from grackle.server import serve
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
+
+    from conftest import StartServer
 
 _TINY_PYTHON_APP = Path(__file__).parent.parent.parent.parent / "fixtures" / "tiny-python-app"
 
@@ -46,16 +47,6 @@ def trained_model(tmp_path: Path) -> Path:
     return out
 
 
-def _free_port() -> int:
-    """A second free port, independent of the `free_port` fixture (which can
-    only be requested once per test via normal fixture injection)."""
-    import socket
-
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return int(s.getsockname()[1])
-
-
 async def _recv_json(ws: Any, timeout: float = 5.0) -> dict[str, Any]:
     raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
     result: dict[str, Any] = json.loads(raw)
@@ -63,11 +54,9 @@ async def _recv_json(ws: Any, timeout: float = 5.0) -> dict[str, Any]:
 
 
 async def _start_server(
-    port: int, root: Path = _TINY_PYTHON_APP, **kwargs: Any
-) -> asyncio.Task[None]:
-    task = asyncio.create_task(serve("127.0.0.1", port, root=root, **kwargs))
-    await asyncio.sleep(0.05)
-    return task
+    start_server: StartServer, root: Path = _TINY_PYTHON_APP, **kwargs: Any
+) -> tuple[asyncio.Task[None], int]:
+    return await start_server(root=root, **kwargs)
 
 
 async def _stop_server(task: asyncio.Task[None]) -> None:
@@ -81,10 +70,12 @@ async def _stop_server(task: asyncio.Task[None]) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_predicted_heat_present_with_model(free_port: int, trained_model: Path) -> None:
-    task = await _start_server(free_port, model_path=trained_model)
+async def test_predicted_heat_present_with_model(
+    start_server: StartServer, trained_model: Path
+) -> None:
+    task, port = await _start_server(start_server, model_path=trained_model)
     try:
-        async with connect(f"ws://127.0.0.1:{free_port}") as ws:
+        async with connect(f"ws://127.0.0.1:{port}") as ws:
             data = await _recv_json(ws)
         payload = data["payload"]
         assert "predicted_heat" in payload["metadata"]
@@ -98,10 +89,10 @@ async def test_predicted_heat_present_with_model(free_port: int, trained_model: 
         await _stop_server(task)
 
 
-async def test_predicted_heat_absent_without_model(free_port: int) -> None:
-    task = await _start_server(free_port)
+async def test_predicted_heat_absent_without_model(start_server: StartServer) -> None:
+    task, port = await _start_server(start_server)
     try:
-        async with connect(f"ws://127.0.0.1:{free_port}") as ws:
+        async with connect(f"ws://127.0.0.1:{port}") as ws:
             data = await _recv_json(ws)
         assert sorted(data["payload"]["metadata"].keys()) == ["cycles", "hub_score"]
     finally:
@@ -109,21 +100,20 @@ async def test_predicted_heat_absent_without_model(free_port: int) -> None:
 
 
 async def test_predicted_heat_byte_identity_absent_vs_gate_closed_with_model(
-    free_port: int, trained_model: Path, monkeypatch: pytest.MonkeyPatch
+    start_server: StartServer, trained_model: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The serialized payload with no model configured equals the payload
     with a model configured but the ML gate forced closed — absence is
     byte-identical regardless of WHY predicted_heat is missing."""
-    task_absent = await _start_server(free_port)
+    task_absent, port = await _start_server(start_server)
     try:
-        async with connect(f"ws://127.0.0.1:{free_port}") as ws:
+        async with connect(f"ws://127.0.0.1:{port}") as ws:
             absent = await _recv_json(ws)
     finally:
         await _stop_server(task_absent)
 
     monkeypatch.setattr(ml_bridge, "learn_available", lambda: False)
-    port2 = _free_port()
-    task_gated = await _start_server(port2, model_path=trained_model)
+    task_gated, port2 = await _start_server(start_server, model_path=trained_model)
     try:
         async with connect(f"ws://127.0.0.1:{port2}") as ws:
             gated = await _recv_json(ws)
@@ -137,7 +127,7 @@ async def test_predicted_heat_byte_identity_absent_vs_gate_closed_with_model(
 
 
 async def test_byte_identity_comparison_is_discriminating(
-    free_port: int, trained_model: Path
+    start_server: StartServer, trained_model: Path
 ) -> None:
     """Mutation check for the byte-identity test above.
 
@@ -147,15 +137,14 @@ async def test_byte_identity_comparison_is_discriminating(
     than vacuously true — comparing two hand-written literal dicts would only
     have re-tested ``json.dumps``, not any code in this package.
     """
-    task_absent = await _start_server(free_port)
+    task_absent, port = await _start_server(start_server)
     try:
-        async with connect(f"ws://127.0.0.1:{free_port}") as ws:
+        async with connect(f"ws://127.0.0.1:{port}") as ws:
             absent = await _recv_json(ws)
     finally:
         await _stop_server(task_absent)
 
-    port2 = _free_port()
-    task_present = await _start_server(port2, model_path=trained_model)
+    task_present, port2 = await _start_server(start_server, model_path=trained_model)
     try:
         async with connect(f"ws://127.0.0.1:{port2}") as ws:
             present = await _recv_json(ws)
@@ -174,7 +163,7 @@ async def test_byte_identity_comparison_is_discriminating(
 
 
 async def test_predicted_heat_cached_across_connects_recomputed_on_mtime_bump(
-    free_port: int,
+    start_server: StartServer,
     trained_model: Path,
     monkeypatch: pytest.MonkeyPatch,
     bump_mtime_forward: Callable[..., None],
@@ -189,17 +178,17 @@ async def test_predicted_heat_cached_across_connects_recomputed_on_mtime_bump(
 
     monkeypatch.setattr(ml_bridge, "predict_scores", _counting_predict)
 
-    task = await _start_server(free_port, model_path=trained_model)
+    task, port = await _start_server(start_server, model_path=trained_model)
     try:
-        async with connect(f"ws://127.0.0.1:{free_port}") as ws:
+        async with connect(f"ws://127.0.0.1:{port}") as ws:
             await _recv_json(ws)
-        async with connect(f"ws://127.0.0.1:{free_port}") as ws:
+        async with connect(f"ws://127.0.0.1:{port}") as ws:
             await _recv_json(ws)
         assert len(calls) == 1, "second connect with an unchanged model must hit the cache"
 
         bump_mtime_forward(trained_model)  # guaranteed-distinct mtime, not wall-clock drift
 
-        async with connect(f"ws://127.0.0.1:{free_port}") as ws:
+        async with connect(f"ws://127.0.0.1:{port}") as ws:
             await _recv_json(ws)
         assert len(calls) == 2, "an mtime bump must bust the cache and recompute"
     finally:
@@ -207,7 +196,7 @@ async def test_predicted_heat_cached_across_connects_recomputed_on_mtime_bump(
 
 
 async def test_predicted_heat_invalidates_on_rename_with_unchanged_edge_topology(
-    free_port: int, tmp_path: Path, trained_model: Path
+    start_server: StartServer, tmp_path: Path, trained_model: Path
 ) -> None:
     """Regression: the predicted-heat cache key must be sensitive to node
     identity, not just edge topology. A rename with no edges attached to the
@@ -219,9 +208,9 @@ async def test_predicted_heat_invalidates_on_rename_with_unchanged_edge_topology
     root.mkdir()
     (root / "a.py").write_text("def f():\n    pass\n", encoding="utf-8")
 
-    task = await _start_server(free_port, root=root, model_path=trained_model)
+    task, port = await _start_server(start_server, root=root, model_path=trained_model)
     try:
-        async with connect(f"ws://127.0.0.1:{free_port}") as ws:
+        async with connect(f"ws://127.0.0.1:{port}") as ws:
             first = await _recv_json(ws)
         first_ph = first["payload"]["metadata"]["predicted_heat"]
         first_node_ids = {n["id"] for n in first["payload"]["nodes"]}
@@ -239,8 +228,7 @@ async def test_predicted_heat_invalidates_on_rename_with_unchanged_edge_topology
     finally:
         await _stop_server(task)
 
-    port2 = _free_port()
-    task2 = await _start_server(port2, root=root, model_path=trained_model)
+    task2, port2 = await _start_server(start_server, root=root, model_path=trained_model)
     try:
         async with connect(f"ws://127.0.0.1:{port2}") as ws:
             second = await _recv_json(ws)
@@ -419,14 +407,14 @@ def test_meta_cache_does_not_serve_stale_node_ids_after_rename(tmp_path: Path) -
 
 
 async def test_predicted_heat_corrupt_model_no_key_no_crash(
-    free_port: int, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    start_server: StartServer, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     bad = tmp_path / "bad.npz"
     bad.write_bytes(b"not a real npz file")
 
-    task = await _start_server(free_port, model_path=bad)
+    task, port = await _start_server(start_server, model_path=bad)
     try:
-        async with connect(f"ws://127.0.0.1:{free_port}") as ws:
+        async with connect(f"ws://127.0.0.1:{port}") as ws:
             data = await _recv_json(ws)
         assert "predicted_heat" not in data["payload"]["metadata"]
     finally:
@@ -437,7 +425,7 @@ async def test_predicted_heat_corrupt_model_no_key_no_crash(
 
 
 async def test_predicted_heat_gate_closed_with_model_warns_once_not_per_connect(
-    free_port: int,
+    start_server: StartServer,
     trained_model: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -448,10 +436,10 @@ async def test_predicted_heat_gate_closed_with_model_warns_once_not_per_connect(
     outcome, which this branch previously lacked."""
     monkeypatch.setattr(ml_bridge, "learn_available", lambda: False)
 
-    task = await _start_server(free_port, model_path=trained_model)
+    task, port = await _start_server(start_server, model_path=trained_model)
     try:
         for _ in range(3):
-            async with connect(f"ws://127.0.0.1:{free_port}") as ws:
+            async with connect(f"ws://127.0.0.1:{port}") as ws:
                 data = await _recv_json(ws)
             assert "predicted_heat" not in data["payload"]["metadata"]
     finally:
@@ -462,7 +450,7 @@ async def test_predicted_heat_gate_closed_with_model_warns_once_not_per_connect(
 
 
 async def test_gate_closed_warns_once_even_as_the_graph_changes(
-    free_port: int,
+    start_server: StartServer,
     tmp_path: Path,
     trained_model: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -480,20 +468,15 @@ async def test_gate_closed_warns_once_even_as_the_graph_changes(
     root.mkdir()
     (root / "a.py").write_text("def f():\n    pass\n", encoding="utf-8")
 
-    task = asyncio.create_task(
-        serve(
-            "127.0.0.1",
-            free_port,
-            root=root,
-            watch=True,
-            watch_interval=0.1,
-            watch_poll=True,
-            model_path=trained_model,
-        )
+    task, port = await start_server(
+        root=root,
+        watch=True,
+        watch_interval=0.1,
+        watch_poll=True,
+        model_path=trained_model,
     )
-    await asyncio.sleep(0.05)
     try:
-        async with connect(f"ws://127.0.0.1:{free_port}") as ws:
+        async with connect(f"ws://127.0.0.1:{port}") as ws:
             await _recv_json(ws)
             for name in ("b.py", "c.py", "d.py"):
                 (root / name).write_text(f"def {name[0]}():\n    pass\n", encoding="utf-8")
@@ -535,15 +518,15 @@ async def test_predicted_heat_cache_is_bounded_under_repeated_edits(
 
 
 async def test_predicted_heat_missing_model_file_no_key_no_warning(
-    free_port: int, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    start_server: StartServer, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """An unconfigured/never-created model is the common case, not a fault —
     it must not log a warning on every connect."""
     never_created = tmp_path / "does-not-exist.npz"
 
-    task = await _start_server(free_port, model_path=never_created)
+    task, port = await _start_server(start_server, model_path=never_created)
     try:
-        async with connect(f"ws://127.0.0.1:{free_port}") as ws:
+        async with connect(f"ws://127.0.0.1:{port}") as ws:
             data = await _recv_json(ws)
         assert "predicted_heat" not in data["payload"]["metadata"]
     finally:
@@ -559,7 +542,7 @@ async def test_predicted_heat_missing_model_file_no_key_no_warning(
 
 
 async def test_watch_mode_rebroadcast_carries_predicted_heat(
-    free_port: int, tmp_path: Path, trained_model: Path
+    start_server: StartServer, tmp_path: Path, trained_model: Path
 ) -> None:
     """The discriminating test for the A1 revision: predicted_heat must be
     injected from _build_static_graph itself, not just the connect-time
@@ -569,20 +552,15 @@ async def test_watch_mode_rebroadcast_carries_predicted_heat(
     root.mkdir()
     (root / "a.py").write_text("def f():\n    pass\n", encoding="utf-8")
 
-    task = asyncio.create_task(
-        serve(
-            "127.0.0.1",
-            free_port,
-            root=root,
-            watch=True,
-            watch_interval=0.1,
-            watch_poll=True,
-            model_path=trained_model,
-        )
+    task, port = await start_server(
+        root=root,
+        watch=True,
+        watch_interval=0.1,
+        watch_poll=True,
+        model_path=trained_model,
     )
-    await asyncio.sleep(0.05)
     try:
-        async with connect(f"ws://127.0.0.1:{free_port}") as ws:
+        async with connect(f"ws://127.0.0.1:{port}") as ws:
             first = await _recv_json(ws)
             assert first["type"] == "static_graph"
             # A trained-on-tiny-python-app model scored against this

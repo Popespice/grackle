@@ -805,6 +805,7 @@ async def serve(
     watch_interval: float = 0.3,
     watch_poll: bool = False,
     model_path: Path | None = None,
+    ready: asyncio.Future[int] | None = None,
 ) -> None:
     """Start the WebSocket server and run until cancelled.
 
@@ -839,6 +840,15 @@ async def serve(
                         fresh, so retraining is picked up without a restart.
                         Absent/broken/gate-closed all degrade to no
                         ``predicted_heat`` key — never a crash.
+        ready:          If given, resolved with the bound port once the socket
+                        is listening — the only point at which a client is
+                        guaranteed to connect. Everything before the bind
+                        (the orphan sweep, language detection, building the
+                        --trace-source index) runs first with nothing to await
+                        in between, so a caller that sleeps a fixed interval
+                        instead can lose the race (campaign T5-2). With
+                        ``port=0`` the OS picks the port at bind time and this
+                        is how the caller learns it.
     """
     root_real = root.resolve()
 
@@ -982,8 +992,9 @@ async def serve(
     # non-preemptible Python threads, not something this fix can fully close).
     watch_executor: concurrent.futures.ThreadPoolExecutor | None = None
     try:
-        async with _ws_serve(_handler, host, port):
-            log.info("agent listening", host=host, port=port, root=str(root_real))
+        async with _ws_serve(_handler, host, port) as ws_server:
+            bound_port: int = ws_server.sockets[0].getsockname()[1]
+            log.info("agent listening", host=host, port=bound_port, root=str(root_real))
             if watch:
                 watch_executor = concurrent.futures.ThreadPoolExecutor(
                     max_workers=1, thread_name_prefix="grackle-watch-rebuild"
@@ -999,6 +1010,14 @@ async def serve(
                         force_poll=watch_poll,
                     )
                 )
+            # Resolved only after the watch task exists: its first step
+            # snapshots the file-change baseline before its first await, and
+            # asyncio runs ready callbacks in the order they were scheduled,
+            # so that snapshot lands before any caller woken by `ready` can
+            # edit a file — an edit made after `ready` is always a change,
+            # never absorbed into the baseline.
+            if ready is not None and not ready.done():
+                ready.set_result(bound_port)
             await asyncio.Future()  # run until cancelled
     finally:
         # Cancel the watch task before closing the store — mirrors the

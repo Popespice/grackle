@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -9,22 +8,18 @@ from typing import TYPE_CHECKING
 import pytest
 from websockets.asyncio.client import connect
 
-from grackle.server import serve
-
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
+
+    from conftest import StartServer
 
 _TINY_APP = Path(__file__).parent.parent.parent.parent / "fixtures" / "tiny-app"
 
 
 @pytest.fixture
-async def tiny_app_server(free_port: int) -> AsyncGenerator[int, None]:
-    task = asyncio.create_task(serve("127.0.0.1", free_port, root=_TINY_APP))
-    await asyncio.sleep(0.05)
-    yield free_port
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
+async def tiny_app_server(start_server: StartServer) -> AsyncGenerator[int, None]:
+    _, port = await start_server(root=_TINY_APP)
+    yield port
 
 
 async def test_static_graph_pushed_on_connect(tiny_app_server: int) -> None:
@@ -65,16 +60,10 @@ async def test_ping_still_works_after_graph_push(tiny_app_server: int) -> None:
     assert reply["id"] == "ping1"
 
 
-async def test_no_graph_for_empty_root(free_port: int, tmp_path: Path) -> None:
-    task = asyncio.create_task(serve("127.0.0.1", free_port, root=tmp_path))
-    await asyncio.sleep(0.05)
-    try:
-        async with connect(f"ws://127.0.0.1:{free_port}") as ws:
-            await ws.send(json.dumps({"id": "probe", "type": "ping", "payload": {}}))
-            raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
-            data = json.loads(raw)
-        assert data["type"] == "pong", "expected pong as first message for empty root"
-    finally:
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
+async def test_no_graph_for_empty_root(start_server: StartServer, tmp_path: Path) -> None:
+    _, port = await start_server(root=tmp_path)
+    async with connect(f"ws://127.0.0.1:{port}") as ws:
+        await ws.send(json.dumps({"id": "probe", "type": "ping", "payload": {}}))
+        raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
+        data = json.loads(raw)
+    assert data["type"] == "pong", "expected pong as first message for empty root"

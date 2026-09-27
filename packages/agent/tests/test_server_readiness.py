@@ -12,6 +12,9 @@ That was ``test_two_sessions_back_to_back``'s Windows flake. A second window
 sat alongside it: the ``free_port`` fixture closes its probe socket before
 ``serve()`` rebinds the number, so another process can take the port in
 between.
+
+Server tests now start servers through the ``start_server`` fixture
+(``conftest.py``), which waits on ``serve(ready=...)`` and binds port 0.
 """
 
 from __future__ import annotations
@@ -21,7 +24,6 @@ import contextlib
 import json
 from typing import TYPE_CHECKING, Any
 
-import pytest
 from websockets.asyncio.client import connect
 from websockets.asyncio.server import serve as real_ws_serve
 
@@ -31,14 +33,9 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
 
+    import pytest
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "T5-2: serve() has no readiness signal — callers can only sleep and "
-        "hope the socket is listening (docs/test-campaigns/phase-12.md)"
-    ),
-)
+
 async def test_serve_signals_readiness_even_when_pre_bind_work_is_slow(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -57,9 +54,7 @@ async def test_serve_signals_readiness_even_when_pre_bind_work_is_slow(
     monkeypatch.setattr(server_mod, "_ws_serve", _slow_ws_serve)
 
     ready: asyncio.Future[int] = asyncio.get_running_loop().create_future()
-    task = asyncio.create_task(
-        server_mod.serve("127.0.0.1", 0, root=tmp_path, ready=ready)  # type: ignore[call-arg]
-    )
+    task = asyncio.create_task(server_mod.serve("127.0.0.1", 0, root=tmp_path, ready=ready))
     try:
         either: set[asyncio.Future[Any]] = {ready, task}
         await asyncio.wait(either, timeout=10.0, return_when=asyncio.FIRST_COMPLETED)

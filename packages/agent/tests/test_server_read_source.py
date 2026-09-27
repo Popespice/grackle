@@ -1,29 +1,26 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 from typing import TYPE_CHECKING, Any
 
 import pytest
 from websockets.asyncio.client import ClientConnection, connect
 
-from grackle.server import serve
-
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
     from pathlib import Path
 
+    from conftest import StartServer
+
 
 @pytest.fixture
-async def source_server(free_port: int, tmp_path: Path) -> AsyncGenerator[tuple[int, Path], None]:
+async def source_server(
+    start_server: StartServer, tmp_path: Path
+) -> AsyncGenerator[tuple[int, Path], None]:
     # tmp_path is empty — no Python files, so no static_graph push on connect.
-    task = asyncio.create_task(serve("127.0.0.1", free_port, root=tmp_path))
-    await asyncio.sleep(0.05)
-    yield free_port, tmp_path
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
+    _, port = await start_server(root=tmp_path)
+    yield port, tmp_path
 
 
 async def _req(ws: ClientConnection, req_id: str, path: str) -> Any:

@@ -26,6 +26,8 @@ from grackle.cli import main
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from conftest import StartServer
+
 
 def _write_simple_script(root: Path) -> Path:
     """Write a minimal traceable script to ``root/script.py`` and return its path."""
@@ -498,7 +500,7 @@ def test_trace_stream_with_output_accepted(tmp_path: Path) -> None:
     assert "Traceback" not in result.output
 
 
-async def test_trace_stream_tee_writes_file(free_port: int, tmp_path: Path) -> None:
+async def test_trace_stream_tee_writes_file(start_server: StartServer, tmp_path: Path) -> None:
     """``--stream + --output`` writes a JSONL file and streams to server simultaneously.
 
     Verifies:
@@ -511,17 +513,14 @@ async def test_trace_stream_tee_writes_file(free_port: int, tmp_path: Path) -> N
 
     from websockets.asyncio.client import connect as _ws_connect
 
-    from grackle.server import serve as _serve
-
     root = tmp_path / "proj"
     root.mkdir()
     script = _write_simple_script(root)
     out = tmp_path / "tee.jsonl"
-    url = f"ws://127.0.0.1:{free_port}"
 
     # Start server in live-attach mode.
-    server_task = asyncio.create_task(_serve("127.0.0.1", free_port, root=root))
-    await asyncio.sleep(0.05)
+    server_task, port = await start_server(root=root)
+    url = f"ws://127.0.0.1:{port}"
 
     # Consumer collects all trace messages until session_end.
     received: list[dict[str, object]] = []
@@ -600,7 +599,7 @@ async def test_trace_stream_tee_writes_file(free_port: int, tmp_path: Path) -> N
 
 
 async def test_trace_stream_tee_write_failure_does_not_disrupt_stream(
-    monkeypatch: pytest.MonkeyPatch, free_port: int, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, start_server: StartServer, tmp_path: Path
 ) -> None:
     """A write failure mid-tee must not kill the live stream — the stream
     completes normally (write-then-send never lets a recording failure
@@ -611,7 +610,6 @@ async def test_trace_stream_tee_write_failure_does_not_disrupt_stream(
     from websockets.asyncio.client import connect as _ws_connect
 
     from grackle.python_runtime.writer import JsonlPartWriter
-    from grackle.server import serve as _serve
 
     call_count = {"n": 0}
     real_write = JsonlPartWriter.write
@@ -629,10 +627,9 @@ async def test_trace_stream_tee_write_failure_does_not_disrupt_stream(
     root.mkdir()
     script = _write_simple_script(root)
     out = tmp_path / "tee.jsonl"
-    url = f"ws://127.0.0.1:{free_port}"
 
-    server_task = asyncio.create_task(_serve("127.0.0.1", free_port, root=root))
-    await asyncio.sleep(0.05)
+    server_task, port = await start_server(root=root)
+    url = f"ws://127.0.0.1:{port}"
 
     received: list[dict[str, object]] = []
     consumer_done = asyncio.Event()
@@ -689,7 +686,7 @@ async def test_trace_stream_tee_write_failure_does_not_disrupt_stream(
 
 
 async def test_trace_stream_tee_cap_and_writer_failure_both_reported(
-    monkeypatch: pytest.MonkeyPatch, free_port: int, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, start_server: StartServer, tmp_path: Path
 ) -> None:
     """When BOTH the adapter (cap exceeded) and the writer (finalize
     failure) fail in the same tee session, the combined error must mention
@@ -699,7 +696,6 @@ async def test_trace_stream_tee_cap_and_writer_failure_both_reported(
     from websockets.asyncio.client import connect as _ws_connect
 
     from grackle.python_runtime.writer import JsonlPartWriter
-    from grackle.server import serve as _serve
 
     def _flaky_finalize(self: JsonlPartWriter) -> None:
         raise OSError("simulated disk full at finalize")
@@ -714,10 +710,9 @@ async def test_trace_stream_tee_cap_and_writer_failure_both_reported(
         encoding="utf-8",
     )
     out = tmp_path / "tee.jsonl"
-    url = f"ws://127.0.0.1:{free_port}"
 
-    server_task = asyncio.create_task(_serve("127.0.0.1", free_port, root=root))
-    await asyncio.sleep(0.05)
+    server_task, port = await start_server(root=root)
+    url = f"ws://127.0.0.1:{port}"
 
     # The consumer just needs to keep the connection alive and draining —
     # this test's assertions are entirely CLI-side (exit code + combined
@@ -767,7 +762,7 @@ async def test_trace_stream_tee_cap_and_writer_failure_both_reported(
 
 
 async def test_trace_stream_tee_lossless_under_real_backpressure(
-    monkeypatch: pytest.MonkeyPatch, free_port: int, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, start_server: StartServer, tmp_path: Path
 ) -> None:
     """Tee losslessness holds under REAL WS backpressure drops (mirrors the
     precedent in test_stream_sender.py's test_sender_backpressure_bounds_memory):
@@ -779,8 +774,6 @@ async def test_trace_stream_tee_lossless_under_real_backpressure(
 
     from websockets.asyncio.client import connect as _ws_connect
 
-    from grackle.server import serve as _serve
-
     root = tmp_path / "proj"
     root.mkdir()
     script = root / "script.py"
@@ -789,10 +782,9 @@ async def test_trace_stream_tee_lossless_under_real_backpressure(
         encoding="utf-8",
     )
     out = tmp_path / "tee.jsonl"
-    url = f"ws://127.0.0.1:{free_port}"
 
-    server_task = asyncio.create_task(_serve("127.0.0.1", free_port, root=root))
-    await asyncio.sleep(0.05)
+    server_task, port = await start_server(root=root)
+    url = f"ws://127.0.0.1:{port}"
 
     received: list[dict[str, object]] = []
     consumer_done = asyncio.Event()
@@ -890,7 +882,7 @@ def test_trace_stream_tee_refuses_to_clobber_an_existing_part(tmp_path: Path) ->
 
 
 async def test_trace_stream_tee_trivial_session_leaves_no_stray_part(
-    free_port: int, tmp_path: Path
+    start_server: StartServer, tmp_path: Path
 ) -> None:
     """A --stream --output session over a trivial script (no function calls,
     at most the module-level frame) must finalize cleanly — no stray .part
@@ -899,17 +891,14 @@ async def test_trace_stream_tee_trivial_session_leaves_no_stray_part(
 
     from websockets.asyncio.client import connect as _ws_connect
 
-    from grackle.server import serve as _serve
-
     root = tmp_path / "proj"
     root.mkdir()
     script = root / "script.py"
     script.write_text("", encoding="utf-8")
     out = tmp_path / "tee.jsonl"
-    url = f"ws://127.0.0.1:{free_port}"
 
-    server_task = asyncio.create_task(_serve("127.0.0.1", free_port, root=root))
-    await asyncio.sleep(0.05)
+    server_task, port = await start_server(root=root)
+    url = f"ws://127.0.0.1:{port}"
 
     consumer_done = asyncio.Event()
 
@@ -1346,7 +1335,7 @@ def test_trace_output_refuses_to_clobber_an_existing_part(tmp_path: Path) -> Non
 
 
 async def test_trace_output_with_connect_replays_from_written_file(
-    free_port: int, tmp_path: Path
+    start_server: StartServer, tmp_path: Path
 ) -> None:
     """-o + --connect (no --stream) must replay from the FINALIZED file — the
     incremental path retains nothing in memory, so the replayed count read
@@ -1355,16 +1344,13 @@ async def test_trace_output_with_connect_replays_from_written_file(
 
     from websockets.asyncio.client import connect as _ws_connect
 
-    from grackle.server import serve as _serve
-
     root = tmp_path / "proj"
     root.mkdir()
     script = _write_simple_script(root)
     out = tmp_path / "trace.jsonl"
-    url = f"ws://127.0.0.1:{free_port}"
 
-    server_task = asyncio.create_task(_serve("127.0.0.1", free_port, root=root))
-    await asyncio.sleep(0.05)
+    server_task, port = await start_server(root=root)
+    url = f"ws://127.0.0.1:{port}"
 
     received: list[dict[str, object]] = []
     consumer_done = asyncio.Event()

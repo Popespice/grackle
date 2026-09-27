@@ -25,10 +25,11 @@ from websockets.asyncio.client import connect
 
 from grackle.adapters.base import TraceEvent
 from grackle.python_runtime.writer import write_jsonl
-from grackle.server import serve
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
+
+    from conftest import StartServer
 
 _TINY_APP = Path(__file__).parent.parent.parent.parent / "fixtures" / "tiny-python-app"
 _GOLDEN_JSONL = _TINY_APP / "trace.golden.jsonl"
@@ -56,7 +57,7 @@ def _make_trace_events(n: int = 3) -> list[TraceEvent]:
 
 @pytest.fixture
 async def replay_server(
-    free_port: int, tmp_path: Path
+    start_server: StartServer, tmp_path: Path
 ) -> AsyncGenerator[tuple[int, Path, int], None]:
     """Server with a 3-event trace file; pace=False for fast tests.
 
@@ -73,14 +74,8 @@ async def replay_server(
     trace_file = tmp_path / "trace.jsonl"
     write_jsonl(events, trace_file)
 
-    task = asyncio.create_task(
-        serve("127.0.0.1", free_port, root=tmp_path, trace_source=trace_file, pace=False)
-    )
-    await asyncio.sleep(0.05)
-    yield free_port, tmp_path, len(events)
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
+    _, port = await start_server(root=tmp_path, trace_source=trace_file, pace=False)
+    yield port, tmp_path, len(events)
 
 
 async def _recv_all_until_session_end(ws: Any, timeout: float = 5.0) -> list[dict[str, Any]]:
@@ -159,7 +154,7 @@ async def test_event_count_in_session_end_matches(
     assert len(trace_events) == 0
 
 
-async def test_no_pace_completes_fast(free_port: int, tmp_path: Path) -> None:
+async def test_no_pace_completes_fast(start_server: StartServer, tmp_path: Path) -> None:
     """pace=False (--no-pace) must complete the full session in well under 1s."""
     script = tmp_path / "script.py"
     script.write_text("def f(): pass\n", encoding="utf-8")
@@ -168,12 +163,9 @@ async def test_no_pace_completes_fast(free_port: int, tmp_path: Path) -> None:
     trace_file = tmp_path / "trace.jsonl"
     write_jsonl(events, trace_file)
 
-    task = asyncio.create_task(
-        serve("127.0.0.1", free_port, root=tmp_path, trace_source=trace_file, pace=False)
-    )
-    await asyncio.sleep(0.05)
+    task, port = await start_server(root=tmp_path, trace_source=trace_file, pace=False)
     try:
-        async with connect(f"ws://127.0.0.1:{free_port}") as ws:
+        async with connect(f"ws://127.0.0.1:{port}") as ws:
             msgs = await asyncio.wait_for(_recv_all_until_session_end(ws), timeout=2.0)
         assert any(m["type"] == "trace_session_end" for m in msgs)
     finally:
@@ -243,17 +235,16 @@ async def test_mid_replay_disconnect_server_survives(
 # ---------------------------------------------------------------------------
 
 
-async def test_missing_trace_source_sends_empty_session(free_port: int, tmp_path: Path) -> None:
+async def test_missing_trace_source_sends_empty_session(
+    start_server: StartServer, tmp_path: Path
+) -> None:
     """When the trace file does not exist, an empty session is emitted and the server stays up."""
     missing = tmp_path / "does_not_exist.jsonl"
     # Do NOT create the file.
 
-    task = asyncio.create_task(
-        serve("127.0.0.1", free_port, root=tmp_path, trace_source=missing, pace=False)
-    )
-    await asyncio.sleep(0.05)
+    task, port = await start_server(root=tmp_path, trace_source=missing, pace=False)
     try:
-        async with connect(f"ws://127.0.0.1:{free_port}") as ws:
+        async with connect(f"ws://127.0.0.1:{port}") as ws:
             msgs = await _recv_all_until_session_end(ws)
 
         session_end = next((m for m in msgs if m["type"] == "trace_session_end"), None)
@@ -274,20 +265,15 @@ async def test_missing_trace_source_sends_empty_session(free_port: int, tmp_path
 
 
 @pytest.mark.skipif(not _GOLDEN_JSONL.exists(), reason="golden trace not found")
-async def test_golden_trace_replays_correctly(free_port: int) -> None:
+async def test_golden_trace_replays_correctly(start_server: StartServer) -> None:
     """The golden trace for tiny-python-app replays with correct event_count."""
-    task = asyncio.create_task(
-        serve(
-            "127.0.0.1",
-            free_port,
-            root=_TINY_APP,
-            trace_source=_GOLDEN_JSONL,
-            pace=False,
-        )
+    task, port = await start_server(
+        root=_TINY_APP,
+        trace_source=_GOLDEN_JSONL,
+        pace=False,
     )
-    await asyncio.sleep(0.05)
     try:
-        async with connect(f"ws://127.0.0.1:{free_port}") as ws:
+        async with connect(f"ws://127.0.0.1:{port}") as ws:
             msgs = await _recv_all_until_session_end(ws, timeout=10.0)
 
         session_end = next(m for m in msgs if m["type"] == "trace_session_end")
