@@ -1,0 +1,20 @@
+{
+  "id": "agent-server-session-load-missing-file-not-skipped",
+  "description": "T6-1 pin (missing source_path): session_load stops skipping a row whose recording file is gone. build_seekable maps a missing file to an empty index, so the UI would be switched to a zero-event session.",
+  "target": {
+    "file": "packages/agent/src/grackle/server.py",
+    "find": "                if not load_path.exists():",
+    "replace": "                if False:"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_session_store_faults.py",
+      "-k",
+      "whose_file_is_gone"
+    ]
+  },
+  "expect": "killed"
+}

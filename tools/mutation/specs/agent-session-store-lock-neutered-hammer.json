@@ -1,0 +1,20 @@
+{
+  "id": "agent-session-store-lock-neutered-hammer",
+  "description": "T7-3 pin, discriminating power of the gate-sized hammer: the same no-op lock, run against only test_writer_reader_hammer_small (4 writers x 25 saves, 2 readers). Proves the unmarked sibling of the nightly hammer can fail on its own, not only the deterministic overlap probe.",
+  "target": {
+    "file": "packages/agent/src/grackle/session_store.py",
+    "find": "        self._lock = threading.Lock()",
+    "replace": "        self._lock = __import__(\"contextlib\").nullcontext()"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_session_store_faults.py",
+      "-k",
+      "writer_reader_hammer_small"
+    ]
+  },
+  "expect": "killed"
+}

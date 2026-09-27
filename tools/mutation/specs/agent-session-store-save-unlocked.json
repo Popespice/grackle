@@ -1,0 +1,20 @@
+{
+  "id": "agent-session-store-save-unlocked",
+  "description": "T7-3 pin: save_session alone stops taking the lock (its INSERT + commit run unserialized). A list/get/close holding the lock no longer excludes an in-flight save.",
+  "target": {
+    "file": "packages/agent/src/grackle/session_store.py",
+    "find": "        with self._lock:\n            self._conn.execute(\n                \"\"\"\n                INSERT OR REPLACE",
+    "replace": "        if True:\n            self._conn.execute(\n                \"\"\"\n                INSERT OR REPLACE"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_session_store_faults.py",
+      "-k",
+      "no_store_call_runs_beside_an_in_flight_save"
+    ]
+  },
+  "expect": "killed"
+}

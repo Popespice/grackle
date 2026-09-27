@@ -1,0 +1,20 @@
+{
+  "id": "agent-session-store-close-unlocked",
+  "description": "T7-3/T6-1 pin: close() stops taking the lock, so serve()'s store.close() pulls the connection out from under a save_session still running on an executor thread and the row is lost. The pin asserts the observable outcome: the in-flight row lands.",
+  "target": {
+    "file": "packages/agent/src/grackle/session_store.py",
+    "find": "        with self._lock:\n            if self._closed:",
+    "replace": "        if True:\n            if self._closed:"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_session_store_faults.py",
+      "-k",
+      "close_waits_for_an_in_flight_save"
+    ]
+  },
+  "expect": "killed"
+}

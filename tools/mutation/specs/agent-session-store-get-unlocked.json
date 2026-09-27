@@ -1,0 +1,20 @@
+{
+  "id": "agent-session-store-get-unlocked",
+  "description": "T7-3 pin: get_session alone stops taking the lock, so session_load's lookup runs on the connection beside a recording's save_session.",
+  "target": {
+    "file": "packages/agent/src/grackle/session_store.py",
+    "find": "        with self._lock:\n            row = self._conn.execute(",
+    "replace": "        if True:\n            row = self._conn.execute("
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_session_store_faults.py",
+      "-k",
+      "no_store_call_runs_beside_an_in_flight_save"
+    ]
+  },
+  "expect": "killed"
+}
