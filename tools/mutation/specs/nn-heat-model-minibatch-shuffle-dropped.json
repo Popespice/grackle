@@ -1,0 +1,15 @@
+{
+  "id": "nn-heat-model-minibatch-shuffle-dropped",
+  "description": "T10-2: the per-epoch minibatch shuffle is replaced by the identity order. Still deterministic and still converging, so the self-consistency tests pass; the golden prediction vector moves.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/ml/heat_model.py",
+    "find": "        perm = rng.permutation(n)",
+    "replace": "        perm = np.arange(n)"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/ml/test_checkpoint_pins.py"]
+  },
+  "expect": "killed"
+}

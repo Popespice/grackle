@@ -1,0 +1,15 @@
+{
+  "id": "nn-losses-softmax-shift-by-batch-max",
+  "description": "T9-2: the softmax shift uses the whole batch's max instead of each row's. Harmless for one row or at standard-normal scale; a row sitting 2e4 below another row's max underflows every exp to 0 and becomes 0/0.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/losses.py",
+    "find": "        shifted = logits - logits.max(axis=1, keepdims=True)",
+    "replace": "        shifted = logits - logits.max()"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/test_losses_saturation.py"]
+  },
+  "expect": "killed"
+}

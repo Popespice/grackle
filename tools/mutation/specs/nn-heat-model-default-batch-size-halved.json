@@ -1,0 +1,15 @@
+{
+  "id": "nn-heat-model-default-batch-size-halved",
+  "description": "T10-2: train_heat_model's default batch size drops from 64 to 32. grackle learn relies on the default, and the existing heat-model tests are self-consistency checks (same seed twice, loss goes down), so only the cross-platform golden sees the new trajectory.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/ml/heat_model.py",
+    "find": "    batch_size: int = 64,",
+    "replace": "    batch_size: int = 32,"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/ml/test_checkpoint_pins.py"]
+  },
+  "expect": "killed"
+}
