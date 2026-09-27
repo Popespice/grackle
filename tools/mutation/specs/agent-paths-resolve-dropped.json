@@ -1,0 +1,20 @@
+{
+  "id": "agent-paths-resolve-dropped",
+  "description": "to_posix drops both resolve() calls, so '..' segments survive into node ids and a symlink out of the project yields an id instead of ValueError (campaign T8-4: never escapes the root).",
+  "target": {
+    "file": "packages/agent/src/grackle/paths.py",
+    "find": "    return p.resolve().relative_to(root.resolve()).as_posix()",
+    "replace": "    return p.relative_to(root).as_posix()"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_properties_paths.py",
+      "-k",
+      "(escape or leaves) and not survives"
+    ]
+  },
+  "expect": "killed"
+}

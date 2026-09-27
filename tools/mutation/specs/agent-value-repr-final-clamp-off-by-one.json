@@ -1,0 +1,15 @@
+{
+  "id": "agent-value-repr-final-clamp-off-by-one",
+  "description": "safe_repr's final max_len clamp fires only above max_len + 1, so an assembled text one character over the limit ships unclamped and flagged untruncated (campaign T8-1: the bounded and exact-limits properties).",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/value_repr.py",
+    "find": "    if len(text) > limits.max_len:",
+    "replace": "    if len(text) > limits.max_len + 1:"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_properties_value_repr.py"]
+  },
+  "expect": "killed"
+}

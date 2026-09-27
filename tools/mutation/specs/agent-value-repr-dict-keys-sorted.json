@@ -1,0 +1,15 @@
+{
+  "id": "agent-value-repr-dict-keys-sorted",
+  "description": "_repr_dict_safe iterates sorted(x.items()) (stock reprlib's _possibly_sorted, trap #2), so a hostile key's __lt__ runs during capture and mixed-type keys raise into the unreprable fallback (campaign T8-1: the never-runs-user-code and exactness properties).",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/value_repr.py",
+    "find": "        for shown, (key, val) in enumerate(x.items()):",
+    "replace": "        for shown, (key, val) in enumerate(sorted(x.items())):"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_properties_value_repr.py"]
+  },
+  "expect": "killed"
+}

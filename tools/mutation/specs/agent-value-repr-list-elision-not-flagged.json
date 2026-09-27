@@ -1,0 +1,15 @@
+{
+  "id": "agent-value-repr-list-elision-not-flagged",
+  "description": "A list/tuple cut at max_items still gets its '...' but no longer sets truncated, so the inspector presents an elided value as complete (campaign T8-1: truncated is False exactly when the text equals repr(value)).",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/value_repr.py",
+    "find": "            pieces.append(\"...\")\n            self._truncated = True\n        s = \", \".join(pieces)",
+    "replace": "            pieces.append(\"...\")\n        s = \", \".join(pieces)"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_properties_value_repr.py", "-k", "exactly_repr"]
+  },
+  "expect": "killed"
+}

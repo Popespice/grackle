@@ -1,0 +1,15 @@
+{
+  "id": "agent-diff-delta-sign-flipped",
+  "description": "diff_trace_vs_trace computes delta as count_a - count_b, so a node that got hotter is reported colder (and the reverse) and grackle diff misses exactly the regressions it exists to catch (campaign T8-5: every entry matches a naive recount).",
+  "target": {
+    "file": "packages/agent/src/grackle/diff.py",
+    "find": "        delta = cb - ca",
+    "replace": "        delta = ca - cb"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_properties_diff.py", "-k", "naive_recount"]
+  },
+  "expect": "killed"
+}

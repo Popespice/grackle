@@ -1,0 +1,15 @@
+{
+  "id": "agent-aggregates-float-count-rounded",
+  "description": "_event_weight rounds a float metadata.count instead of truncating it, so a 2.7 count weighs 3 and a 2.5 count weighs 2 (banker's rounding) against the documented truncate-and-floor rule (campaign T8-2: heat equals the naive recount).",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/aggregates.py",
+    "find": "        return max(1, int(raw))",
+    "replace": "        return max(1, round(raw))"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_properties_aggregates.py", "-k", "naive_recount"]
+  },
+  "expect": "killed"
+}

@@ -1,0 +1,20 @@
+{
+  "id": "agent-writer-read-jsonl-strips-spaces-only",
+  "description": "read_jsonl strips only spaces, so a tab-only blank line (skipped by JsonlIndex.build) reaches json.loads and the strict reader rejects a file the seek index serves (campaign T8-3: both readers return exactly the written events).",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/writer.py",
+    "find": "        line = raw_line.strip()",
+    "replace": "        line = raw_line.strip(\" \")"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_properties_jsonl_index.py",
+      "-k",
+      "exactly_the_written"
+    ]
+  },
+  "expect": "killed"
+}

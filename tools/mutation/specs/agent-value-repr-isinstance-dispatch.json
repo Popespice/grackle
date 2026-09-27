@@ -1,0 +1,15 @@
+{
+  "id": "agent-value-repr-isinstance-dispatch",
+  "description": "Dispatch by isinstance() instead of exact type (trap #1, the subclass/name-spoofing hole), so a list/dict/str subclass reaches a builtin handler and its own __len__/__iter__ run during capture (campaign T8-1: the never-runs-user-code property).",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/value_repr.py",
+    "find": "        handler = _DISPATCH.get(t)",
+    "replace": "        handler = next((h for k, h in _DISPATCH.items() if isinstance(x, k)), None)"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_properties_value_repr.py", "-k", "no_user_hook"]
+  },
+  "expect": "killed"
+}
