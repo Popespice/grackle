@@ -1,0 +1,15 @@
+{
+  "id": "frontend-epoch-series-epoch-group-optional",
+  "description": "EPOCH_RET_RE lets the epoch group match nothing, so a payload like `(, 0.5, 0.5)` is accepted as a point whose epoch is parseInt('') = NaN. The pre-existing corpus has no empty-epoch payload.",
+  "target": {
+    "file": "packages/frontend/src/graph/epochSeries.ts",
+    "find": "const EPOCH_RET_RE = new RegExp(`^\\\\((\\\\d+), (${FLOAT}), (${FLOAT})\\\\)$`);",
+    "replace": "const EPOCH_RET_RE = new RegExp(`^\\\\((\\\\d*), (${FLOAT}), (${FLOAT})\\\\)$`);"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/beaconGrammar.sweep.test.ts"]
+  },
+  "expect": "killed"
+}

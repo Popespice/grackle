@@ -1,0 +1,15 @@
+{
+  "id": "frontend-layer-stats-epoch-group-optional",
+  "description": "The arity-built stats regex lets the epoch group match nothing, so `(, 0.1, 0.2)` becomes a layer-stats point with a NaN epoch, which the multi-run rule can never split on. The pre-existing corpus has no empty-epoch payload.",
+  "target": {
+    "file": "packages/frontend/src/graph/layerStats.ts",
+    "find": "return new RegExp(`^\\\\((\\\\d+)${floatGroups}\\\\)$`);",
+    "replace": "return new RegExp(`^\\\\((\\\\d*)${floatGroups}\\\\)$`);"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/beaconGrammar.sweep.test.ts"]
+  },
+  "expect": "killed"
+}
