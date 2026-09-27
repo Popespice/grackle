@@ -202,3 +202,19 @@ dispatch + gate) · `pyproject.toml` (package-data include for `bootstrap.mjs`).
   type-stripping keeps source positions intact.
 - **In-process tracing.** Impossible — grackle is a Python agent and cannot execute JS
   in-process; an external Node subprocess driven over CDP is mandatory.
+
+## Amendment — test campaign (2026-09-27)
+
+**The live path's counts are not exact once TurboFan inlines a call.** V8's precise coverage
+does not count calls at inlined call sites, so the per-function `count` it reports is the
+number of calls made *before* the function was inlined into a hot caller — a function of
+runner speed and load, not of the program. Measured during campaign C5 (finding F-1,
+`docs/test-campaigns/phase-12.md`): `add` in `fixtures/tiny-node-app`, called exactly
+2,000,000 times, has been reported as 130,607 on a loaded Windows CI runner and as low as
+1,062,981 under local load; at 300,000,000 calls V8 reported about 7.5% of them. Everywhere
+this ADR says "exact" for the live path (the Decision table, "Why precise coverage", and the
+Consequences), read **a lower bound on the true call count — exact only for functions V8
+never inlines**. Disabling the JIT would restore exactness but would measure a program Node
+never runs, so it is not the fix; the adapter's contract is what grackle reports under normal
+execution. `packages/agent/tests/node_runtime/test_e2e.py` now asserts the bound
+(`0 < count ≤ true calls`), not equality.
