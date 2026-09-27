@@ -1,0 +1,15 @@
+{
+  "id": "agent-diff-universe-intersects-extra-ids",
+  "description": "The explicit node_ids universe is intersected with the observed nodes instead of unioned, so static-graph nodes never hit in either session vanish from the report and observed nodes outside the list are dropped (campaign T8-5: each node of the documented universe appears exactly once).",
+  "target": {
+    "file": "packages/agent/src/grackle/diff.py",
+    "find": "        all_ids |= set(node_ids)",
+    "replace": "        all_ids &= set(node_ids)"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_properties_diff.py", "-k", "naive_recount"]
+  },
+  "expect": "killed"
+}

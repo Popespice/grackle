@@ -1,0 +1,15 @@
+{
+  "id": "agent-diff-static-zero-count-touched",
+  "description": "diff_trace_vs_static treats a zero count as touched, so every node of the static graph is reported touched and no cold code is ever shown (campaign T8-5: touched is exactly a positive count).",
+  "target": {
+    "file": "packages/agent/src/grackle/diff.py",
+    "find": "        status: str = \"touched\" if count > 0 else \"cold\"",
+    "replace": "        status: str = \"touched\" if count >= 0 else \"cold\""
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_properties_diff.py", "-k", "static"]
+  },
+  "expect": "killed"
+}

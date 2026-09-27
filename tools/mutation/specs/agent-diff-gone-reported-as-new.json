@@ -1,0 +1,15 @@
+{
+  "id": "agent-diff-gone-reported-as-new",
+  "description": "A node hit only in the baseline is labelled new instead of gone, so swapping the two sessions no longer inverts the report (campaign T8-5: diff(A, B) and diff(B, A) are inverses).",
+  "target": {
+    "file": "packages/agent/src/grackle/diff.py",
+    "find": "            status = \"gone\"",
+    "replace": "            status = \"new\""
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_properties_diff.py", "-k", "inverts"]
+  },
+  "expect": "killed"
+}

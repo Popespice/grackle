@@ -1,0 +1,15 @@
+{
+  "id": "agent-aggregates-top-k-keeps-zero-counts",
+  "description": "top_k keeps nodes whose count at the playhead is still 0, so early in a trace the top-k list fills with nodes that have not fired yet (campaign T8-2: top_k equals the naive ranking of positive counts).",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/aggregates.py",
+    "find": "            if count > 0:\n                entries.append((node_id, count))",
+    "replace": "            if count >= 0:\n                entries.append((node_id, count))"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_properties_aggregates.py", "-k", "naive_recount"]
+  },
+  "expect": "killed"
+}

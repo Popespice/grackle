@@ -1,0 +1,15 @@
+{
+  "id": "agent-jsonl-index-window-end-short-by-one",
+  "description": "read_window clamps its end to len - 1, so no window can ever return the trace's last event (campaign T8-3: windows concatenate back to the whole trace).",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/jsonl_index.py",
+    "find": "        end = min(start + count, total)",
+    "replace": "        end = min(start + count, total - 1)"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_properties_jsonl_index.py", "-k", "concatenate"]
+  },
+  "expect": "killed"
+}
