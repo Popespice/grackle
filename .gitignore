@@ -60,3 +60,6 @@ packages/nn/*.jsonl
 
 # Mutation-harness concurrency lock (tools/mutation/runner.mjs)
 tools/mutation/.runner.lock
+
+# Hypothesis example database (nightly profile only; the ci profile writes none)
+.hypothesis/

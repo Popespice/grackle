@@ -47,6 +47,7 @@ dev = [
     # The *product* stays gated behind ml_bridge.learn_available() — the
     # agent's runtime hard dependencies stay numpy-free.
     "grackle-nn",
+    "hypothesis>=6.100",
 ]
 
 [tool.uv.sources]
