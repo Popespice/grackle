@@ -1,0 +1,216 @@
+name: Campaign (nightly)
+
+# The expensive half of the test campaign (docs/test-campaigns/phase-12.md,
+# chunk C5): the probes too slow for the PR gate. Nothing here blocks a merge;
+# a red run means a probe found something, and the job that failed says which.
+#
+#   mutation-sweep  every committed mutant spec applied and its suite run
+#                   (the PR gate only checks the specs still match: `mutation:check`)
+#   hammers         the @pytest.mark.hammer concurrency/stress tests (deselected
+#                   by default; each has a small unmarked sibling in the gate)
+#   properties      both Python suites under the "nightly" hypothesis profile
+#                   (5000 examples, fresh randomness) instead of the gate's "ci"
+#   margin-sweep    the ADR-0029 acceptance margin over 200 seed pairs, as a
+#                   distribution (T9-1) — report-only, uploaded as an artifact
+
+on:
+  schedule:
+    - cron: "23 7 * * *" # daily, 07:23 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mutation-sweep:
+    name: mutation sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install pnpm
+        run: corepack enable pnpm
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      # The same toolchains as the PR gate, so a spec whose suite includes a
+      # toolchain-gated test runs that test here too instead of skipping it
+      # and reporting a false survivor.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install JS dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Codegen
+        run: pnpm codegen
+
+      # The frontend suites resolve @grackle/shared-types from its built dist/.
+      - name: Build shared-types
+        run: pnpm --filter @grackle/shared-types build
+
+      - name: Install Python dependencies
+        run: |
+          (cd packages/agent && uv sync --frozen)
+          (cd packages/nn && uv sync --frozen)
+
+      - name: Mutation sweep
+        run: pnpm mutation
+
+  hammers:
+    name: hammers / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ["ubuntu-latest", "windows-latest"]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install pnpm
+        run: corepack enable pnpm
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install JS dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Codegen
+        run: pnpm codegen
+
+      - name: Install Python dependencies
+        working-directory: packages/agent
+        run: uv sync --frozen
+
+      - name: Pytest (hammers only)
+        working-directory: packages/agent
+        run: uv run pytest -q -ra -m hammer
+
+  properties:
+    name: properties / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ["ubuntu-latest", "windows-latest"]
+    env:
+      HYPOTHESIS_PROFILE: nightly
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install pnpm
+        run: corepack enable pnpm
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install JS dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Codegen
+        run: pnpm codegen
+
+      - name: Pytest (agent, nightly hypothesis profile)
+        working-directory: packages/agent
+        run: |
+          uv sync --frozen
+          uv run pytest -q -ra
+
+      - name: Pytest (nn, nightly hypothesis profile)
+        working-directory: packages/nn
+        run: |
+          uv sync --frozen
+          uv run pytest -q -ra
+
+  margin-sweep:
+    name: acceptance-margin sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install pnpm
+        run: corepack enable pnpm
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install JS dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Codegen
+        run: pnpm codegen
+
+      # Report-only: the sweep exits 0 regardless of the distribution. The
+      # C5 measurement put 91% of seed pairs below the +0.05 bar, so a gating
+      # threshold here would only restate that finding every night; the bar
+      # itself is an owner decision under ADR-0029.
+      - name: Sweep the acceptance margin over 200 seed pairs
+        working-directory: packages/nn
+        run: |
+          uv sync --frozen
+          uv run python scripts/margin_sweep.py --seeds 200 --json margin-sweep.json | tee margin-sweep.txt
+          {
+            echo '## ADR-0029 acceptance margin, 200 seed pairs'
+            echo '```'
+            cat margin-sweep.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: margin-sweep
+          path: |
+            packages/nn/margin-sweep.json
+            packages/nn/margin-sweep.txt
