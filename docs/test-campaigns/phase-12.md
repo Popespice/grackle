@@ -229,7 +229,7 @@ Following the phase-1 T8 tradition: claims vs reality.
 |---|---|---|
 | **C0** | Prerequisites P-1..P-4 + T13 doc fixes | PR gate (trivial) |
 | **C1** | T3 guard-of-the-guards (parity meta-test, path-discipline lint, codegen probes) + T2 census — **done, with three items explicitly deferred** (see tier tables above for per-probe outcomes): T2-2's per-OS skip-count assertion, T3-6(a) the typo'd-`$ref` degradation probe, and T3-6(b) a cross-version codegen determinism guard | PR gate — all sub-second, Ubuntu shadow |
-| **C2** | T5 expected-fail ledger — **done**: all six probes executed against the real system (see the T5 table for per-probe outcomes). T5-1 and T5-2 confirmed, fixed, and promoted in the same PR; T5-4, T5-6's retry case, and the new T5-7 ledgered strict-xfail; T5-3 pinned as documented behavior; T5-5's premise refuted and the tolerance it doubted pinned. Every passing pin is backed by a committed mutation spec (8 new, all killed). Findings F-2–F-6 below | PR gate |
+| **C2** | T5 expected-fail ledger — **done**: all six probes executed against the real system (see the T5 table for per-probe outcomes). T5-1 and T5-2 confirmed, fixed, and promoted in the same PR; T5-4, T5-6's retry case, and the new T5-7 ledgered strict-xfail; T5-3 pinned as documented behavior; T5-5's premise refuted and the tolerance it doubted pinned. Every passing pin is backed by a committed mutation spec (8 new, all killed). Findings F-2–F-7 below — F-7 is a defect in C0's own mutation harness, found and fixed during this chunk | PR gate |
 | **C3** | T4 mutation harness + specs + T4-5 vacuous-test fixes; T11-2..T11-5 (recorder port, vacuity, store-reset, perf cliff) | Harness runs nightly; specs' *presence* checked at PR gate |
 | **C4** | T6 fault injection + T7 concurrency battery | Fast cases PR gate; hammers nightly |
 | **C5** | T8 property batteries (if P-3 approved) + T9 numerics (telemetry + sweeps + numpy matrix in `ci-matrix.yml`) + `campaign.yml` (nightly: mutation sweep, margin sweep, property long-runs, hammer tests) | Nightly + main-push |
@@ -414,6 +414,41 @@ parse, and leave mid-file slot alignment as it is.
 chiefly after a full disk (F-4).
 
 **Recommendation.** Fix with or after F-4.
+
+### F-7 — The mutation harness could run the wrong bytecode, in both directions
+
+**Location.** `tools/mutation/runner.mjs` (C0's harness, prerequisite P-2).
+
+**Reproducer.** Run a same-size spec — `agent-part-writer-rename-before-close` swaps two lines —
+several times back to back, importing the target between runs, then disassemble the loaded
+`JsonlPartWriter.finalize`.
+
+**Observed.** Found by accident: after C2's full sweep, the pre-push gate failed four writer tests
+on a clean tree. `git status` was clean and the source was correct, but the loaded `finalize()`
+called `replace` before `close` — the mutant. Old runner, three back-to-back runs: the mutant left
+running from `__pycache__` in 2 of 3. The first fix (purge after restore) then exposed the reverse
+case: 2 of 3 runs reported a false *survivor*, because the original's freshly compiled bytecode
+still "matched" the just-written mutant, so the suite never ran the mutant at all.
+
+**Expected.** The code under test is exactly the source on disk: the mutant during the suite, and
+the original afterwards.
+
+**Root cause.** CPython reuses a `.pyc` while the source's mtime — recorded in whole seconds — and
+size both match. A same-size mutant written or restored within the same second as the cached
+bytecode cannot be told apart from it.
+
+**Fix (applied in C2).** The runner deletes the target's `__pycache__` entries after writing the
+mutant and again after restoring it. Afterwards: four back-to-back runs, all killed, all clean.
+Only one spec in the repo is same-size today, but nothing stops the next one.
+
+**Severity.** High for the instrument, even though the product is unaffected. The harness exists to
+certify outcomes, and this let it do both wrong things silently: certify a false survivor, and leave
+a live mutant behind that `git status` cannot see — the outcome its own README calls the worst thing
+it can do.
+
+**Recommendation.** Done. When C3 adds the nightly sweep, keep the source-restore check that is
+already there, and add a check of the loaded code too — for example, re-importing each Python
+target after the sweep and comparing its compiled code with a fresh compile of the source.
 
 ### Open observation (C2) — one unexplained full-suite stall
 

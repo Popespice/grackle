@@ -63,6 +63,14 @@ backstop that also covers an uncaught exception). This matters because the
 mutation is written into your real working tree — a mutant left behind is a
 deliberate bug one `git commit` away from shipping.
 
+For a Python target, restoring the source is not enough on its own: CPython
+reuses a cached `.pyc` while the source's mtime (whole seconds) and size still
+match, and a same-size mutant can land in the same second as the bytecode it
+replaces. Left alone, that runs the original code under a mutant (a false
+survivor) or keeps the mutant running after the restore, invisible to
+`git status`. The runner deletes the target's `__pycache__` entries after
+writing the mutant and again after restoring it (campaign C2, finding F-7).
+
 ### Three outcomes, not two
 
 A suite run resolves to `killed` (it ran and went red), `survives` (it ran and
