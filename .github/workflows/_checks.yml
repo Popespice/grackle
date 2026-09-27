@@ -65,6 +65,13 @@ jobs:
       - name: Biome
         run: pnpm exec biome ci .
 
+      # Validate-only (no mutation applied, no suite run): every committed
+      # mutant spec is well-formed and its target.find still matches its
+      # source exactly once. Seconds, so it belongs in the PR gate; the full
+      # sweep that actually applies each mutant is too slow for it.
+      - name: Mutation specs still match their targets
+        run: pnpm mutation:check
+
       - name: TypeScript
         run: pnpm typecheck
 

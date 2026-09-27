@@ -37,6 +37,9 @@ well-formed and that its `target.find` still matches its source exactly once —
 seconds rather than minutes, and safe on a dirty tree. This is the guard
 against specs rotting silently as the code they target drifts, so it belongs
 in the PR gate even where the full sweep is too slow to run.
+It runs in the PR gate (the CI "Mutation specs still match their targets"
+step) and in lefthook's `pre-push`, as `pnpm mutation:check`; `pnpm mutation`
+runs the full sweep.
 
 ### Two refusals
 
