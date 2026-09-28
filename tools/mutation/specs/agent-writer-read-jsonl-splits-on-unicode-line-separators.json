@@ -1,0 +1,15 @@
+{
+  "id": "agent-writer-read-jsonl-splits-on-unicode-line-separators",
+  "description": "read_jsonl splits with str.splitlines() instead of split('\\n'), so a raw U+0085/U+2028/U+2029 inside a JSON string (legal with ensure_ascii=False) breaks one well-formed line into two unparsable halves and the strict reader rejects a valid file (campaign T6-5).",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/writer.py",
+    "find": "    for raw_line in path.read_text(encoding=\"utf-8\").split(\"\\n\"):",
+    "replace": "    for raw_line in path.read_text(encoding=\"utf-8\").splitlines():"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_malformed_corpus.py", "-k", "strict_read_jsonl"]
+  },
+  "expect": "killed"
+}

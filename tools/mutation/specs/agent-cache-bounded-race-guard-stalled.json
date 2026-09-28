@@ -1,0 +1,20 @@
+{
+  "id": "agent-cache-bounded-race-guard-stalled",
+  "description": "T7-4 (docs/test-campaigns/phase-12.md): the T4-4 calibration mutant, run against the deterministic gate tests that hold the iter()/next() window open while the watch thread inserts and evicts. On _cache_bounded alone the RuntimeError escapes. Through _build_static_graph it drops predicted_heat from the connect-path push and raises out of the meta_cache insert, which on the watch thread would end watch mode.",
+  "target": {
+    "file": "packages/agent/src/grackle/server.py",
+    "find": "        except (StopIteration, RuntimeError):  # raced by the other thread",
+    "replace": "        except StopIteration:  # raced by the other thread"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_concurrency_parsers_caches.py",
+      "-k",
+      "raced_between_iter_and_next or both_caches_race"
+    ]
+  },
+  "expect": "killed"
+}

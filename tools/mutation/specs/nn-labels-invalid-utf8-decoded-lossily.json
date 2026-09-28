@@ -1,0 +1,15 @@
+{
+  "id": "nn-labels-invalid-utf8-decoded-lossily",
+  "description": "heat_from_jsonl decodes with errors='replace', so a line with invalid UTF-8 inside a string is counted under a U+FFFD-mangled node id instead of skipped, and training labels stop matching the agent's heat (campaign T6-5).",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/ml/labels.py",
+    "find": "                event = json.loads(stripped.decode(\"utf-8\"))",
+    "replace": "                event = json.loads(stripped.decode(\"utf-8\", \"replace\"))"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/ml/test_malformed_corpus.py"]
+  },
+  "expect": "killed"
+}

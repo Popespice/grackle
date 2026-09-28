@@ -1,0 +1,20 @@
+{
+  "id": "agent-session-store-select-star",
+  "description": "T10-3 pin: reads select * and map columns by position, so a sessions table with a column this version does not know (a newer grackle's, mid-table) is read misaligned: started_ns comes back as the unknown column's value.",
+  "target": {
+    "file": "packages/agent/src/grackle/session_store.py",
+    "find": "_SELECT_COLUMNS = \"id, label, started_ns, ended_ns, source_path, event_count, language\"",
+    "replace": "_SELECT_COLUMNS = \"*\""
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_session_store_faults.py",
+      "-k",
+      "newer_schemas_extra_columns_are_tolerated"
+    ]
+  },
+  "expect": "killed"
+}

@@ -1,0 +1,20 @@
+{
+  "id": "agent-llvm-cov-bool-region-line-accepted",
+  "description": "_min_region_line's primary-file pass accepts a bool region line (bool is an int subclass), so a [true, ...] region reads as line 1 and can become the function's start line (campaign T6-5).",
+  "target": {
+    "file": "packages/agent/src/grackle/rust_runtime/llvm_cov_parse.py",
+    "find": "        if r[5] != 0:  # fileID != 0 → macro-expansion region for another file\n            continue\n        line = r[0]\n        if not isinstance(line, int) or isinstance(line, bool):",
+    "replace": "        if r[5] != 0:  # fileID != 0 → macro-expansion region for another file\n            continue\n        line = r[0]\n        if not isinstance(line, int):"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_malformed_corpus.py",
+      "-k",
+      "llvm_cov_parser_and_resolver"
+    ]
+  },
+  "expect": "killed"
+}

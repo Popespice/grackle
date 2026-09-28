@@ -1,0 +1,20 @@
+{
+  "id": "agent-covdata-line-regex-end-unanchored",
+  "description": "The textfmt line regex loses its end anchor, so a malformed line with anything after the count (an extra field, junk, a fractional count) parses as a block with a truncated count instead of being skipped (campaign T6-5).",
+  "target": {
+    "file": "packages/agent/src/grackle/go_runtime/covdata_parse.py",
+    "find": "(?P<count>\\d+)$\")",
+    "replace": "(?P<count>\\d+)\")"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_malformed_corpus.py",
+      "-k",
+      "covdata_parser_and_resolver"
+    ]
+  },
+  "expect": "killed"
+}

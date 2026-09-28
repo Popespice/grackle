@@ -1,0 +1,20 @@
+{
+  "id": "agent-session-store-close-leaves-connection-open",
+  "description": "T6-1 pin (use-after-close): close() marks the store closed but never closes the connection, so later calls silently succeed. RecordingSink relies on a closed store raising to log 'file written but not registered'.",
+  "target": {
+    "file": "packages/agent/src/grackle/session_store.py",
+    "find": "            self._closed = True\n            self._conn.close()",
+    "replace": "            self._closed = True"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_session_store_faults.py",
+      "-k",
+      "closed_store_refuses_every_call"
+    ]
+  },
+  "expect": "killed"
+}

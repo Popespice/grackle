@@ -1,0 +1,20 @@
+{
+  "id": "agent-tree-sitter-walker-cancellable-parse",
+  "description": "T7-1 (docs/test-campaigns/phase-12.md): the walker switches to the only form of Parser.parse that accepts a progress_callback (a read callback), which is how ADR-0027's 'cooperatively cancellable parser' would have to be built on py-tree-sitter 0.25. Single-threaded it parses identically. But Python now runs mid-parse, so the GIL can pass to another thread that enters the same get_parser() singleton. Threads then overlap inside the non-reentrant C parser: the process crashes or the trees come back wrong.",
+  "target": {
+    "file": "packages/agent/src/grackle/tree_sitter_walker.py",
+    "find": "                tree = parser.parse(content)",
+    "replace": "                tree = parser.parse(\n                    lambda byte, _point: content[byte : byte + 65536],\n                    progress_callback=lambda _offset, _has_error: False,\n                )"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_concurrency_parsers_caches.py",
+      "-k",
+      "concurrent_walks"
+    ]
+  },
+  "expect": "killed"
+}

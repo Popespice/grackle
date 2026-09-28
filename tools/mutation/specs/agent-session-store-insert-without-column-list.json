@@ -1,0 +1,20 @@
+{
+  "id": "agent-session-store-insert-without-column-list",
+  "description": "T10-3 pin: save_session's INSERT drops its column list and relies on the table's column count and order, so every write to a database carrying an extra column fails ('table sessions has 9 columns but 7 values were supplied').",
+  "target": {
+    "file": "packages/agent/src/grackle/session_store.py",
+    "find": "                INSERT OR REPLACE INTO sessions\n                    (id, label, started_ns, ended_ns, source_path, event_count, language)\n                VALUES",
+    "replace": "                INSERT OR REPLACE INTO sessions\n                VALUES"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_session_store_faults.py",
+      "-k",
+      "newer_schemas_extra_columns_are_tolerated"
+    ]
+  },
+  "expect": "killed"
+}

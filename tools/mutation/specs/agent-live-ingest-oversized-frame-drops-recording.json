@@ -1,0 +1,15 @@
+{
+  "id": "agent-live-ingest-oversized-frame-drops-recording",
+  "description": "A receive loop ended by ConnectionClosedError (e.g. a 1009 for an oversized frame) skips finalizing its recording, leaving an open, orphaned .part and no store row. A clean disconnect ends the loop without raising and still finalizes, so only an abnormal-close test can tell (campaign T6-3).",
+  "target": {
+    "file": "packages/agent/src/grackle/server.py",
+    "find": "    finally:\n        if recorder is not None:\n            # Shield so a finalize triggered by the outer cancellation (producer",
+    "replace": "    except websockets.exceptions.ConnectionClosedError:\n        recorder = None\n        raise\n    finally:\n        if recorder is not None:\n            # Shield so a finalize triggered by the outer cancellation (producer"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_server_ingest_faults.py", "-k", "oversized"]
+  },
+  "expect": "killed"
+}

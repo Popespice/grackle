@@ -3,7 +3,7 @@
 **Date drafted**: 2026-08-20
 **Under test**: `v0.12.0-phase-12` (main `c305deb`) — the entire stack
 **Environment**: macOS 26.5 / arm64 primary; CI matrix Ubuntu + Windows (+ macOS on main-push), Python 3.12/3.13, Node 22
-**Status**: EXECUTING — C0–C3 done, C4–C6 pending; findings recorded here as tiers execute
+**Status**: EXECUTING — C0–C4 done, C5–C6 pending; findings recorded here as tiers execute
 
 ## Lineage and doctrine
 
@@ -130,11 +130,11 @@ Beyond the ledger entries, the injection battery over every persistence/ingest s
 
 | Probe | Fails if |
 |---|---|
-| T6-1: SQLite store — locked db, corrupt db file, use-after-close, concurrent writers, missing `source_path` | The store has **5 tests, all happy-path**. A corrupt db currently surfaces as an unhandled traceback at CLI startup; a shutdown-vs-finalize race silently loses the session row (`ProgrammingError` swallowed at `recording_sink.py:175-182`); the schema DDL has no migration path — an added column against an existing db no-ops then fails at INSERT. |
-| T6-2: orphan sweep hazards | `sweep_orphaned_recordings` with an unlinkable `.part` (permission error) **raises out of `serve()` startup before the socket binds** — the same unobserved-task-death shape as the T5-2 flake; and the 30-second age heuristic can eat a *live* recording's `.part`, admitted in its own docstring, pinned by nothing. |
-| T6-3: WS ingest — oversized frame (>1 MiB default closes with 1009 *before* the receive loop sees it; whether the in-flight recording finalizes correctly is unpinned), `session_load_request` flood (unbounded `create_task` fan-out), slow-consumer stall (sequential `await ws.send` per connection inside the producer's receive loop — one slow consumer blocks ingest for everyone and for the recording sink; zero coverage) | Any of these crashes, hangs, corrupts a recording, or starves the ring buffer. |
-| T6-4: watch mode — file deleted mid-parse through the real watch loop; rebuild-during-rebuild serialization **pin** (currently structural via `max_workers=1` + sequential await; a future `create_task` refactor would silently race the unlocked caches) | The pin is the probe: assert two rapid edits never produce overlapping `_build_static_graph` executions. |
-| T6-5: malformed-corpus sweep | Extend the `_EIGHT_LINES` in-test template (the repo's best malformed-input pattern) into a shared adversarial-trace generator, seeded, per the `stress-2k/generate.py` committed-generator precedent — used against `read_jsonl`, `JsonlIndex.build`, `TraceAggregates.build`, `heat_from_jsonl`, and the three external-tool parsers (covdata / llvm-cov / V8 profile), which parse untrusted output and whose e2e tests are toolchain-gated off most CI legs. Fails if any parser raises, hangs, or emits a node_id containing `\` or `..`. |
+| T6-1: SQLite store — locked db, corrupt db file, use-after-close, concurrent writers, missing `source_path` | The store has **5 tests, all happy-path**. A corrupt db currently surfaces as an unhandled traceback at CLI startup; a shutdown-vs-finalize race silently loses the session row (`ProgrammingError` swallowed at `recording_sink.py:175-182`); the schema DDL has no migration path — an added column against an existing db no-ops then fails at INSERT. **Done (C4).** Pinned as correct: a save waits out another connection's write lock (WAL reads and `open()` are never blocked); two or four `SessionStore` instances writing to one db lose nothing; use-after-close raises `ProgrammingError` and `close()` is idempotent; a single cancel still lands the recording row even with a 300 ms injected save delay; a missing `source_path` is skipped. **Premise narrowed:** a single Ctrl-C does *not* lose the row, because websockets drains the handlers before `serve()`'s `finally` runs. Only a second interrupt during that drain does. **Ledgered: F-8's a–d** (corrupt db → raw traceback at CLI startup; second interrupt drops the row; a store read error drops the client's WebSocket; `session_load` guards with `exists()` not `is_file()`, so a FIFO hangs shutdown). |
+| T6-2: orphan sweep hazards | `sweep_orphaned_recordings` with an unlinkable `.part` (permission error) **raises out of `serve()` startup before the socket binds** — the same unobserved-task-death shape as the T5-2 flake; and the 30-second age heuristic can eat a *live* recording's `.part`, admitted in its own docstring, pinned by nothing. **Done (C4). Both hazards confirmed, and the second is sharper than its docstring admits.** An unremovable orphan `.part` (injected `PermissionError` or a real read-only directory) raises out of `serve()` before the bind; `start_server` now surfaces this in 0.09 s instead of as a silent task death. A peer server's startup sweep deletes an *actively written* recording, not only an idle one: after a live event the `.part` is still 0 bytes with an unchanged mtime (the buffered writer), so it looks orphaned, and `RecordingSink` then discards the **whole** session. The idle case is pinned as documented behavior; **the unremovable-orphan and active-recording cases are ledgered (F-10's a–b).** |
+| T6-3: WS ingest — oversized frame (>1 MiB default closes with 1009 *before* the receive loop sees it; whether the in-flight recording finalizes correctly is unpinned), `session_load_request` flood (unbounded `create_task` fan-out), slow-consumer stall (sequential `await ws.send` per connection inside the producer's receive loop — one slow consumer blocks ingest for everyone and for the recording sink; zero coverage) | Any of these crashes, hangs, corrupts a recording, or starves the ring buffer. **Done (C4).** Oversized frame: **correct, pinned.** The producer is closed with 1009 and the recording finalizes with exactly the events before the oversized one, including 5 still queued unconsumed. Load flood and slow consumer: **confirmed, ledgered (F-10's c–f).** The slow-consumer premise needed incompressible traffic to reproduce, since websockets negotiates permessage-deflate by default. Recovery once the stuck consumer leaves is correct and pinned. |
+| T6-4: watch mode — file deleted mid-parse through the real watch loop; rebuild-during-rebuild serialization **pin** (currently structural via `max_workers=1` + sequential await; a future `create_task` refactor would silently race the unlocked caches) | The pin is the probe: assert two rapid edits never produce overlapping `_build_static_graph` executions. **Done (C4).** Recovery from a file deleted mid-rebuild is pinned through the real `serve(watch=True)` loop. The no-overlap pin holds, including an 80-edit hammer. **Premise corrected:** raising `max_workers` alone does not break serialization, and neither does fire-and-forget alone. Each mechanism serializes rebuilds by itself, and only losing both (killed: "3 rebuilds started while the first was still running") breaks it. The two single-mechanism specs are kept as `survives` tripwires. **Ledgered: F-9** (a file vanishing mid-parse aborts the whole rebuild; a file that disappears and reappears mid-rebuild leaves clients stale indefinitely). |
+| T6-5: malformed-corpus sweep | Extend the `_EIGHT_LINES` in-test template (the repo's best malformed-input pattern) into a shared adversarial-trace generator, seeded, per the `stress-2k/generate.py` committed-generator precedent — used against `read_jsonl`, `JsonlIndex.build`, `TraceAggregates.build`, `heat_from_jsonl`, and the three external-tool parsers (covdata / llvm-cov / V8 profile), which parse untrusted output and whose e2e tests are toolchain-gated off most CI legs. Fails if any parser raises, hangs, or emits a node_id containing `\` or `..`. **Done (C4).** A seeded generator (18 trace line kinds, including invalid UTF-8, BOM, lone CR, 1e400 counts, 256-deep nesting, 64 KiB node ids and raw U+2028) plus adversarial covdata, llvm-cov, V8-profile and V8-coverage inputs. Gate runs seeds 0–7; the nightly hammer runs 8–399. With no unexpected exceptions and no hangs, `JsonlIndex.build`, `build_seekable` and `TraceAggregates.build` agree byte-for-byte on offsets and counts and match an independent oracle at every position; resolvers only ever return real graph ids, `<unresolved>` or None. 10 specs, all surviving the pre-existing suites and killed by the new ones. **Ledgered: F-11**, ten parser-robustness defects. |
 
 ### T7 — The concurrency battery
 
@@ -144,11 +144,11 @@ as the suite can tell.
 
 | Probe | Seam | Fails if |
 |---|---|---|
-| T7-1 | tree-sitter parser singleton — concurrent `.parse()` | The source itself flags this un-audited (`server.py:468-476`); the existing 4-thread test asserts only singleton *identity*, never racing `.parse()` — the actual documented risk, reachable today from the watch executor + connect path. |
-| T7-2 | stream sender `_counter_lock` | No test races `sink()` against `_drain_loop()` — the exact lost-decrement the lock's docstring says it prevents. Mutating the lock away likely leaves the suite green (T4-5 crossover). |
-| T7-3 | `SessionStore` lock | All 5 tests single-threaded; N-writer hammer test modeled on `test_cache.py:301` (the one good example in the repo). |
-| T7-4 | `meta_cache` / `predicted_ctx.cache` unlocked dicts (executor thread + connect path) | The documented "benign race" has never been exercised; the `except RuntimeError` mitigation is the T4-4 calibration survivor. A two-thread hammer either reaches it (promoting it from unreachable to pinned) or the benign-race claim gets its first evidence. |
-| T7-5 | two producers, two connections, one store | Recording-sink interleave — never tested beyond sequential sessions on one connection. |
+| T7-1 | tree-sitter parser singleton — concurrent `.parse()` | The source itself flags this un-audited (`server.py:468-476`); the existing 4-thread test asserts only singleton *identity*, never racing `.parse()` — the actual documented risk, reachable today from the watch executor + connect path. **Done (C4) — pinned, and the safety turns out to be the GIL's, not a lock's.** py-tree-sitter 0.25.2 holds the GIL for the whole `parse(bytes)`: 8 threads × 4 parses per grammar, plus concurrent walker runs, all match the single-threaded trees (run in a child process, so a crash is a clean failure). Positive control: forcing real overlap through the read-callback form of `parse` crashes 10/10 (SIGSEGV/SIGBUS). Two specs switch to that form or add a debug logger, and both are killed by the crash. ADR-0027 was amended: the "cancellable parser" future work needs a per-thread `Parser` first. |
+| T7-2 | stream sender `_counter_lock` | No test races `sink()` against `_drain_loop()` — the exact lost-decrement the lock's docstring says it prevents. Mutating the lock away likely leaves the suite green (T4-5 crossover). **Done (C4) — pinned; premise partly wrong.** The lost update the lock guards cannot happen on GIL builds: an unlocked `+=`/`-=` on a plain int attribute lost 0 of 1M operations on CPython 3.12, 3.13 and 3.14 at a 1 µs switch interval. The lock matters on a free-threaded build, or if the counter is ever routed through Python code. A paused-write test (the counter behind a property) catches both lost-decrement and lost-increment directions. The three lock-removal specs all survived the whole pre-existing suite, and all are now killed. |
+| T7-3 | `SessionStore` lock | All 5 tests single-threaded; N-writer hammer test modeled on `test_cache.py:301` (the one good example in the repo). **Done (C4) — pinned.** With the lock neutered, 4 writers × 25 saves plus 2 readers lost 21–28 of 100 rows per run (`InterfaceError`, `SystemError`, "cannot start a transaction within a transaction"); with it, zero errors. A deterministic probed-connection test parks one call inside SQLite and records any call that gets in beside it. Per-method lock-removal specs (save/list/get/close) are all killed; 8 of this workstream's 12 specs survived the pre-existing suite. |
+| T7-4 | `meta_cache` / `predicted_ctx.cache` unlocked dicts (executor thread + connect path) | The documented "benign race" has never been exercised; the `except RuntimeError` mitigation is the T4-4 calibration survivor. A two-thread hammer either reaches it (promoting it from unreachable to pinned) or the benign-race claim gets its first evidence. **Done (C4) — the T4-4 guard is reached and pinned.** Two threads on the real `_cache_bounded` hit the `RuntimeError` branch 10–15 times per 4M calls at the default switch interval, and 136–228 per 40k at 1 µs; the cache always ends at its cap. Deterministic gate tests hold the `iter()`/`next()` window open: through the real `_build_static_graph`, the guard absorbs exactly two errors and every graph comes out complete. Without it, `predicted_heat` silently drops and the watch thread dies. Two new specs are killed (hammered and stalled); the original calibration spec still survives its own suite, as designed. The `StopIteration` half is unreachable, since eviction only runs above the cap. |
+| T7-5 | two producers, two connections, one store | Recording-sink interleave — never tested beyond sequential sessions on one connection. **Done (C4) — pinned.** Strict interleaving, a free-running pair and an 8 × 2000-event hammer: two producers on one store never cross-contaminate. The shared-recorder mutant was caught by the old suite in only 1 of 7 runs; the interleaved test catches it every time. Writing the hammer surfaced F-10's g, a first-party producer that never reads its socket. |
 
 ### T8 — Property and fuzz batteries (gated on P-3)
 
@@ -184,9 +184,9 @@ The gaps:
 
 | Probe | Fails if |
 |---|---|
-| T10-1: server-produced recording bytes | No direct assertion a *recording* is CRLF-free (only transitively via the shared writer). One byte-level check on a real recorded session. |
-| T10-2: checkpoint reload-equivalence cross-platform | `heat-model.npz` has no byte pin (unattainable — ZIP embeds mtimes) **and no reload-equivalence pin either**: nothing asserts a fixed-seed model trained on OS A predicts identically loaded on OS B. Given the 1-ULP libm history lives exactly in this pipeline, a seeded predict-vector golden (tolerance-banded) is the probe. |
-| T10-3: `sessions.db` forward-compat | `CREATE TABLE IF NOT EXISTS` + no migration path: open a db created by the previous schema, probe read + write. |
+| T10-1: server-produced recording bytes | No direct assertion a *recording* is CRLF-free (only transitively via the shared writer). One byte-level check on a real recorded session. **Done (C4) — pinned.** The producer's frames were pretty-printed with CRLF and carried non-ASCII text, an escaped CR LF and a raw U+2028. The server's recording has no `\r` byte and is byte-identical to `write_jsonl`'s output. |
+| T10-2: checkpoint reload-equivalence cross-platform | `heat-model.npz` has no byte pin (unattainable — ZIP embeds mtimes) **and no reload-equivalence pin either**: nothing asserts a fixed-seed model trained on OS A predicts identically loaded on OS B. Given the 1-ULP libm history lives exactly in this pipeline, a seeded predict-vector golden (tolerance-banded) is the probe. *Moved to C5 (numerics).* |
+| T10-3: `sessions.db` forward-compat | `CREATE TABLE IF NOT EXISTS` + no migration path: open a db created by the previous schema, probe read + write. **Done (C4).** The schema has not changed since 8.3, so no older-schema db exists in the wild; the probe tests the mechanism the next schema change (13.0's `root` column) will hit. A db with extra columns, one of them mid-table, reads and writes correctly (pinned by `SELECT *` and column-list-free INSERT specs). **Ledgered: F-8's e–f** (INSERT OR REPLACE wipes columns this version doesn't know; no migration path, so any added column breaks every existing library). |
 
 ### T11 — Frontend rendering and panel hardening
 
@@ -232,7 +232,7 @@ Following the phase-1 T8 tradition: claims vs reality.
 | **C1** | T3 guard-of-the-guards (parity meta-test, path-discipline lint, codegen probes) + T2 census — **done, with three items explicitly deferred** (see tier tables above for per-probe outcomes): T2-2's per-OS skip-count assertion, T3-6(a) the typo'd-`$ref` degradation probe, and T3-6(b) a cross-version codegen determinism guard | PR gate — all sub-second, Ubuntu shadow |
 | **C2** | T5 expected-fail ledger — **done**: all six probes executed against the real system (see the T5 table for per-probe outcomes). T5-1 and T5-2 confirmed, fixed, and promoted in the same PR; T5-4, T5-6's retry case, and the new T5-7 ledgered strict-xfail; T5-3 pinned as documented behavior; T5-5's premise refuted and the tolerance it doubted pinned. Every passing pin is backed by a committed mutation spec (8 new, all killed). Findings F-2–F-7 below — F-7 is a defect in C0's own mutation harness, found and fixed during this chunk | PR gate |
 | **C3** | T4 mutation battery + T11-2..T11-5 — **done**: 95 new committed specs (106 in total), all behaving as declared in the full sweep. Of the 78 T4-1..T4-3 mutants, the pre-existing suites killed 60; the other 18 exposed real test gaps, each closed by an additive test proven to fail under its mutant. The 17 panel specs back new or strengthened tests: 13 cover paint paths that had no coverage at all before T11-2, and 4 are ranking mutants that survived the old StatsPanel/CyclesPanel tests. The 12.4 "30/30" claim mostly reproduces (31/34 re-specified). The Adam premise was corrected (see T4-5). One product defect was ledgered (T5-8). `pnpm mutation:check` is now in the PR gate and in pre-push; the full sweep (`pnpm mutation`) goes to C5's nightly workflow | Harness runs nightly; specs' *presence* checked at PR gate |
-| **C4** | T6 fault injection + T7 concurrency battery | Fast cases PR gate; hammers nightly |
+| **C4** | T6 fault injection + T7 concurrency (+ T10-1 and T10-3, which the original plan assigned to no chunk) — **done**. 26 product defects confirmed and ledgered as 59 strict xfails (F-8–F-11; 61 on Python 3.14, where F-11 #10 also applies); every correct behavior pinned, 40 new mutation specs, most surviving the pre-existing suites. Four premises corrected: T6-1's shutdown race needs a *second* interrupt; T6-4's rebuild serialization has two independent mechanisms; T7-2's lost update cannot occur on GIL builds; and the T4-4 "unreachable" guard is reachable (now pinned). ADR-0027 amended. Hammers are marked `@pytest.mark.hammer` and deselected by default; each has an unmarked small sibling in the gate | Fast cases PR gate; hammers nightly |
 | **C5** | T8 property batteries (if P-3 approved) + T9 numerics (telemetry + sweeps + numpy matrix in `ci-matrix.yml`) + `campaign.yml` (nightly: mutation sweep, margin sweep, property long-runs, hammer tests) | Nightly + main-push |
 | **C6** | T11-1 GraphCanvas harness + T11-6/7; T12 live-system probes executed and findings appended to this document in the F-N format | Manual + PR gate |
 
@@ -451,6 +451,86 @@ it can do.
 already there, and add a check of the loaded code too — for example, re-importing each Python
 target after the sweep and comparing its compiled code with a fresh compile of the source.
 
+### F-8 — Session store: six fault-path defects (T6-1, T10-3)
+
+Every row is a strict xfail in `packages/agent/tests/test_session_store_faults.py` or
+`test_cli_store_faults.py`, asserting the correct behavior; each fails for its stated reason
+under `--runxfail`.
+
+| # | Defect | Location | Fix direction | Severity |
+|---|---|---|---|---|
+| a | A corrupt `sessions.db` crashes `serve --store` / `learn --from-store` with a raw `sqlite3.DatabaseError` traceback (file left untouched) | `cli.py` — both `SessionStore.open` call sites | catch `sqlite3.Error`, raise a `ClickException` naming the file | Low — no data lost; looks like a crash |
+| b | A second Ctrl-C while the server drains (websockets' 10 s close timeout) drops a finalized recording's row: `.jsonl` on disk, "Cannot operate on a closed database" logged | `serve()`'s `finally` closes the store; `recording_sink.py` swallows the error | await in-flight finalizes (shielded, bounded) before `store.close()`; a startup pass registering row-less `recordings/*.jsonl` would also recover other lost saves | Medium-low — the 10 s hang invites exactly the second Ctrl-C |
+| c | A store read error in `session_list_request` / `session_load_request` escapes the receive loop and closes the client with 1011 | `server.py` receive loop — unlike `trace_query_request`, no try/except | wrap both branches | Medium — the panel lists sessions on every connect with no auto-reconnect, so an unreadable store makes the UI unusable |
+| d | `session_load` guards `source_path` with `exists()`, not `is_file()`: a directory or `""` replays an empty session, and a FIFO blocks an executor thread (a real `grackle serve` was still up 20 s after Ctrl-C) | `server.py` session-load branch (`learn` already uses `is_file()` for this reason) | `is_file()` + warning | Low-medium — needs a bad row; the FIFO case blocks shutdown |
+| e | `INSERT OR REPLACE` resets columns this version doesn't know (a newer build's `root`/`tags`) on every re-save — and `serve --store --trace-source X` re-saves X on every start | `session_store.py` `save_session` | `INSERT … ON CONFLICT(id) DO UPDATE SET <known columns>` | Low, latent |
+| f | No migration path: `CREATE TABLE IF NOT EXISTS` no-ops against an older table, `user_version` is never stamped, and every call then fails with "no such column" (triggering c, and losing every live recording's row) | `session_store.py` `_DDL`/`open()` | stamp `user_version`; ALTER-based migration keyed on it | Low today; **high the moment any column is added** (13.0's planned `root`) |
+
+**Recommendation.** Fix a, c and d together (small, contained). Land f before 13.0 adds
+`root` — it is the prerequisite, not a follow-up. b and e ride along with f.
+
+### F-9 — Watch mode: a transient file absence loses or stalls the rebuild (T6-4)
+
+| # | Defect | Location | Fix direction | Severity |
+|---|---|---|---|---|
+| a | A file listed by the walker but gone by its `CacheManager.get` hash raises `FileNotFoundError` out of `walk()`; `_build_static_graph` returns `None`, so the rebuild is dropped and a client connecting at that instant gets no `static_graph` (2 xfails: Python and tree-sitter walkers) | `cache.py` `CacheManager.get` → `_hash_file`, called before the walkers' own `except OSError` | treat `OSError` from `get` as a vanished file | Low-medium — realistic during `git checkout`, codegen, or rename-aside saves |
+| b | A file that disappears and reappears during a rebuild leaves every client stale until some unrelated edit, because the watcher has already advanced its snapshot past the triggering edit when `_watch_loop` drops the failed rebuild with `continue` (1 xfail). Fixing a alone does not fix it — simulated: the test still fails, now with the file missing from the graph | `server.py` `_watch_loop` | a failed or partial rebuild must mark its paths dirty for the next tick | Low-medium — silent, unbounded staleness |
+
+### F-10 — Live ingest: seven defects in the server's receive path (T6-2, T6-3, T7-5)
+
+Strict xfails in `test_orphan_sweep_faults.py` and `test_server_ingest_faults.py`.
+
+| # | Defect | Location | Fix direction | Severity |
+|---|---|---|---|---|
+| a | An orphan `.part` the server may not delete (read-only dir; on Windows, held open by another server) raises out of `serve()` before the bind — raw traceback, store left unclosed (2 xfails) | `sweep_orphaned_recordings` — the `unlink` is unguarded, and runs before `serve()`'s `try` | catch `OSError` like the `stat()` branch; move pre-bind work inside the `try` | Low-medium — the whole server fails to start |
+| b | A peer server's startup sweep deletes an **actively written** recording: buffered writes leave the `.part` at 0 bytes with an unchanged mtime, so the owner's rename fails and the whole session is discarded | the sweep's mtime heuristic + `JsonlPartWriter` buffering | an ownership signal the sweep honors (an OS lock), or a coarse mtime refresh — not a per-event flush (ADR-0020) | Low-medium — needs a shared store dir, but the loss is silent and total; on 3.14 the 128 KiB buffer makes a slow recording look orphaned for most of its life |
+| c | A `session_load_request` flood starves every default-executor user: a live session's `.jsonl` lands but its row is withheld until the loads finish | `_receive_loop`'s untracked `create_task(load_stored_session(...))`; `build_seekable` on the shared default executor | bound in-flight loads per connection, keep task references, a dedicated bounded executor | Low-medium |
+| d | Concurrent loads of one session each build the whole index (8 builds instead of 1) | `file_replay.load_stored_session` — check, await build, cache after | cache the in-flight build, or lock per session id | Low — it is the mechanism behind c |
+| e | One stalled consumer freezes **all** live ingest — other consumers, the ring buffer and the recording — and nothing ends it: the keepalive's own ping blocks in the same `drain()` | `live_buffer.broadcast`'s sequential `await ws.send` inside the producer's receive loop, before the recording write | per-consumer bounded queues with a writer task each (or websockets' non-blocking `broadcast()`); write the ring buffer and recording before fan-out | Medium — total and unbounded blast radius |
+| f | During that stall the keepalive kills the *healthy producer* (1011, pongs unread) while the stuck consumer stays open; the recording is finalized short (18 of 64 events observed) | same as e | e's fix, plus a send timeout that closes the stuck consumer | Medium |
+| g | `grackle trace --connect`'s post-run replay never reads its socket, so a ring-buffer history push stalls the close handshake: a second run within 60 s took 10.12 s (closed 1006) instead of 0.13 s | `cli.py` `_stream_events_to_server` — no inbound drain, unlike `TraceStreamSender._recv_drain` | drain inbound frames concurrently | Low-medium — deterministic and user-visible on the default path |
+
+**Recommendation.** e and f are the priority, one fix. g is a small, isolated fix. a and b share the
+sweep and belong together.
+
+### F-11 — Parser robustness: eleven ways a malformed input loses a whole file (T6-5)
+
+All Low severity: grackle's own writers and the real toolchains never produce these inputs, and
+each failure loses a whole file, trace or session rather than corrupting data. 39 strict xfails
+on Python 3.12/3.13 (37 agent in `test_malformed_corpus.py`, 2 nn); #10 adds 2 more on 3.14.
+
+| # | Defect | Location |
+|---|---|---|
+| 1 | A >4300-digit integer or 100k-deep nesting raises `ValueError`/`RecursionError` past the per-line tolerance (`grackle diff` tracebacks; `serve` disables seek for the file; `read_window` fails every window containing it) | `aggregates.py` builders, `jsonl_index.read_window`, nn `heat_from_jsonl` |
+| 2 | A non-string `node_id` (number, bool, array, object) enters the aggregates: arrays/objects raise `TypeError`; numbers become keys that later break `top_k` and `grackle diff` — sibling of T5-8; the nn mirror already skips it | `aggregates.py` builders |
+| 3 | `read_window` skips a VT/FF-padded line that the aggregates count, so seek and heat disagree on whether a slot is an event | `jsonl_index.read_window` |
+| 4 | `read_jsonl` splits on a raw CR (universal newlines), contradicting its own `\n`-only docstring | `writer.read_jsonl` |
+| 5 | `parse_textfmt` raises on an over-long number instead of skipping the line as documented | `go_runtime/covdata_parse.py` |
+| 6 | `parse_export` raises `RecursionError` on a deeply nested document instead of returning `[]` | `rust_runtime/llvm_cov_parse.py` |
+| 7 | `parse_export` keeps negative counts, contradicting its own comment and `RustCoverFunction.count` | `rust_runtime/llvm_cov_parse.py` |
+| 8 | `iter_coverage_deltas` crashes on non-object entries, non-list fields or an `inf` count, aborting the `--stream` session its own `_as_int` docstring says must survive | `node_runtime/coverage_poll.py` |
+| 9 | The V8 sampling pipeline crashes on malformed ids, time deltas, callFrames or function names, losing the whole sampling trace | `node_runtime/profile_reconstruct.py`, `launcher._make_resolve` |
+| 10 | On Python 3.14, a `file://` URL with a remote host makes `url2pathname` raise `URLError` outside `_normalize`'s `try` (3.12/3.13 drop it correctly; CI tests only those, but a local uv env resolved 3.14) | `node_runtime/node_resolution.py` |
+| 11 | A coverage URL with an embedded NUL (`a.ts%00`) reaches `path.read_bytes()` in `_line_map_for_url`, which catches `OSError` only, so `ValueError: embedded null byte` escapes and aborts the `--stream` coverage session, contradicting the function's own "`None` for read failures". It is masked upstream wherever `Path.resolve()` rejects the NUL first (POSIX and Windows py3.12) and **exposed on Windows py3.13**, where the corpus sweep's seeds 4–7 failed CI. Ledgered deterministically on every platform by handing the function a NUL path (1 xfail); the coverage corpus sweep leaves the `%00` URL out (the sampling sweep keeps it), so a new `ValueError` there fails it | `node_runtime/launcher.py` `_line_map_for_url` |
+
+**Recommendation.** One "parse defensively" chunk: a shared per-line decode helper (catching
+`ValueError` + `RecursionError`, requiring a dict with a string `node_id`) fixes 1–4 and T5-8
+together; 5–11 are one-line guards each (#11: catch `ValueError` beside `OSError`).
+
+### C4 observations (not ledgered)
+
+- **The first Windows run of C4's tests (PR #93 CI) found three things the macOS/Ubuntu runs could not.** (1) mypy failed on POSIX-only `os.mkfifo`/`os.O_NONBLOCK` in the FIFO test, before pytest ran (`mypy --platform win32` reproduces it locally; fixed). (2) `test_watch_edit_survives_a_file_blinking_mid_rebuild` read the blinking file straight after the hook *deleted* it, before the hook had *restored* it — a race that Ubuntu and Windows py3.12 won by luck and Windows py3.13 lost (`FileNotFoundError`); it now waits on a `restored` event, verified by slowing the restore on macOS until the old test failed identically. (3) One more product defect, F-11 #11, whose corpus-sweep failure was reproduced locally by making `to_posix` keep the NUL, as Python 3.13's Windows `resolve()` evidently does. A lesson for the nightly job: the hammers and the property profile run on Windows there too, for the same reason.
+
+- `learn --from-store` opens the store read-write, so pointed at an unrelated SQLite file it would
+  switch it to WAL and add a `sessions` table (found by reading; not run).
+- `profile_reconstruct` memory grows with the square of stack depth: a 10k-deep recursion peaks
+  at 414 MiB; its docstring says O(nodes).
+- CPython 3.14: an asyncio `_SelectorSocketTransport` can close via its drain path without
+  counting the loss, so a later websockets `abort()` hits `_loop is None`. Hit by a test client,
+  worked around in the test; server-side exposure not investigated.
+- Live ingest runs at about 0.46 ms per event with no consumers attached (~2k events/s). Not
+  investigated.
+
 ### Open observation (C2) — one unexplained full-suite stall
 
 During C2, one `uv run pytest -q -ra` of the agent suite stalled for over 10 minutes (normally about
@@ -483,4 +563,15 @@ as the numeric-property precedent.)*
 - **Consistent per-line decoding across packages.** `jsonl_index`, `aggregates`, and nn's `labels`
   all catch `(json.JSONDecodeError, UnicodeDecodeError)` per line, so a torn salvage costs exactly
   one line wherever it is read.
+
+**C4:**
+
+- **Every concurrency pin was shown to fail without its synchronization.** Deterministic
+  window-widening (parked connections, paused writes, held-open iterators) made the gate tests
+  reliable. The many-iteration hammers are corroboration, not the evidence.
+- **The corpus sweep used an independent oracle, not just "doesn't raise."** Offsets, counts,
+  heat and coverage are compared at every position against a separate recount, so a silently
+  wrong answer fails as loudly as a crash.
+- **Crashing probes ran in a child process.** The T7-1 parser race turned a SIGSEGV into a clean
+  assertion failure instead of taking the test session down.
 

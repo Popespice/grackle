@@ -1,0 +1,20 @@
+{
+  "id": "agent-aggregates-build-whitespace-line-gets-a-slot",
+  "description": "TraceAggregates.build strips only the line terminator, so a whitespace-only line counts as a (malformed) event: every later event index shifts by one against build_seekable and the JsonlIndex, and heat is attributed to the wrong seek position (campaign T6-5).",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/aggregates.py",
+    "find": "                    stripped = raw_line.strip()",
+    "replace": "                    stripped = raw_line.rstrip(b\"\\r\\n\")"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_malformed_corpus.py",
+      "-k",
+      "tolerant_trace_readers"
+    ]
+  },
+  "expect": "killed"
+}

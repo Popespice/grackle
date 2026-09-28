@@ -1,0 +1,20 @@
+{
+  "id": "agent-watch-parse-failure-escapes-rebuild",
+  "description": "T6-4 (docs/test-campaigns/phase-12.md): _build_static_graph's parse guard narrowed, so the FileNotFoundError a file vanishing mid-rebuild raises escapes the rebuild; _watch_loop's outer handler then stops watch mode for the rest of the session and the edit that triggered the rebuild never reaches the client.",
+  "target": {
+    "file": "packages/agent/src/grackle/server.py",
+    "find": "    except Exception as exc:\n        log.warning(\"static graph parse failed\"",
+    "replace": "    except (SyntaxError, ValueError) as exc:\n        log.warning(\"static graph parse failed\""
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_watch_faults.py",
+      "-k",
+      "recovers_from_a_file_deleted"
+    ]
+  },
+  "expect": "killed"
+}

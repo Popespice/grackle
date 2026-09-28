@@ -1,0 +1,15 @@
+{
+  "id": "agent-stream-sender-counter-lock-neutered",
+  "description": "The counter lock becomes a no-op context manager, so sink()'s increment and the drain loop's decrement of _inflight are no longer serialized. Wherever the read-modify-write can be interrupted, one side's update overwrites the other's: a lost decrement strands the counter and wedges sink() one event early, a lost increment lets the queue grow past max_inflight (campaign T7-2).",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/stream_sender.py",
+    "find": "        self._counter_lock = threading.Lock()",
+    "replace": "        self._counter_lock = contextlib.nullcontext()"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_stream_sender_race.py"]
+  },
+  "expect": "killed"
+}

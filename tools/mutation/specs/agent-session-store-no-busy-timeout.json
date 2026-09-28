@@ -1,0 +1,20 @@
+{
+  "id": "agent-session-store-no-busy-timeout",
+  "description": "T6-1 pin (locked db, concurrent writers): the store's connection gets timeout=0, so a save that collides with another connection's write lock fails at once with 'database is locked' instead of waiting (sqlite3's default 5 s busy timeout). Two serve --store processes sharing one library would drop rows.",
+  "target": {
+    "file": "packages/agent/src/grackle/session_store.py",
+    "find": "        conn = sqlite3.connect(str(db_path), check_same_thread=False)",
+    "replace": "        conn = sqlite3.connect(str(db_path), check_same_thread=False, timeout=0)"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_session_store_faults.py",
+      "-k",
+      "waits_out_another_connections_write_lock or two_stores_one_database_small"
+    ]
+  },
+  "expect": "killed"
+}

@@ -1,0 +1,20 @@
+{
+  "id": "agent-session-store-lock-neutered",
+  "description": "T7-3 pin: the store's threading.Lock becomes a no-op context manager, so save/list/get/close all run on the shared sqlite3 connection at once. Unguarded, a 4-writer hammer loses about a quarter of its rows to InterfaceError/SystemError. The deterministic overlap probe parks the first save inside SQLite and must see a second call walk in beside it.",
+  "target": {
+    "file": "packages/agent/src/grackle/session_store.py",
+    "find": "        self._lock = threading.Lock()",
+    "replace": "        self._lock = __import__(\"contextlib\").nullcontext()"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_session_store_faults.py",
+      "-k",
+      "no_store_call_runs_beside_an_in_flight_save"
+    ]
+  },
+  "expect": "killed"
+}

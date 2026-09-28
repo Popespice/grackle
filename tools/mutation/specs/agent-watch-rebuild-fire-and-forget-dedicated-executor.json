@@ -1,0 +1,20 @@
+{
+  "id": "agent-watch-rebuild-fire-and-forget-dedicated-executor",
+  "description": "T6-4 (docs/test-campaigns/phase-12.md): the watch rebuild is no longer awaited (broadcast from a done-callback) but still goes to the dedicated max_workers=1 executor. Expected to SURVIVE: the single worker queues rebuilds, so they still never overlap. This records that max_workers=1 alone serializes rebuilds. If this spec starts reporting 'killed', the executor has gained workers and the await is now the only thing keeping rebuilds apart.",
+  "target": {
+    "file": "packages/agent/src/grackle/server.py",
+    "find": "            graph = await loop.run_in_executor(\n                executor, _build_static_graph, root, meta_cache, predicted_ctx\n            )",
+    "replace": "            _rebuild = loop.run_in_executor(\n                executor, _build_static_graph, root, meta_cache, predicted_ctx\n            )\n            _rebuild.add_done_callback(\n                lambda f: f.cancelled()\n                or f.exception() is not None\n                or f.result() is None\n                or asyncio.ensure_future(\n                    broadcast(protocol.make_static_graph(f.result()), connections)\n                )\n            )\n            graph = None"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_watch_faults.py",
+      "-k",
+      "never_overlap_when_edits_land"
+    ]
+  },
+  "expect": "survives"
+}

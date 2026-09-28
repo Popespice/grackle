@@ -1,0 +1,20 @@
+{
+  "id": "agent-server-shutdown-finalize-not-awaited",
+  "description": "T6-1 pin (shutdown race): the receive loop's finally schedules the recording's finalize and returns without awaiting it, so the connection handler finishes, the websockets drain completes, and serve() closes the store before save_session runs. The pre-existing instant-save test usually still wins that race; the pin injects a 300 ms save delay to remove the luck.",
+  "target": {
+    "file": "packages/agent/src/grackle/server.py",
+    "find": "            # save_session sequence rather than being torn mid-await.\n            await asyncio.shield(recorder.finalize())",
+    "replace": "            # save_session sequence rather than being torn mid-await.\n            asyncio.ensure_future(recorder.finalize())"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_session_store_faults.py",
+      "-k",
+      "shutdown_waits_for_a_slow_in_flight_save"
+    ]
+  },
+  "expect": "killed"
+}

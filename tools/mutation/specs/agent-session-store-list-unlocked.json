@@ -1,0 +1,20 @@
+{
+  "id": "agent-session-store-list-unlocked",
+  "description": "T7-3 pin: list_sessions alone stops taking the lock, so the library's session_list read runs on the connection beside a recording's save_session.",
+  "target": {
+    "file": "packages/agent/src/grackle/session_store.py",
+    "find": "        with self._lock:\n            rows = self._conn.execute(",
+    "replace": "        if True:\n            rows = self._conn.execute("
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_session_store_faults.py",
+      "-k",
+      "no_store_call_runs_beside_an_in_flight_save"
+    ]
+  },
+  "expect": "killed"
+}

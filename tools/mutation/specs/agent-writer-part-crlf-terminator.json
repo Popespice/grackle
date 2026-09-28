@@ -1,0 +1,15 @@
+{
+  "id": "agent-writer-part-crlf-terminator",
+  "description": "JsonlPartWriter ends each line with CRLF -- what a text-mode handle would emit on Windows -- so a live recording is no longer LF-only or byte-identical to write_jsonl's output (campaign T10-1).",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/writer.py",
+    "find": "data = (json.dumps(event, ensure_ascii=False) + \"\\n\").encode(\"utf-8\")",
+    "replace": "data = (json.dumps(event, ensure_ascii=False) + \"\\r\\n\").encode(\"utf-8\")"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_server_ingest_faults.py", "-k", "lf_only"]
+  },
+  "expect": "killed"
+}

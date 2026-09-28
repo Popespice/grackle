@@ -1,0 +1,20 @@
+{
+  "id": "agent-orphan-sweep-idle-threshold-raised",
+  "description": "The sweep's age threshold is raised to an hour, so a live recording idle for a minute is no longer swept by a peer -- the documented, accepted hazard the idle-recording pin records would change silently (campaign T6-2).",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/recording_sink.py",
+    "find": "min_age_s: float = 30.0",
+    "replace": "min_age_s: float = 3600.0"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_orphan_sweep_faults.py",
+      "-k",
+      "loses_an_idle_live_recording"
+    ]
+  },
+  "expect": "killed"
+}
