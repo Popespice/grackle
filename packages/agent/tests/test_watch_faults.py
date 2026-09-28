@@ -113,6 +113,10 @@ class _VanishingLookup:
         self.blink = blink
         self.armed = threading.Event()
         self.fired = threading.Event()
+        # Set once a blink=True victim is back on disk. `fired` only says the
+        # file was deleted; the restore happens later, when the enclosing
+        # rebuild returns, so a test that inspects the file must wait for this.
+        self.restored = threading.Event()
         self.fired_on_thread = ""
         self._saved: tuple[bytes, int, int] | None = None
         self._real_get = CacheManager.get
@@ -149,6 +153,7 @@ class _VanishingLookup:
             self._saved = None
             self.victim.write_bytes(data)
             os.utime(self.victim, ns=(atime_ns, mtime_ns))
+            self.restored.set()
 
 
 def _three_file_project(root: Path) -> Path:
@@ -264,8 +269,13 @@ async def test_watch_edit_survives_a_file_blinking_mid_rebuild(
             (tmp_path / "a.py").write_text(_A_WITH_F2, encoding="utf-8")
             if not await _wait_for(hook.fired, 5.0):
                 raise RuntimeError("probe precondition: the blink never landed inside a rebuild")
+            # `fired` is the deletion, not the restore: wait for the file to be
+            # back before inspecting it. Reading it straight after `fired` raced
+            # the rebuild and lost on Windows CI (FileNotFoundError, py3.13).
+            if not await _wait_for(hook.restored, 5.0):
+                raise RuntimeError("probe precondition: c.py was never restored")
             if victim.read_text(encoding="utf-8") != "def h():\n    pass\n":
-                raise RuntimeError("probe precondition: c.py was not restored")
+                raise RuntimeError("probe precondition: c.py was restored with different bytes")
 
             # 40 poll ticks: ample time for any retry a fix introduces.
             deadline = time.monotonic() + 2.0
