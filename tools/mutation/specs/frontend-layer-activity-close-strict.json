@@ -1,0 +1,15 @@
+{
+  "id": "frontend-layer-activity-close-strict",
+  "description": "closeIfExited() no longer closes a frame on its own return (which the tracer emits at the frame's call depth), so evaluate() stays open after returning and later training forwards are mislabelled forward-eval.",
+  "target": {
+    "file": "packages/frontend/src/graph/layerActivity.ts",
+    "find": "return ev.frame_depth <= frame.depth ? null : frame;",
+    "replace": "return ev.frame_depth < frame.depth ? null : frame;"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/layerActivity.test.ts"]
+  },
+  "expect": "killed"
+}

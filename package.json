@@ -12,6 +12,8 @@
     "test": "pnpm -r --parallel test --run",
     "codegen": "pnpm --filter @grackle/shared-types codegen",
     "check-parity": "node tools/check-parity.mjs",
+    "mutation": "node tools/mutation/runner.mjs",
+    "mutation:check": "node tools/mutation/runner.mjs --check",
     "prepare": "lefthook install && pnpm codegen",
     "nn:trace": "cd packages/nn && uv run grackle trace src/grackle_nn/demo.py --root src --capture-values --capture-first-n 200 -o run-a.jsonl"
   },

@@ -1,0 +1,15 @@
+{
+  "id": "nn-features-entry-file-kind-dropped",
+  "description": "T4-3: the entry set drops its file-kind clause, so a file node that some other file imports is no longer a BFS root and gets a nonzero log1p_bfs_depth, contradicting the documented 'file nodes, or any node with zero call/import in-degree' entry rule.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/ml/features.py",
+    "find": "    entry = [i for i in range(n) if nodes[i].get(\"kind\") == \"file\" or call_import_in_degree[i] == 0]",
+    "replace": "    entry = [i for i in range(n) if call_import_in_degree[i] == 0]"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/ml/test_features.py"]
+  },
+  "expect": "killed"
+}

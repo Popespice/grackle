@@ -1,0 +1,15 @@
+{
+  "id": "agent-diff-bucket-order-not-alphabetical",
+  "description": "diff_trace_vs_trace sorts by status bucket alone, so rows within a bucket come out in set-iteration (hash-seed) order — grackle diff's output reorders from run to run, against ADR-0021's alphabetical tie-break.",
+  "target": {
+    "file": "packages/agent/src/grackle/diff.py",
+    "find": "    entries.sort(key=lambda e: (_STATUS_ORDER.get(e[\"status\"], 9), e[\"node_id\"]))\n    return entries\n\n\ndef has_regression",
+    "replace": "    entries.sort(key=lambda e: _STATUS_ORDER.get(e[\"status\"], 9))\n    return entries\n\n\ndef has_regression"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_diff.py"]
+  },
+  "expect": "killed"
+}

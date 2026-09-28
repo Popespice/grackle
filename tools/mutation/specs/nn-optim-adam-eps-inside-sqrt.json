@@ -1,0 +1,15 @@
+{
+  "id": "nn-optim-adam-eps-inside-sqrt",
+  "description": "T4-5/T9-3: eps moves inside the square root (sqrt(v_hat + eps)), which damps updates for parameters whose gradients are small relative to sqrt(eps) = 1e-4; at |g| = 0.5 the two forms agree to ~1e-16, so the constant-gradient test cannot tell them apart.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/optim.py",
+    "find": "            p -= self.lr * m_hat / (np.sqrt(v_hat) + self.eps)",
+    "replace": "            p -= self.lr * m_hat / np.sqrt(v_hat + self.eps)"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/test_optim.py"]
+  },
+  "expect": "killed"
+}

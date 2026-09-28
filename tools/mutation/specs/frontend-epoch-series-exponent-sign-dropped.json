@@ -1,0 +1,15 @@
+{
+  "id": "frontend-epoch-series-exponent-sign-dropped",
+  "description": "The shared FLOAT grammar loses the exponent sign, so any repr like `1e-05` (a late-training loss, a small weight-change RMS) fails the tuple regex and the point silently vanishes from both the loss curve and the layer-stats series.",
+  "target": {
+    "file": "packages/frontend/src/graph/epochSeries.ts",
+    "find": "export const FLOAT = String.raw`-?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?|-?inf|nan`;",
+    "replace": "export const FLOAT = String.raw`-?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE]\\d+)?|-?inf|nan`;"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/epochSeries.test.ts"]
+  },
+  "expect": "killed"
+}

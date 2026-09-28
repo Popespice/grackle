@@ -149,6 +149,20 @@ describe("layoutNetwork — neuron radius", () => {
     expect(layout?.columns[0]?.radius).toBe(2);
     expect(layout?.columns[1]?.radius).toBe(2);
   });
+
+  it("floors a dense column's radius at the minimum instead of going sub-pixel", () => {
+    // 64 rows in an 80px canvas leave 32 / 63 ≈ 0.51px between rows, so the
+    // spacing-proportional radius would be ≈0.16px — a neuron nobody can see.
+    // Unlike the collapsed case above, the spacing here is positive, so only
+    // the NEURON_RADIUS_MIN floor stands between it and a sub-pixel dot.
+    const spec: NetworkSpec = {
+      tokens: [{ kind: "linear", inDim: 64, outDim: 1 }],
+      columns: [64, 1],
+    };
+    const layout = layoutNetwork(spec, 400, 80);
+    expect(layout?.columns[0]?.neurons).toHaveLength(64);
+    expect(layout?.columns[0]?.radius).toBe(2);
+  });
 });
 
 describe("layoutNetwork — degenerate inputs", () => {

@@ -1,0 +1,15 @@
+{
+  "id": "frontend-use-append-only-scan-identity-check-dropped",
+  "description": "The cache-validity check stops comparing the last-scanned event's identity, so a new session's array of equal or greater length is treated as a pure append — the old trace's results are kept and the new prefix is never scanned.",
+  "target": {
+    "file": "packages/frontend/src/graph/useAppendOnlyScan.ts",
+    "find": "        (cache.scanned <= events.length &&\n          events[cache.scanned - 1] === cache.lastEvent));",
+    "replace": "        cache.scanned <= events.length);"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/useAppendOnlyScan.test.ts"]
+  },
+  "expect": "killed"
+}

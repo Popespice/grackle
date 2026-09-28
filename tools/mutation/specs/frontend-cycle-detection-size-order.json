@@ -1,0 +1,15 @@
+{
+  "id": "frontend-cycle-detection-size-order",
+  "description": "cycleDetection() sorts cycles smallest-first instead of largest-first, so CyclesPanel leads with the least significant cycle. Before T11-3/T4-5 this SURVIVED CyclesPanel.test.tsx, whose fixture has a single cycle.",
+  "target": {
+    "file": "packages/frontend/src/graph/analysis/cycleDetection.ts",
+    "find": ".sort((a, b) => b.size - a.size);",
+    "replace": ".sort((a, b) => a.size - b.size);"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/panels/CyclesPanel.test.tsx"]
+  },
+  "expect": "killed"
+}

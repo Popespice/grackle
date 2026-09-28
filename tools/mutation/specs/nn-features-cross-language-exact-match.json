@@ -1,0 +1,15 @@
+{
+  "id": "nn-features-cross-language-exact-match",
+  "description": "T4-3: the cross_language bucket matches the kind exactly instead of by prefix, so every real cross-language edge kind (cross_language_call, cross_language_http_route, ...) falls into the 'other' bucket.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/ml/features.py",
+    "find": "    if kind.startswith(\"cross_language\"):",
+    "replace": "    if kind == \"cross_language\":"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/ml/test_features.py"]
+  },
+  "expect": "killed"
+}

@@ -1,0 +1,15 @@
+{
+  "id": "frontend-network-layout-collapsed-radius-max",
+  "description": "A multi-neuron column whose rows collapsed for lack of height is drawn at the maximum (lone-neuron) radius, fusing it into one solid blob — the exact distinction radiusFor() documents.",
+  "target": {
+    "file": "packages/frontend/src/graph/networkLayout.ts",
+    "find": "if (spacing <= 0) return NEURON_RADIUS_MIN;",
+    "replace": "if (spacing <= 0) return NEURON_RADIUS_MAX;"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/networkLayout.test.ts"]
+  },
+  "expect": "killed"
+}

@@ -1,0 +1,15 @@
+{
+  "id": "frontend-flame-graph-panel-hot-dim-inverted",
+  "description": "FlameGraphPanel dims the hot path instead of everything off it — the one chain the panel exists to call out is drawn desaturated. Only the recorder-backed paint tests can see a fill colour (T11-2).",
+  "target": {
+    "file": "packages/frontend/src/panels/FlameGraphPanel.tsx",
+    "find": "hotActive && !hot.has(r.frame)",
+    "replace": "hotActive && hot.has(r.frame)"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/panels/FlameGraphPanel.test.tsx"]
+  },
+  "expect": "killed"
+}

@@ -1,0 +1,15 @@
+{
+  "id": "frontend-epoch-series-restart-strict",
+  "description": "computeRunsFromCandidates() only splits on a strictly decreasing epoch, so a restarted run that repeats the previous epoch number is glued onto the old run.",
+  "target": {
+    "file": "packages/frontend/src/graph/epochSeries.ts",
+    "find": "if (prev && point.epoch <= prev.epoch) {",
+    "replace": "if (prev && point.epoch < prev.epoch) {"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/epochSeries.test.ts"]
+  },
+  "expect": "killed"
+}

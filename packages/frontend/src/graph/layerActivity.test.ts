@@ -439,6 +439,32 @@ describe("scanActivitySegments — token mapping", () => {
       ["idle", -1],
     ]);
   });
+
+  it("restarts the backward counter on each successive train_step", () => {
+    // The backward twin of the forward case above. A counter that carried over
+    // would map the second step's sweep to tokenCount - 3, tokenCount - 4, ...
+    // — negative indices, so the backward highlight would vanish for every
+    // train_step after the first.
+    const one: [string, string, number][] = [
+      ["call", "grackle_nn/train.py:train_step", 3],
+      ["call", "grackle_nn/model.py:Sequential.backward", 4],
+      ["call", "grackle_nn/layers.py:ReLU.backward", 5],
+      ["return", "grackle_nn/layers.py:ReLU.backward", 5],
+      ["call", "grackle_nn/layers.py:Linear.backward", 5],
+      ["return", "grackle_nn/layers.py:Linear.backward", 5],
+      ["return", "grackle_nn/model.py:Sequential.backward", 4],
+      ["return", "grackle_nn/train.py:train_step", 3],
+    ];
+    const segments = segmentsOf(toEvents([...one, ...one]), 2);
+    expect(segments.map((s) => [s.phase, s.activeToken])).toEqual([
+      ["backward", 1],
+      ["backward", 0],
+      ["idle", -1],
+      ["backward", 1],
+      ["backward", 0],
+      ["idle", -1],
+    ]);
+  });
 });
 
 /**

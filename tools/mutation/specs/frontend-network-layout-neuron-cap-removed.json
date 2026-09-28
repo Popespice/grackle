@@ -1,0 +1,15 @@
+{
+  "id": "frontend-network-layout-neuron-cap-removed",
+  "description": "The 64-neuron render cap is removed, so a wide layer draws every neuron and a 512x512 bundle builds 262,144 pairs that the hover hit-test walks on every mousemove.",
+  "target": {
+    "file": "packages/frontend/src/graph/networkLayout.ts",
+    "find": "const rendered = Math.min(count, MAX_NEURONS_PER_COLUMN);",
+    "replace": "const rendered = count;"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/networkLayout.test.ts"]
+  },
+  "expect": "killed"
+}

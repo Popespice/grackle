@@ -1,0 +1,15 @@
+{
+  "id": "frontend-flame-graph-panel-label-threshold",
+  "description": "FlameGraphPanel labels every bar regardless of width, so a sliver narrower than LABEL_MIN_WIDTH gets an unreadable, overflowing label (T11-2).",
+  "target": {
+    "file": "packages/frontend/src/panels/FlameGraphPanel.tsx",
+    "find": "if (r.w >= LABEL_MIN_WIDTH) {",
+    "replace": "if (r.w > 0) {"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/panels/FlameGraphPanel.test.tsx"]
+  },
+  "expect": "killed"
+}

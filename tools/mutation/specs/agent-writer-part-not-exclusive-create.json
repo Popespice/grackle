@@ -1,0 +1,15 @@
+{
+  "id": "agent-writer-part-not-exclusive-create",
+  "description": "The .part opens with 'wb' instead of exclusive-create 'xb', so a stale .part (or a concurrent writer's) at the same path is silently truncated instead of failing loudly.",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/writer.py",
+    "find": "self._f: BinaryIO = self.part_path.open(\"xb\")",
+    "replace": "self._f: BinaryIO = self.part_path.open(\"wb\")"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/python_runtime/test_writer.py", "-k", "part_writer"]
+  },
+  "expect": "killed"
+}

@@ -1,0 +1,15 @@
+{
+  "id": "nn-optim-adam-step-counter-per-parameter",
+  "description": "T4-5/T9-3: the step counter is incremented once per parameter array instead of once per step (a mis-indented t += 1), so every multi-parameter model gets the wrong bias correction while a single-parameter test stays exact.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/optim.py",
+    "find": "        self.t += 1\n        for p, g, m, v in zip(self.params, self.grads, self.m, self.v, strict=True):\n",
+    "replace": "        for p, g, m, v in zip(self.params, self.grads, self.m, self.v, strict=True):\n            self.t += 1\n"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/test_optim.py"]
+  },
+  "expect": "killed"
+}

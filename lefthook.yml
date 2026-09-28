@@ -28,6 +28,8 @@ pre-push:
       run: uv run ruff check .
     check-parity:
       run: pnpm check-parity
+    mutation-check:
+      run: pnpm mutation:check
     typecheck:
       run: pnpm typecheck
     # Workspace-wide, not frontend-only: a package whose suite no gate runs

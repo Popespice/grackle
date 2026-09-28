@@ -26,6 +26,7 @@ vi.mock("../graph/useRuntimeCoverage", () => ({
 
 import { useGraphStore } from "../graph/useGraphStore";
 import { useRuntimeCoverage } from "../graph/useRuntimeCoverage";
+import { restoreInitialState } from "../test/storeReset";
 
 const mockedCoverage = vi.mocked(useRuntimeCoverage);
 
@@ -40,7 +41,10 @@ function coverage(touched: string[], cold: string[]): RuntimeCoverage {
   };
 }
 
+// Full-replace first (campaign T11-4): a partial merge only resets the fields
+// it names, so anything else a test merged in would leak into the next one.
 function resetStore() {
+  restoreInitialState(useGraphStore);
   useGraphStore.setState({
     graph: null,
     traceSessionId: null,

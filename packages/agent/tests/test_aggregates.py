@@ -162,6 +162,22 @@ def test_top_k(tmp_path: Path) -> None:
     assert agg.top_k(0, 7) == []
 
 
+def test_top_k_breaks_count_ties_by_node_id_not_trace_order(tmp_path: Path) -> None:
+    """Equal counts are ordered by node_id, as documented — not by first-hit order.
+
+    "z" is hit first, so a sort on count alone (stable) would keep it ahead of
+    "a"; and with k=1 the tie-break decides which node survives the cut at all.
+    (Campaign T4-2: test_top_k's counts are all distinct, so it cannot tell.)
+    """
+    events = [_make_event("z", 0), _make_event("m", 1), _make_event("a", 2)]
+    f = tmp_path / "ties.jsonl"
+    _write_jsonl(f, events)
+    agg = TraceAggregates.build(f)
+
+    assert agg.top_k(3, 3) == [("a", 1), ("m", 1), ("z", 1)]
+    assert agg.top_k(1, 3) == [("a", 1)]
+
+
 # ---------------------------------------------------------------------------
 # test_sparse_k
 # ---------------------------------------------------------------------------
@@ -202,6 +218,28 @@ def test_sparse_k(tmp_path: Path) -> None:
         approx = agg_sparse.cumulative_heat("A", at)
         assert approx >= prev, f"not monotone at at={at}: {approx} < {prev}"
         prev = approx
+
+
+def test_sparse_k_answers_as_of_the_bucket_start(tmp_path: Path) -> None:
+    """Pins the documented rounding: with sparse_k > 1, cumulative_heat(at) is
+    the recorded-hit count as of floor(at / k) * k — constant across each
+    aligned bucket [m*k, (m+1)*k).
+
+    The round-down is not made redundant by recording only multiples of k:
+    without it a mid-bucket query (at=5, k=2) would count the hit recorded at
+    index 4. test_sparse_k checks only "≤ true" and monotonicity, which an
+    unrounded query satisfies too, so it cannot see the rounding at all
+    (campaign T4-2). Changing this is a contract change — update the
+    module/method docstrings with it.
+    """
+    events = [_make_event("A", i) for i in range(10)]
+    f = tmp_path / "sparse_exact.jsonl"
+    _write_jsonl(f, events)
+    agg = TraceAggregates.build(f, sparse_k=2)
+
+    # Recorded hits: indices 0, 2, 4, 6, 8.
+    heat = [agg.cumulative_heat("A", at) for at in range(11)]
+    assert heat == [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5]
 
 
 @pytest.mark.parametrize("sparse_k", [1, 2, 3, 5])
@@ -286,6 +324,64 @@ def test_build_seekable_matches_separate_builds(tmp_path: Path) -> None:
     assert [e["node_id"] for e in window] == ["A", "B", "A", "C", "A"]
 
 
+def test_build_seekable_malformed_line_keeps_index_and_aggregates_aligned(
+    tmp_path: Path,
+) -> None:
+    """A line that fails to parse still consumes an event slot in BOTH structures.
+
+    The index gives it an offset slot, so the aggregates must advance their
+    event index too — otherwise every later event's aggregate index is one
+    short of the slot read_window serves it from (campaign T4-2).
+    """
+    f = tmp_path / "malformed.jsonl"
+    f.write_text(
+        json.dumps(_make_event("A", 0))
+        + "\n"
+        + "{not json\n"
+        + json.dumps(_make_event("B", 2))
+        + "\n",
+        encoding="utf-8",
+    )
+
+    idx, agg = build_seekable(f)
+
+    assert len(idx) == len(agg) == 3
+    assert [e["node_id"] for e in idx.read_window(2, 1)] == ["B"]
+    # B lives in slot 2, so it has not fired before at_index=3.
+    assert agg.cumulative_heat("B", 2) == 0
+    assert agg.cumulative_heat("B", 3) == 1
+    assert agg.coverage_count(2) == 1
+    assert agg.coverage_count(3) == 2
+    # The standalone build numbers events the same way.
+    agg_alone = TraceAggregates.build(f)
+    assert len(agg_alone) == 3
+    assert agg_alone.cumulative_heat("B", 2) == 0
+
+
+def test_build_seekable_blank_lines_advance_offsets_but_take_no_slot(tmp_path: Path) -> None:
+    """Blank (and whitespace-only) lines take no event slot, but their bytes
+    still count toward the offset of every later line — the same contract
+    JsonlIndex.build keeps. test_build_seekable_matches_separate_builds has no
+    blank lines, so it cannot see a skipped offset advance (campaign T4-2).
+    """
+    f = tmp_path / "blanks.jsonl"
+    f.write_text(
+        json.dumps(_make_event("A", 0))
+        + "\n\n\n"
+        + json.dumps(_make_event("B", 1))
+        + "\n   \n"
+        + json.dumps(_make_event("C", 2))
+        + "\n",
+        encoding="utf-8",
+    )
+
+    idx, agg = build_seekable(f)
+
+    assert len(idx) == len(agg) == 3
+    assert [e["node_id"] for e in idx.read_window(0, 3)] == ["A", "B", "C"]
+    assert agg.cumulative_heat_all(3) == {"A": 1, "B": 1, "C": 1}
+
+
 def test_build_seekable_missing_file(tmp_path: Path) -> None:
     """build_seekable on a missing file returns empty (no raise)."""
     idx, agg = build_seekable(tmp_path / "nope.jsonl")
@@ -293,3 +389,41 @@ def test_build_seekable_missing_file(tmp_path: Path) -> None:
     assert len(agg) == 0
     assert agg.cumulative_heat_all(100) == {}
     assert idx.read_window(0, 10) == []
+
+
+# ---------------------------------------------------------------------------
+# Test campaign T5-8 (docs/test-campaigns/phase-12.md): a valid-JSON line
+# that is not an object
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AttributeError,
+    reason=(
+        "T5-8: a JSON line that parses but is not an object raises "
+        "AttributeError out of the aggregate builders instead of being skipped "
+        "like an unparsable line (docs/test-campaigns/phase-12.md)"
+    ),
+)
+@pytest.mark.parametrize("line", ["[1, 2]", "42", '"str"', "null"])
+def test_non_object_json_line_is_skipped_like_a_malformed_one(tmp_path: Path, line: str) -> None:
+    """Both builders already skip a line that fails to parse, keeping its slot
+    so offsets and aggregate indices stay aligned. A line that parses to a
+    non-object is no more an event than an unparsable one — but `.get` on it
+    raises, so one such line fails `grackle diff`, `grackle learn`,
+    `serve --trace-source` and session load for the whole file."""
+    event = {
+        "event": "call",
+        "node_id": "a.py:f",
+        "ts_ns": 0,
+        "thread_id": 1,
+        "frame_depth": 0,
+        "metadata": {},
+    }
+    trace = tmp_path / "trace.jsonl"
+    trace.write_text(f"{json.dumps(event)}\n{line}\n{json.dumps(event)}\n", encoding="utf-8")
+
+    assert TraceAggregates.build(trace).cumulative_heat_all(3) == {"a.py:f": 2}
+    _, agg = build_seekable(trace)
+    assert agg.cumulative_heat_all(3) == {"a.py:f": 2}

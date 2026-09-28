@@ -1,0 +1,15 @@
+{
+  "id": "agent-diff-comparison-bounded-by-baseline-length",
+  "description": "Copy-paste slip: session B's default at_index is len(aggregates_a), so when B is the longer run every hit past A's length is ignored — grackle diff exits 0 on a real regression.",
+  "target": {
+    "file": "packages/agent/src/grackle/diff.py",
+    "find": "    idx_b = at_index_b if at_index_b is not None else len(aggregates_b)",
+    "replace": "    idx_b = at_index_b if at_index_b is not None else len(aggregates_a)"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_diff.py"]
+  },
+  "expect": "killed"
+}

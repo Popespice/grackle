@@ -1,0 +1,15 @@
+{
+  "id": "nn-rank-utils-tie-min-rank",
+  "description": "T4-3: tied values get their group's minimum rank instead of its average (competition ranking), which skews both features.py's degree percentiles and metrics_rank.spearman on any input with ties.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/ml/_rank_utils.py",
+    "find": "        avg_rank = (i + j) / 2.0",
+    "replace": "        avg_rank = float(i)"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/ml/test_metrics_rank.py"]
+  },
+  "expect": "killed"
+}

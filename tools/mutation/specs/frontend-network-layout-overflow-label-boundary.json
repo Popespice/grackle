@@ -1,0 +1,15 @@
+{
+  "id": "frontend-network-layout-overflow-label-boundary",
+  "description": "The overflow label's boundary flips to `>=`, so a column of exactly 64 neurons — every one drawn — is captioned \"64 of 64 shown\" as though some were hidden.",
+  "target": {
+    "file": "packages/frontend/src/graph/networkLayout.ts",
+    "find": "overflowLabel:\n        count > MAX_NEURONS_PER_COLUMN",
+    "replace": "overflowLabel:\n        count >= MAX_NEURONS_PER_COLUMN"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/networkLayout.test.ts"]
+  },
+  "expect": "killed"
+}

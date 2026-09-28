@@ -1,0 +1,20 @@
+{
+  "id": "agent-value-repr-redaction-case-sensitive",
+  "description": "is_sensitive_name stops lower-casing, so 'API_KEY', 'Password' or an 'Authorization' dict key is captured and shipped over the wire unredacted.",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/value_repr.py",
+    "find": "    normalized = name.lower().replace(\"-\", \"_\")",
+    "replace": "    normalized = name.replace(\"-\", \"_\")"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/python_runtime/test_value_repr.py",
+      "-k",
+      "redact or sensitive"
+    ]
+  },
+  "expect": "killed"
+}

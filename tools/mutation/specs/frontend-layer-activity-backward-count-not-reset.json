@@ -1,0 +1,15 @@
+{
+  "id": "frontend-layer-activity-backward-count-not-reset",
+  "description": "Opening Sequential.backward no longer resets the backward-call counter, so every train_step after the first maps its backward sweep to negative token indices and the backward highlight vanishes for the rest of training.",
+  "target": {
+    "file": "packages/frontend/src/graph/layerActivity.ts",
+    "find": "      state.backward = openFrame(ev);\n      state.backwardCount = 0;",
+    "replace": "      state.backward = openFrame(ev);"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/layerActivity.test.ts"]
+  },
+  "expect": "killed"
+}

@@ -1,0 +1,15 @@
+{
+  "id": "nn-metrics-rank-spearman-constant-guard",
+  "description": "T4-3: the zero-variance guard requires BOTH rank arrays to be constant, so a constant prediction vector (e.g. a model that clipped everything to 0) yields NaN from corrcoef instead of the documented 0.0.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/ml/metrics_rank.py",
+    "find": "    if np.std(ra) == 0.0 or np.std(rb) == 0.0:",
+    "replace": "    if np.std(ra) == 0.0 and np.std(rb) == 0.0:"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/ml/test_metrics_rank.py"]
+  },
+  "expect": "killed"
+}

@@ -1,0 +1,15 @@
+{
+  "id": "nn-features-edge-bucket-order",
+  "description": "T4-3: swaps two entries of _EDGE_BUCKETS, which silently reorders the versioned FEATURE_NAMES column layout without a FEATURE_VERSION bump, so every existing heat-model.npz is scored against misaligned columns.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/ml/features.py",
+    "find": "_EDGE_BUCKETS = (\"import\", \"call\", \"inherit\", \"implements\", \"cross_language\", \"other\")",
+    "replace": "_EDGE_BUCKETS = (\"call\", \"import\", \"inherit\", \"implements\", \"cross_language\", \"other\")"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/ml/test_features.py"]
+  },
+  "expect": "killed"
+}

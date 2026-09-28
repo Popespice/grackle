@@ -1,0 +1,15 @@
+{
+  "id": "agent-aggregates-seekable-malformed-line-not-indexed",
+  "description": "build_seekable's parse-failure branch stops advancing the event index while the offset list still gets a slot, so every event after a malformed line is off by one against the seek index it was built alongside.",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/aggregates.py",
+    "find": "                except (json.JSONDecodeError, UnicodeDecodeError):\n                    index += 1\n                    continue",
+    "replace": "                except (json.JSONDecodeError, UnicodeDecodeError):\n                    continue"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_aggregates.py", "-k", "seekable"]
+  },
+  "expect": "killed"
+}

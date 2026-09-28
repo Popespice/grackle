@@ -1,0 +1,15 @@
+{
+  "id": "nn-heat-model-predict-skips-scale",
+  "description": "T4-3: predict() subtracts the stored norm_mean but never divides by norm_std, an asymmetry with the train-time standardization that feeds the model inputs on the wrong scale.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/ml/heat_model.py",
+    "find": "        standardized = (x - self.norm_mean) / self.norm_std",
+    "replace": "        standardized = x - self.norm_mean"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/ml/test_heat_model.py"]
+  },
+  "expect": "killed"
+}

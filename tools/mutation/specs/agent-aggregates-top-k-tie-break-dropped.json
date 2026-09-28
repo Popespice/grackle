@@ -1,0 +1,15 @@
+{
+  "id": "agent-aggregates-top-k-tie-break-dropped",
+  "description": "top_k sorts by count alone, so equal-count nodes come back in first-hit order instead of the documented node_id order — which nodes survive the k cut depends on trace order.",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/aggregates.py",
+    "find": "        entries.sort(key=lambda x: (-x[1], x[0]))",
+    "replace": "        entries.sort(key=lambda x: -x[1])"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_aggregates.py", "-k", "top_k"]
+  },
+  "expect": "killed"
+}

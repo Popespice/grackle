@@ -1,0 +1,15 @@
+{
+  "id": "frontend-network-spec-empty-token-filter-dropped",
+  "description": "Empty tokens from runs of spaces or edge padding are no longer filtered, so each becomes an activation glyph named \"\" — phantom unnamed glyphs are drawn, and since tokens.length feeds the backward sweep's right-to-left index, the highlight lands on the wrong layer.",
+  "target": {
+    "file": "packages/frontend/src/graph/networkSpec.ts",
+    "find": "const rawTokens = unquoted.split(\" \").filter((t) => t.length > 0);",
+    "replace": "const rawTokens = unquoted.split(\" \");"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/networkSpec.test.ts"]
+  },
+  "expect": "killed"
+}

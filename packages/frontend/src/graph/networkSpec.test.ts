@@ -158,6 +158,19 @@ describe("extractNetworkSpec — adversarial beacon payloads", () => {
     ]);
   });
 
+  it("keeps padding out of the token list (no phantom unnamed glyphs)", () => {
+    // The columns alone cannot see this: an empty token parses as an
+    // activation named "", which layoutNetwork would draw as a blank glyph,
+    // and which inflates tokens.length — the count layerActivity's backward
+    // sweep indexes right-to-left from, so every backward highlight would
+    // land on the wrong layer.
+    expect(spec("'  linear:2:8   relu  linear:8:3 '")?.tokens).toEqual([
+      { kind: "linear", inDim: 2, outDim: 8 },
+      { kind: "activation", name: "relu" },
+      { kind: "linear", inDim: 8, outDim: 3 },
+    ]);
+  });
+
   it("treats a tab as part of the token, not as a separator", () => {
     // record_architecture builds the string with `" ".join(...)`; anything
     // else is a foreign payload, and gluing two tokens together must not

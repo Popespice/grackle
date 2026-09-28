@@ -1,0 +1,15 @@
+{
+  "id": "agent-writer-offset-assigned-not-accumulated",
+  "description": "JsonlPartWriter records `_last_good_offset = len(data)` instead of `+=`, so a torn-tail salvage truncates the .part to the size of the last good line and discards every earlier event. Caught via RecordingSink's multi-event salvage test (test_writer.py's own salvage test writes one good event, which cannot tell = from +=).",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/writer.py",
+    "find": "            self._last_good_offset += len(data)",
+    "replace": "            self._last_good_offset = len(data)"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_recording_sink.py", "-k", "salvages_prior"]
+  },
+  "expect": "killed"
+}
