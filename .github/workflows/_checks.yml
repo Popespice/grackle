@@ -107,7 +107,7 @@ jobs:
 
       - name: Mypy (nn)
         working-directory: packages/nn
-        run: uv run mypy --strict src tests
+        run: uv run mypy --strict src tests scripts
 
       - name: Pytest (nn)
         working-directory: packages/nn

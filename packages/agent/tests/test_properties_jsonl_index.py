@@ -181,6 +181,7 @@ _str_only_ws = st.text(alphabet=_STR_ONLY_WS, min_size=1, max_size=3)
 
 @pytest.mark.xfail(
     strict=True,
+    raises=(AssertionError, ExceptionGroup),
     reason=(
         "T8-3: read_jsonl strips each line with str.strip(), the byte readers "
         "with bytes.strip(), so a line that is (or is padded with) Unicode "

@@ -12,6 +12,7 @@ import {
 } from "vitest";
 import { type UseFullTraceResult, useFullTrace } from "../graph/useFullTrace";
 import { useGraphStore } from "../graph/useGraphStore";
+import { restoreInitialState } from "../test/storeReset";
 import { NetworkViewPanel } from "./NetworkViewPanel";
 
 /**
@@ -103,12 +104,10 @@ afterAll(() => {
   HTMLCanvasElement.prototype.getContext = originalGetContext;
 });
 
-const INITIAL_STORE_STATE = useGraphStore.getState();
-
 afterEach(cleanup);
 
 beforeEach(() => {
-  useGraphStore.setState(INITIAL_STORE_STATE, true);
+  restoreInitialState(useGraphStore);
   useGraphStore.setState({
     traceSessionId: "s1",
     traceSeekable: false,
@@ -126,6 +125,17 @@ describe("NetworkViewPanel — architecture latch vs a one-shot scan (T8-6)", ()
     fireEvent.click(screen.getByRole("button", { name: "Open network view" }));
     expect(screen.getByText(DEGRADE)).toBeInTheDocument();
     expect(screen.queryByText(/model: 1-1/)).toBeNull();
+  });
+
+  it("a lone incoherent beacon renders the degrade message (control for the ledgered test below)", () => {
+    // The ledgered test starts from exactly this render, so pinning it here
+    // means that test can only fail at its final assertions, never because
+    // the first half stopped rendering the degrade message.
+    mockUseFullTrace.mockReturnValue(fullTrace([INCOHERENT]));
+    render(<NetworkViewPanel />);
+    fireEvent.click(screen.getByRole("button", { name: "Open network view" }));
+    expect(screen.getByText(DEGRADE)).toBeInTheDocument();
+    expect(screen.queryByText(/model: /)).toBeNull();
   });
 
   // KNOWN DEFECT (T8-6, docs/test-campaigns/phase-12.md): the live path

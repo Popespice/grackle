@@ -72,7 +72,7 @@ def test_precondition_is_async_is_constant_in_training() -> None:
     assert edited[4 + 2, _IS_ASYNC] == 1.0  # +2: the two file nodes come first
 
 
-@pytest.mark.xfail(strict=True, reason=_T98)
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_T98)
 def test_an_unseen_binary_feature_value_reaches_the_model_bounded() -> None:
     graph, heat = _graph()
     model, _ = train_heat_model([build_example("root", graph, heat)], epochs=20, seed=0)

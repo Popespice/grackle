@@ -205,15 +205,27 @@ def test_dot_dot_never_escapes_the_root(base: Path, parts: list[str]) -> None:
 def _symlinks_or_skip(link: Path, target: Path) -> None:
     try:
         link.symlink_to(target, target_is_directory=target.is_dir())
-    except OSError as exc:  # Windows without Developer Mode
-        pytest.skip(f"symlinks unavailable: {exc}")
+    except OSError as exc:
+        # Only "this account may not create symlinks at all" (Windows without
+        # Developer Mode, ERROR_PRIVILEGE_NOT_HELD) skips the test. Any other
+        # failure belongs to this one generated example — a name the filesystem
+        # already holds beside the link — so it is not an example, and the
+        # property keeps running.
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip(f"symlinks unavailable: {exc}")
+        assume(False)
 
 
 @given(inner=_unicode_name, leaf=_unicode_name)
 def test_a_symlink_resolves_to_its_target_or_raises_when_it_leaves(
     base: Path, inner: str, leaf: str
 ) -> None:
-    assume(inner not in (".", "..", "l_in", "l_out") and leaf not in (".", ".."))
+    # casefold: on a case-insensitive filesystem (APFS, NTFS) "L_IN" is "l_in".
+    assume(
+        inner.casefold() not in ("l_in", "l_out")
+        and inner not in (".", "..")
+        and leaf not in (".", "..")
+    )
     if _WINDOWS:
         assume(not (_windows_unsafe(inner) or _windows_unsafe(leaf)))
     root = _fresh_root(base)
@@ -246,6 +258,7 @@ _PARSERS: dict[str, tuple[Callable[[], StaticParserAdapter], str]] = {
 
 @pytest.mark.xfail(
     strict=True,
+    raises=ValueError,
     reason=(
         "T8-4: every static walker calls to_posix on each globbed file with no "
         "guard, so a single symlink resolving outside the project root raises "
