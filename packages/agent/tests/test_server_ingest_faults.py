@@ -273,6 +273,7 @@ def _load_request(i: int, sid: str) -> str:
 
 @pytest.mark.xfail(
     strict=True,
+    raises=TimeoutError,
     reason=(
         "T6-3: session_load_request spawns an unbounded, untracked build task per "
         "request on the loop's shared default executor, so a flood starves "
@@ -326,6 +327,7 @@ async def test_a_session_load_flood_does_not_stall_a_live_recording(
 
 @pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason=(
         "T6-3: load_stored_session checks its index cache before awaiting the "
         "build, so concurrent loads of one session each build the whole index "
@@ -457,6 +459,7 @@ async def _require_stall(rig: _StallRig) -> None:
 
 @pytest.mark.xfail(
     strict=True,
+    raises=TimeoutError,
     reason=(
         "T6-3: broadcast awaits each consumer's send in turn inside the producer's "
         "receive loop, so one consumer that stops reading freezes every other "
@@ -539,6 +542,7 @@ async def test_ingest_recovers_intact_when_a_stalled_consumer_disconnects(
 
 @pytest.mark.xfail(
     strict=True,
+    raises=pytest.fail.Exception,
     reason=(
         "T6-3: while a stalled consumer blocks the producer's receive loop, the "
         "producer's pongs go unread and the keepalive closes the healthy producer "
@@ -674,6 +678,7 @@ _REPLAY_CLOSE_TIMEOUT = 0.5
             id="recent-session-in-ring-buffer",
             marks=pytest.mark.xfail(
                 strict=True,
+                raises=AssertionError,
                 reason=(
                     "T6-3: grackle trace --connect's post-run replay never reads its "
                     "socket, so once the server has pushed it a recent session's "

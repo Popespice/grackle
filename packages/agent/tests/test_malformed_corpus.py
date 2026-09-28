@@ -36,6 +36,7 @@ which handles them, sweeps them in
 
 from __future__ import annotations
 
+import contextlib
 import json
 import math
 import os
@@ -571,7 +572,7 @@ _OVERLONG_OR_DEEP = (
 )
 
 
-@pytest.mark.xfail(strict=True, reason=_OVERLONG_OR_DEEP)
+@pytest.mark.xfail(strict=True, raises=(ValueError, RecursionError), reason=_OVERLONG_OR_DEEP)
 @pytest.mark.parametrize("kind", ["huge_int", "deep_nesting"])
 @pytest.mark.parametrize("reader", ["aggregates", "build_seekable", "read_window"])
 def test_line_json_rejects_without_a_decode_error_is_skipped_like_any_malformed_line(
@@ -591,6 +592,7 @@ def test_line_json_rejects_without_a_decode_error_is_skipped_like_any_malformed_
 
 @pytest.mark.xfail(
     strict=True,
+    raises=(AssertionError, TypeError),
     reason=(
         "T6-5: a truthy non-string node_id is admitted into the aggregates: an "
         "array/object raises TypeError out of the build, and a number/bool "
@@ -615,6 +617,7 @@ def test_non_string_node_id_is_skipped_like_a_missing_one(
 
 @pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason=(
         "T6-5: JsonlIndex.read_window parses a slot's line unstripped while the "
         "aggregate builders strip it first, so a line padded with VT/FF (ASCII "
@@ -637,6 +640,7 @@ def test_read_window_returns_exactly_the_events_the_aggregates_count(
 
 @pytest.mark.xfail(
     strict=True,
+    raises=json.JSONDecodeError,
     reason=(
         "T6-5: read_jsonl reads in universal-newline text mode, so a raw CR "
         "(legal JSON whitespace between tokens) splits a well-formed line, "
@@ -763,6 +767,7 @@ def test_covdata_parser_and_resolver_survive_the_malformed_corpus(
 
 @pytest.mark.xfail(
     strict=True,
+    raises=ValueError,
     reason=(
         "T6-5: parse_textfmt raises ValueError on a grammatical line whose line "
         "or count field is longer than the int-digit limit, instead of skipping "
@@ -959,6 +964,7 @@ def test_llvm_cov_malformed_document_yields_nothing(text: str) -> None:
 
 @pytest.mark.xfail(
     strict=True,
+    raises=RecursionError,
     reason=(
         "T6-5: parse_export catches JSONDecodeError/ValueError only, so a "
         "document nested past the recursion guard raises RecursionError instead "
@@ -972,6 +978,7 @@ def test_llvm_cov_deeply_nested_document_yields_nothing() -> None:
 
 @pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason=(
         "T6-5: parse_export keeps a function whose count is negative, although "
         "its contract (the _parse_function comment and RustCoverFunction.count) "
@@ -1195,7 +1202,12 @@ def _v8_coverage(seed: int, root: Path) -> list[Any]:
     already defend a field, adversarial wherever it does (null/non-numeric
     offsets and counts, non-string ids/urls/names, non-object range heads)."""
     rng = random.Random(seed)
-    urls = (*_v8_urls(root), 5, None)
+    # A NUL in a script URL is F-11 #11, ledgered by
+    # test_a_nul_in_a_coverage_path_does_not_escape_the_line_map_lookup: it
+    # reaches `read_bytes()` and raises ValueError only on platforms whose path
+    # resolution does not reject it first, so it stays out of this sweep. The
+    # sampling corpus (`_v8_profile`) keeps it.
+    urls = (*(u for u in _v8_urls(root) if "%00" not in u), 5, None)
     offsets: tuple[Any, ...] = (0, 1, 17, 30, 10**9, -4, None, "12", 1.5, "x")
     counts: tuple[Any, ...] = (0, 1, 5, 10**15, -3, None, "7", 2.5, True, math.nan, "x")
     scripts: list[Any] = []
@@ -1265,9 +1277,10 @@ def test_a_nul_in_a_coverage_path_does_not_escape_the_line_map_lookup(
     catches `OSError` only, and `Path.read_bytes()` on a path containing a NUL
     raises `ValueError` on every platform. Whether a hostile URL gets that far
     depends on the resolver rejecting it first, which differs by platform and
-    Python version: it does on POSIX and Windows py3.12 (the corpus sweep below
-    passes there) and does not on Windows py3.13 (where it failed CI). Handing the
-    function a NUL path directly makes the defect deterministic everywhere."""
+    Python version: it does on POSIX and Windows py3.12 and does not on Windows
+    py3.13 (where the coverage corpus sweep failed CI until it was taken out of
+    that sweep). Handing the function a NUL path directly makes the defect
+    deterministic everywhere."""
     _, resolver, _ = _v8_project(tmp_path)
     nul_path = tmp_path / "a.ts\x00"
     monkeypatch.setattr(resolver, "source_path", lambda url: nul_path)
@@ -1289,16 +1302,7 @@ def test_v8_coverage_polling_survives_the_malformed_corpus(tmp_path: Path, seed:
         assert isinstance(delta["function_name"], str)
     line_maps: dict[str, Any] = {}
     for delta in deltas:
-        try:
-            node_id = _resolve_coverage_delta(resolver, line_maps, delta)
-        except ValueError:
-            # F-11 #11 (docs/test-campaigns/phase-12.md), pinned deterministically by
-            # test_a_nul_in_a_coverage_path_does_not_escape_the_line_map_lookup: a NUL
-            # in the URL reaches `read_bytes()` on platforms whose path resolution does
-            # not reject it first (Windows, py3.13 — this sweep's seeds 4-7 failed
-            # there). Only that known case is tolerated; any other ValueError still fails.
-            assert "%00" in delta["url"].lower(), delta["url"]
-            continue
+        node_id = _resolve_coverage_delta(resolver, line_maps, delta)
         _assert_safe_node_id(node_id, graph_ids)
     control, _ = iter_coverage_deltas(
         [
@@ -1322,6 +1326,7 @@ _GOOD_SCRIPT = {
 
 @pytest.mark.xfail(
     strict=True,
+    raises=(AttributeError, TypeError, OverflowError),
     reason=(
         "T6-5: iter_coverage_deltas tolerates null/non-numeric numbers and a "
         "non-object range head, but a non-object script or function entry, a "
@@ -1349,6 +1354,7 @@ def test_v8_coverage_malformed_entry_is_skipped(malformed: Any) -> None:
 
 @pytest.mark.xfail(
     strict=True,
+    raises=(AttributeError, TypeError, ValueError),
     reason=(
         "T6-5: the V8 sampling pipeline tolerates malformed node dicts and "
         "unknown sample ids, but a non-integer sample id, child id, time delta "
@@ -1448,5 +1454,8 @@ def test_malformed_corpus_hammer(tmp_path: Path) -> None:
         for sweep in _SWEEPS:
             workdir = tmp_path / f"{seed}-{sweep.__name__}"
             workdir.mkdir()
-            sweep(workdir, seed)
+            # The nn-mirror sweep importorskips grackle_nn. Skipping the whole
+            # hammer for that would hide the other six sweeps.
+            with contextlib.suppress(pytest.skip.Exception):
+                sweep(workdir, seed)
             shutil.rmtree(workdir)

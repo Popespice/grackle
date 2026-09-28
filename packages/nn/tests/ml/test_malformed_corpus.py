@@ -241,6 +241,7 @@ def default_int_digit_limit() -> Iterator[int]:
 
 @pytest.mark.xfail(
     strict=True,
+    raises=(ValueError, RecursionError),
     reason=(
         "T6-5: a line that json.loads rejects with a plain ValueError (an "
         "integer over the int-digit limit) or a RecursionError (nesting deeper "

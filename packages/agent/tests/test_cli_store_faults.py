@@ -60,6 +60,7 @@ def _assert_reported_cleanly(result: Result, db: Path) -> None:
 
 @pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason=(
         "T6-1: `grackle serve --store` on a corrupt database dies with an "
         "unhandled sqlite3.DatabaseError traceback (docs/test-campaigns/phase-12.md)"
@@ -77,6 +78,7 @@ def test_serve_reports_a_corrupt_store_without_a_traceback(
 @pytest.mark.skipif(not ml_bridge.learn_available(), reason="grackle_nn is not installed")
 @pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason=(
         "T6-1: `grackle learn --from-store` on a corrupt database dies with an "
         "unhandled sqlite3.DatabaseError traceback (docs/test-campaigns/phase-12.md)"

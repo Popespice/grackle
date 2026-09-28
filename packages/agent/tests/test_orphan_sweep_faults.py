@@ -162,6 +162,7 @@ def _deny_part_unlink(monkeypatch: pytest.MonkeyPatch, recordings: Path) -> None
 
 @pytest.mark.xfail(
     strict=True,
+    raises=PermissionError,
     reason=(
         "T6-2: a best-effort orphan sweep that cannot unlink a stale .part "
         "raises PermissionError out of serve() before the bind, so serve --store "
@@ -267,6 +268,7 @@ async def test_peer_startup_sweep_loses_an_idle_live_recording(
 
 @pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason=(
         "T6-2: the sweep judges a .part idle by its mtime, which only advances "
         "when the writer's buffer flushes, so a peer's startup sweep deletes a "

@@ -579,6 +579,7 @@ async def test_shutdown_waits_for_a_slow_in_flight_save(
 
 @pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason=(
         "T6-1: a second interrupt during shutdown lets serve() close the store "
         "under a recording's in-flight finalize — the .jsonl is kept but its "
@@ -647,6 +648,7 @@ async def test_interrupted_shutdown_still_registers_the_finalized_recording(
 
 @pytest.mark.xfail(
     strict=True,
+    raises=pytest.fail.Exception,
     reason=(
         "T6-1: a SessionStore read error in session_list_request / "
         "session_load_request escapes the receive loop and the server drops "
@@ -742,6 +744,7 @@ async def test_loading_a_session_whose_file_is_gone_replays_nothing(
 
 @pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason=(
         "T6-1: session_load_request guards source_path with exists(), not "
         "is_file() — a directory loads as an empty session "
@@ -780,6 +783,7 @@ def _release_fifo_reader_eventually(fifo: Path) -> None:
 @pytest.mark.skipif(sys.platform == "win32", reason="FIFOs are POSIX-only")
 @pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason=(
         "T6-1: session_load_request guards source_path with exists(), not "
         "is_file() — a FIFO is opened by an executor thread that blocks until "
@@ -904,14 +908,14 @@ def test_a_newer_schemas_extra_columns_are_tolerated(tmp_path: Path) -> None:
     assert store.list_sessions() == [newer_row, _meta("from-this-version", started_ns=1)]
     store.close()
 
-    raw = sqlite3.connect(db).execute(
-        "SELECT root, tags FROM sessions WHERE id = 'from-this-version'"
-    )
-    assert raw.fetchone() == (None, "")
+    with contextlib.closing(sqlite3.connect(db)) as raw_db:
+        raw = raw_db.execute("SELECT root, tags FROM sessions WHERE id = 'from-this-version'")
+        assert raw.fetchone() == (None, "")
 
 
 @pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason=(
         "T10-3: save_session's INSERT OR REPLACE deletes and re-inserts the "
         "row, so re-saving a session wipes columns this version does not know "
@@ -940,12 +944,14 @@ def test_resaving_a_session_keeps_a_newer_schemas_columns(tmp_path: Path) -> Non
     )
     store.close()
 
-    raw = sqlite3.connect(db).execute("SELECT label, root, tags FROM sessions")
-    assert raw.fetchall() == [("relabelled", "/proj", "x")]
+    with contextlib.closing(sqlite3.connect(db)) as raw_db:
+        raw = raw_db.execute("SELECT label, root, tags FROM sessions")
+        assert raw.fetchall() == [("relabelled", "/proj", "x")]
 
 
 @pytest.mark.xfail(
     strict=True,
+    raises=sqlite3.OperationalError,
     reason=(
         "T10-3: the store has no migration path — a sessions table missing a "
         "column is accepted at open, then every read and write fails "
