@@ -36,15 +36,11 @@ import type { Graph, GraphEdge, GraphNode } from "@grackle/shared-types";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { StrictMode } from "react";
 import type { EdgeDisplayData, NodeDisplayData } from "sigma/types";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  onTestFinished,
-  vi,
-} from "vitest";
+  REDUCED_MOTION_QUERY,
+  setMatchingMediaQueries,
+} from "../test/matchMedia";
 import { restoreInitialState } from "../test/storeReset";
 import { useTheme } from "../theme/useTheme";
 import type {
@@ -404,32 +400,6 @@ function expectAllRetiredCleanly(): void {
     expect(l.killCount).toBe(1);
     expect(l.usedAfterKill).toEqual([]);
   }
-}
-
-/**
- * Answer `prefers-reduced-motion` with true for the rest of this test. The
- * setup file's matchMedia is itself a `vi.fn`, so `vi.spyOn` would hand back
- * that shared mock and re-implement it for every later test in the file
- * (it did, until this was changed: reduced motion leaked forward and masked
- * the ledgered defect below). Swap the property instead, and put the
- * original back when the test ends.
- */
-function preferReducedMotion(): void {
-  const original = window.matchMedia;
-  onTestFinished(() => {
-    window.matchMedia = original;
-  });
-  window.matchMedia = (query: string) =>
-    ({
-      matches: query.includes("prefers-reduced-motion"),
-      media: query,
-      onchange: null,
-      addListener: () => {},
-      removeListener: () => {},
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      dispatchEvent: () => false,
-    }) as MediaQueryList;
 }
 
 beforeEach(() => {
@@ -877,7 +847,7 @@ describe("GraphCanvas — rebuild vs apply", () => {
   });
 
   it("under reduced motion a removed node is dropped at once and no loop starts", () => {
-    preferReducedMotion();
+    setMatchingMediaQueries(REDUCED_MOTION_QUERY);
     mount();
     advance(INITIAL_SETTLE_MS);
     const sigma = theSigma();
