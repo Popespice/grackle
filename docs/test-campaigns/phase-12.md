@@ -232,7 +232,7 @@ Following the phase-1 T8 tradition: claims vs reality.
 | **C1** | T3 guard-of-the-guards (parity meta-test, path-discipline lint, codegen probes) + T2 census — **done, with three items explicitly deferred** (see tier tables above for per-probe outcomes): T2-2's per-OS skip-count assertion, T3-6(a) the typo'd-`$ref` degradation probe, and T3-6(b) a cross-version codegen determinism guard | PR gate — all sub-second, Ubuntu shadow |
 | **C2** | T5 expected-fail ledger — **done**: all six probes executed against the real system (see the T5 table for per-probe outcomes). T5-1 and T5-2 confirmed, fixed, and promoted in the same PR; T5-4, T5-6's retry case, and the new T5-7 ledgered strict-xfail; T5-3 pinned as documented behavior; T5-5's premise refuted and the tolerance it doubted pinned. Every passing pin is backed by a committed mutation spec (8 new, all killed). Findings F-2–F-7 below — F-7 is a defect in C0's own mutation harness, found and fixed during this chunk | PR gate |
 | **C3** | T4 mutation battery + T11-2..T11-5 — **done**: 95 new committed specs (106 in total), all behaving as declared in the full sweep. Of the 78 T4-1..T4-3 mutants, the pre-existing suites killed 60; the other 18 exposed real test gaps, each closed by an additive test proven to fail under its mutant. The 17 panel specs back new or strengthened tests: 13 cover paint paths that had no coverage at all before T11-2, and 4 are ranking mutants that survived the old StatsPanel/CyclesPanel tests. The 12.4 "30/30" claim mostly reproduces (31/34 re-specified). The Adam premise was corrected (see T4-5). One product defect was ledgered (T5-8). `pnpm mutation:check` is now in the PR gate and in pre-push; the full sweep (`pnpm mutation`) goes to C5's nightly workflow | Harness runs nightly; specs' *presence* checked at PR gate |
-| **C4** | T6 fault injection + T7 concurrency (+ T10-1 and T10-3, which the original plan assigned to no chunk) — **done**. 25 product defects confirmed and ledgered as 58 strict xfails (F-8–F-11; 60 on Python 3.14, where F-11 #10 also applies); every correct behavior pinned, 40 new mutation specs, most surviving the pre-existing suites. Four premises corrected: T6-1's shutdown race needs a *second* interrupt; T6-4's rebuild serialization has two independent mechanisms; T7-2's lost update cannot occur on GIL builds; and the T4-4 "unreachable" guard is reachable (now pinned). ADR-0027 amended. Hammers are marked `@pytest.mark.hammer` and deselected by default; each has an unmarked small sibling in the gate | Fast cases PR gate; hammers nightly |
+| **C4** | T6 fault injection + T7 concurrency (+ T10-1 and T10-3, which the original plan assigned to no chunk) — **done**. 26 product defects confirmed and ledgered as 59 strict xfails (F-8–F-11; 61 on Python 3.14, where F-11 #10 also applies); every correct behavior pinned, 40 new mutation specs, most surviving the pre-existing suites. Four premises corrected: T6-1's shutdown race needs a *second* interrupt; T6-4's rebuild serialization has two independent mechanisms; T7-2's lost update cannot occur on GIL builds; and the T4-4 "unreachable" guard is reachable (now pinned). ADR-0027 amended. Hammers are marked `@pytest.mark.hammer` and deselected by default; each has an unmarked small sibling in the gate | Fast cases PR gate; hammers nightly |
 | **C5** | T8 property batteries (if P-3 approved) + T9 numerics (telemetry + sweeps + numpy matrix in `ci-matrix.yml`) + `campaign.yml` (nightly: mutation sweep, margin sweep, property long-runs, hammer tests) | Nightly + main-push |
 | **C6** | T11-1 GraphCanvas harness + T11-6/7; T12 live-system probes executed and findings appended to this document in the F-N format | Manual + PR gate |
 
@@ -493,11 +493,11 @@ Strict xfails in `test_orphan_sweep_faults.py` and `test_server_ingest_faults.py
 **Recommendation.** e and f are the priority, one fix. g is a small, isolated fix. a and b share the
 sweep and belong together.
 
-### F-11 — Parser robustness: ten ways a malformed input loses a whole file (T6-5)
+### F-11 — Parser robustness: eleven ways a malformed input loses a whole file (T6-5)
 
 All Low severity: grackle's own writers and the real toolchains never produce these inputs, and
-each failure loses a whole file, trace or session rather than corrupting data. 38 strict xfails
-on Python 3.12/3.13 (36 agent in `test_malformed_corpus.py`, 2 nn); #10 adds 2 more on 3.14.
+each failure loses a whole file, trace or session rather than corrupting data. 39 strict xfails
+on Python 3.12/3.13 (37 agent in `test_malformed_corpus.py`, 2 nn); #10 adds 2 more on 3.14.
 
 | # | Defect | Location |
 |---|---|---|
@@ -511,12 +511,15 @@ on Python 3.12/3.13 (36 agent in `test_malformed_corpus.py`, 2 nn); #10 adds 2 m
 | 8 | `iter_coverage_deltas` crashes on non-object entries, non-list fields or an `inf` count, aborting the `--stream` session its own `_as_int` docstring says must survive | `node_runtime/coverage_poll.py` |
 | 9 | The V8 sampling pipeline crashes on malformed ids, time deltas, callFrames or function names, losing the whole sampling trace | `node_runtime/profile_reconstruct.py`, `launcher._make_resolve` |
 | 10 | On Python 3.14, a `file://` URL with a remote host makes `url2pathname` raise `URLError` outside `_normalize`'s `try` (3.12/3.13 drop it correctly; CI tests only those, but a local uv env resolved 3.14) | `node_runtime/node_resolution.py` |
+| 11 | A coverage URL with an embedded NUL (`a.ts%00`) reaches `path.read_bytes()` in `_line_map_for_url`, which catches `OSError` only, so `ValueError: embedded null byte` escapes and aborts the `--stream` coverage session, contradicting the function's own "`None` for read failures". It is masked upstream wherever `Path.resolve()` rejects the NUL first (POSIX and Windows py3.12) and **exposed on Windows py3.13**, where the corpus sweep's seeds 4–7 failed CI. Ledgered deterministically on every platform by handing the function a NUL path (1 xfail); the sweep tolerates exactly that `ValueError`, for a URL containing `%00`, and no other | `node_runtime/launcher.py` `_line_map_for_url` |
 
 **Recommendation.** One "parse defensively" chunk: a shared per-line decode helper (catching
 `ValueError` + `RecursionError`, requiring a dict with a string `node_id`) fixes 1–4 and T5-8
-together; 5–10 are one-line guards each.
+together; 5–11 are one-line guards each (#11: catch `ValueError` beside `OSError`).
 
 ### C4 observations (not ledgered)
+
+- **The first Windows run of C4's tests (PR #93 CI) found three things the macOS/Ubuntu runs could not.** (1) mypy failed on POSIX-only `os.mkfifo`/`os.O_NONBLOCK` in the FIFO test, before pytest ran (`mypy --platform win32` reproduces it locally; fixed). (2) `test_watch_edit_survives_a_file_blinking_mid_rebuild` read the blinking file straight after the hook *deleted* it, before the hook had *restored* it — a race that Ubuntu and Windows py3.12 won by luck and Windows py3.13 lost (`FileNotFoundError`); it now waits on a `restored` event, verified by slowing the restore on macOS until the old test failed identically. (3) One more product defect, F-11 #11, whose corpus-sweep failure was reproduced locally by making `to_posix` keep the NUL, as Python 3.13's Windows `resolve()` evidently does. A lesson for the nightly job: the hammers and the property profile run on Windows there too, for the same reason.
 
 - `learn --from-store` opens the store read-write, so pointed at an unrelated SQLite file it would
   switch it to WAL and add a `sessions` table (found by reading; not run).
