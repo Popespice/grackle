@@ -1,0 +1,15 @@
+{
+  "id": "frontend-graph-canvas-reheat-pins-nobody",
+  "description": "The reheat pins no survivors, so existing nodes scramble on every watch-mode re-push (T11-1).",
+  "target": {
+    "file": "packages/frontend/src/graph/GraphCanvas.tsx",
+    "find": "      fixed: !unpinned.has(id),",
+    "replace": "      fixed: false,"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/GraphCanvas.test.tsx"]
+  },
+  "expect": "killed"
+}

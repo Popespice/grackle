@@ -1,0 +1,15 @@
+{
+  "id": "frontend-graph-canvas-rebuild-keeps-stale-settle-timer",
+  "description": "A scratch rebuild does not clear the previous build's initial-settle timer, which then stops the NEW layout at the old deadline, freezing a half-settled graph (T11-1).",
+  "target": {
+    "file": "packages/frontend/src/graph/GraphCanvas.tsx",
+    "find": "    if (initialSettleTimerRef.current !== null) {\n      clearTimeout(initialSettleTimerRef.current);\n      initialSettleTimerRef.current = null;\n    }\n",
+    "replace": ""
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/GraphCanvas.test.tsx"]
+  },
+  "expect": "killed"
+}

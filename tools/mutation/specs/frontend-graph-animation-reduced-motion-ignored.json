@@ -1,0 +1,15 @@
+{
+  "id": "frontend-graph-animation-reduced-motion-ignored",
+  "description": "prefersReducedMotion answers false whatever the OS says — the watch-mode enter/exit animation runs for users who asked for reduced motion (T11-7).",
+  "target": {
+    "file": "packages/frontend/src/graph/graphAnimation.ts",
+    "find": "return window.matchMedia(\"(prefers-reduced-motion: reduce)\").matches;",
+    "replace": "return false;"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/GraphCanvas.reducedMotion.test.tsx"]
+  },
+  "expect": "killed"
+}

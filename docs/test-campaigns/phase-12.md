@@ -3,7 +3,7 @@
 **Date drafted**: 2026-08-20
 **Under test**: `v0.12.0-phase-12` (main `c305deb`) — the entire stack
 **Environment**: macOS 26.5 / arm64 primary; CI matrix Ubuntu + Windows (+ macOS on main-push), Python 3.12/3.13, Node 22
-**Status**: EXECUTING — C0–C5 done, C6 pending; findings recorded here as tiers execute
+**Status**: EXECUTED — C0–C6 built; C3–C6 open as stacked PRs for the owner's review; findings recorded here as tiers executed
 
 ## Lineage and doctrine
 
@@ -193,13 +193,13 @@ The gaps:
 
 | Probe | Fails if | Status |
 |---|---|---|
-| T11-1: `GraphCanvas` harness | **543 lines, the largest frontend module, zero tests** — sole owner of the Sigma/ForceAtlas2 lifecycle: three timer/RAF refs, `sigma.kill()` teardown, rebuild-vs-reheat (`hasSurvivor`), three event handlers, a manual RAF loop, theme-reactive repaints. Every collaborator is tested; their composition and every cleanup path are not. Probe: a mocked-Sigma lifecycle suite (mount/update/teardown, timer leak assertions via fake timers, rebuild-vs-reheat decision table). | **Seeded gap** |
+| T11-1: `GraphCanvas` harness | **543 lines, the largest frontend module, zero tests** — sole owner of the Sigma/ForceAtlas2 lifecycle: three timer/RAF refs, `sigma.kill()` teardown, rebuild-vs-reheat (`hasSurvivor`), three event handlers, a manual RAF loop, theme-reactive repaints. Every collaborator is tested; their composition and every cleanup path are not. Probe: a mocked-Sigma lifecycle suite (mount/update/teardown, timer leak assertions via fake timers, rebuild-vs-reheat decision table). **Done (C6):** `graph/GraphCanvas.test.tsx`, 36 tests. `sigma` and the ForceAtlas2 worker are faked so every call is recorded (graphology is the real library), and the fakes copy the two library behaviours the component relies on: `Sigma.kill()` removes all listeners (the component's only handler teardown), and FA2 `start()` is a no-op while already running and is the only place the `fixed` pins are read. Covered: **mount** (no graph builds nothing; a graph builds exactly one Sigma and one layout with the documented settings and three handlers; the layout stops at 5 s, not before); **unmount** (Sigma and FA2 each killed exactly once, and `vi.getTimerCount()` is 0 afterwards, including mid-reheat and mid-fade); the **rebuild-vs-apply decision table** written out in the file (a disjoint or empty re-push rebuilds and kills the old pair; identical, attribute-only, edge and node add/remove re-pushes are applied in place, and survivors keep their x/y; node removal fades over the rAF loop, or is dropped at once under reduced motion; reheat does nothing during the initial settle, and after it pins survivors, restarts the layout, and unpins at 1.5 s, with a second reheat replacing the first); the three **handlers** and their retirement on rebuild; **repaint** on theme or selection change with no rebuild; **StrictMode**, five interrupted remount cycles, and a key-change remount all end with exactly one live Sigma/FA2 pair and nothing pending. 20 specs (teardown 3, timers/rAF 4, rebuild-vs-reheat 7, handlers 3, theme/repaint 3), all killed, each by at least one passing test rather than only by the new `it.fails`. **No leaked timer or rAF, no missed `kill()`, no handler firing after unmount, no second live instance.** One defect ledgered (F-18 a). | **Done (C6); 1 defect ledgered** |
 | T11-2: port `makeRecorder` | `FlameGraphPanel` and `LossCurvePanel` still stub `getContext → null`, so **their entire paint paths run under zero coverage** — the exact defect class 12.4 fixed for NetworkView with `makeRecorder` (`NetworkViewPanel.test.tsx:309-356`), which is directly portable. **Done (C3):** `makeRecorder` extracted to `src/test/canvasRecorder.ts` (NetworkView's use unchanged) with new channels (filled/stroked rects, clears, path points, text position and style). FlameGraph and LossCurve each gained 7 paint-path tests (geometry, labels and clipping, outlines, dimming, gridlines, axis alignment, playhead marker, `devicePixelRatio` scaling, empty state). 13 specs, all killed, and every new paint test is the one that fails under at least one of them. | **Done (C3)** |
 | T11-3: vacuous-assert fixes | The T4-5 StatsPanel/CyclesPanel disjunctive regexes → exact-value assertions (top-degree ranking must actually rank). **Done (C3)** — see T4-5. | **Done (C3)** |
 | T11-4: store-reset unification | `CyclesPanel.test.tsx` partial-merges a mocked action that persists for the rest of the module — the exact leakage `CausalPathPanel.test.tsx:84-95` defends against with full snapshot-replace + its own regression test. Apply the full-replace pattern to every panel suite. **Done (C3):** a shared `restoreInitialState` helper (`src/test/storeReset.ts`, built on zustand 5's `getInitialState()`, so it does not depend on when a snapshot was taken) is applied to nine panel suites, including the client store in SourceViewer, which had a leaking `sendReadSource` stub. Cycles and ValueInspector gained no-cross-test-leak regression tests; the Cycles one was shown to fail with the reset removed. | **Done (C3)** |
 | T11-5: `CausalPathPanel` perf cliff | The Windows CI timeout diagnosed: 199 sequential `getByRole` accessibility-tree scans + full React commits under the default 5s timeout — a genuine performance cliff, not nondeterminism. Fix: hoist the query out of the loop (the button node is stable). **Fixed (C3):** the button query is hoisted out of the loop, with assertions that it stays attached and disabled. The test ran 253–258 ms alone before and 84–86 ms after; inside the full parallel suite, 627–845 ms before and 147–209 ms after. | **Fixed (C3)** |
-| T11-6: untested hooks + panels | `useTracePlayback` (timer-driven, zero tests), `panels/init.ts`, `SessionLibraryPanel` (no test exists anywhere), `ConnectionBadge`, `useHeatmap`/`useCallTree`/`useRuntimeCoverage` wrappers. | Open |
-| T11-7: matchMedia stub honesty | The setup stub answers `matches: false` to everything — `prefers-reduced-motion` / `prefers-color-scheme` true-branches never execute in any test (the 10.7 animation suppression is untested in the direction it exists for). | Open |
+| T11-6: untested hooks + panels | `useTracePlayback` (timer-driven, zero tests), `panels/init.ts`, `SessionLibraryPanel` (no test exists anywhere), `ConnectionBadge`, `useHeatmap`/`useCallTree`/`useRuntimeCoverage` wrappers. **Done (C6):** `useTracePlayback` (16 tests on fake-timer rAF: first-frame floor and per-speed advance; a speed change mid-play without restarting the loop; the bound growing with a live buffer; one loop under StrictMode; stopping on the exact frame it reaches the end and clamping an overshoot; seekable mode playing to `traceTotal` rather than the end of the loaded window; pause cancelling the pending frame and resuming without jumping by the paused time; no frame surviving unmount). `panels/init` (the full 18-panel slot/order table and id→component wiring, plus every slot used checked against the six `App.tsx` renders via `?raw`, which catches a misspelt slot silently hiding a panel). `SessionLibraryPanel` (no request while disconnected or connecting; one on connect or mount and another after a reconnect; rows, pluralisation, empty and loading states; click sends the id; Refresh replaces the list; error display). `ConnectionBadge` (all three states, `data-status`, dot colour, pulse only when connected, following the store live). `useHeatmap`, `useCallTree` and `useRuntimeCoverage` (override precedence, aggregation, the seekable window-start offset, recompute as events arrive or the graph is replaced, memo stability). 13 specs, all killed. **Ledgered: F-18 b–f** (7 `it.fails`, each with a passing control beside it, and each flipped to a plain `it` once to confirm it fails on its final assertion, not during setup). | **Done (C6); 5 defects ledgered** |
+| T11-7: matchMedia stub honesty | The setup stub answers `matches: false` to everything — `prefers-reduced-motion` / `prefers-color-scheme` true-branches never execute in any test (the 10.7 animation suppression is untested in the direction it exists for). **Done (C6).** **Premise corrected:** the stub was less blind than the row says. `graphAnimation.test.ts` already reached `prefersReducedMotion`'s true branch through `stubGlobal`; what had never run was the true branch of the *`GraphCanvas`* caller and `useTheme`'s light branch. A new `src/test/matchMedia.ts` makes the stub controllable (`setMatchingMediaQueries(...)`, `resetMatchingMediaQueries()`, `mediaQueryMatches(q)`, the `REDUCED_MOTION_QUERY`/`PREFERS_LIGHT_QUERY`/`PREFERS_DARK_QUERY` constants, `installMatchMediaStub()`/`resetMatchMedia()`), keeping the default `matches: false` for everything: matching compares the whole query ignoring whitespace and case, `matches` is a live getter, the state survives `vi.resetModules()`, and the property descriptor is the original one, so `spyOn`/`stubGlobal` behave as before. `setup.ts` now resets it after every test. **Hazard found and closed:** `vi.spyOn(window, "matchMedia")` returns the setup file's shared `vi.fn` itself, so a `mockImplementation` on it leaked into every later test in that file and `vi.restoreAllMocks()` did not undo it (it had masked F-18 a in T11-1's own harness until that test swapped the property instead); the per-test reset ends the leak, with leak-pair meta-tests for both patterns. New tests: `GraphCanvas.reducedMotion.test.tsx` (a watch-mode re-push under reduced motion drops removed nodes in the same commit, starts no rAF loop, and paints new nodes at full size with no flash and new edges with no pulse, each with a default-motion control) and `useTheme.colorScheme.test.ts` (an OS light preference gives a light theme and `data-theme`; a stored theme beats it; an unrecognised stored value is ignored; a dark-only match stays dark). 5 specs, including one that changes `reduce` to `no-preference` — which T11-1's own stub, matching on `query.includes("prefers-reduced-motion")`, answers true either way and so cannot catch. | **Done (C6)** |
 
 ### T12 — Live-system end-to-end probes
 
@@ -209,10 +209,10 @@ deferred (a ~300MB dependency for a separate decision).
 
 | Probe | Fails if |
 |---|---|
-| T12-1: full-pipeline | `parse → trace → serve → browser` on `tiny-python-app` + the nn demo: heat, flame, timeline, ValueInspector, LossCurve click-to-seek, NetworkView phases — against the *known* T5 ledger (e.g. the epoch-boundary chip reading "loss" is expected-broken; anything *else* wrong is a new finding). |
-| T12-2: watch + learn live | `serve --watch --model`: edit a file mid-session — predicted_heat survives the re-push (the 12.2 regression test's claim, verified live), positions/camera survive (10.7), a retrain mid-serve is picked up without restart. |
-| T12-3: protocol edges against the live server | The T6-3 battery driven over a real socket: oversized frame, binary frame, malformed envelopes, event-after-end, two producers, kill-a-consumer-mid-stream. |
-| T12-4: crashed-run recovery UX | SIGKILL a `trace -o` run; verify the `.part` story end-to-end: error message accuracy, salvage, the T5-1 bricked-path scenario. |
+| T12-1: full-pipeline | `parse → trace → serve → browser` on `tiny-python-app` + the nn demo: heat, flame, timeline, ValueInspector, LossCurve click-to-seek, NetworkView phases — against the *known* T5 ledger (e.g. the epoch-boundary chip reading "loss" is expected-broken; anything *else* wrong is a new finding). **Done (C6), in the in-app browser against a real server.** *tiny-python-app*, freshly traced with `--capture-values`: heat, the 49-event timeline, playback, the flame graph (24 frames), the cycles panel, and the value inspector (event 7: `call is_even`, depth 3, `n = 1`) all work. *nn demo* (25,870 events): the loss curve draws and click-to-seek moves the playhead; the network view header is right (`2-32-32-3 · epoch 29 · loss 0.0729 · acc 0.974`) and its chip reads "loss" at the epoch boundary — **the known 12.4 defect, as expected**. Two new findings: **F-16** (the graph column collapses to 0 px at a 1024-px viewport) and **F-17** (in a seekable session, no playhead move except the scrubber loads the event window, so the value inspector goes blank during Play and after click-to-seek). |
+| T12-2: watch + learn live | `serve --watch --model`: edit a file mid-session — predicted_heat survives the re-push (the 12.2 regression test's claim, verified live), positions/camera survive (10.7), a retrain mid-serve is picked up without restart. **Done (C6).** `serve --watch` on a scratch copy of tiny-python-app with a trained model. Editing `main.py` mid-session re-pushed the graph (5 → 7 nodes) with `predicted_heat` intact; surviving nodes kept their relative layout and drifted slightly as the layout reheated, and the camera re-fit — Phase 10.7's reheat design, not a defect. Retraining mid-serve was picked up on the next re-push without a restart (`helper` went from 1.0000 to 0.0982). **Live evidence for F-13a (T9-8):** before the retrain, both brand-new functions — an async one and a plain one nothing calls — were predicted at 1.0000, the hottest in the project, because features constant in training reach the model scaled by 1e8. |
+| T12-3: protocol edges against the live server | The T6-3 battery driven over a real socket: oversized frame, binary frame, malformed envelopes, event-after-end, two producers, kill-a-consumer-mid-stream. **Done (C6) — robust.** Over a real socket against a running server, with the browser connected throughout: a binary frame and six malformed envelopes (non-JSON, missing id, int id, bare array, 5000-deep nesting, unknown type) got no reply, and the same connection still answered a ping. A 2 MiB frame got a clean 1009 ("frame exceeds limit of 1048576 bytes"). Two concurrent producers, plus a consumer killed mid-stream (TCP abort), plus two events after `session_end`: the surviving consumer received all 106 messages, and the server answered a health ping in ≤ 8 ms after every probe. Observation, not a defect: the browser merged the two concurrent sessions into one 102-event timeline (`trace_event` carries no session id and the UI assumes one live session), while the recording sink keeps them separate per connection (T7-5). |
+| T12-4: crashed-run recovery UX | SIGKILL a `trace -o` run; verify the `.part` story end-to-end: error message accuracy, salvage, the T5-1 bricked-path scenario. **Done (C6) — passes end to end with real signals.** SIGKILL of a real `trace -o` run left the `.part` with 370,512 complete lines and **no torn tail** (consistent with T5-5). The re-run refusal message accurately describes the killed-run case. The `.part` salvages cleanly through `grackle diff` and `build_seekable`. A real SIGINT at 1 s and at 2 s into a 6.5 s cold parse (2,081 files) gave "Aborted!", **no `.part`**, a previous trace at `-o` left untouched, and a clean re-run — the T5-1 fix verified outside the test harness. SIGINT mid-run finalized the trace (exit 0), ending on the `KeyboardInterrupt` exception event. |
 
 ### T13 — Docs and config integrity
 
@@ -235,7 +235,7 @@ Following the phase-1 T8 tradition: claims vs reality.
 | **C3** | T4 mutation battery + T11-2..T11-5 — **done**: 95 new committed specs (106 in total), all behaving as declared in the full sweep. Of the 78 T4-1..T4-3 mutants, the pre-existing suites killed 60; the other 18 exposed real test gaps, each closed by an additive test proven to fail under its mutant. The 17 panel specs back new or strengthened tests: 13 cover paint paths that had no coverage at all before T11-2, and 4 are ranking mutants that survived the old StatsPanel/CyclesPanel tests. The 12.4 "30/30" claim mostly reproduces (31/34 re-specified). The Adam premise was corrected (see T4-5). One product defect was ledgered (T5-8). `pnpm mutation:check` is now in the PR gate and in pre-push; the full sweep (`pnpm mutation`) goes to C5's nightly workflow | Harness runs nightly; specs' *presence* checked at PR gate |
 | **C4** | T6 fault injection + T7 concurrency (+ T10-1 and T10-3, which the original plan assigned to no chunk) — **done**. 26 product defects confirmed and ledgered as 59 strict xfails (F-8–F-11; 61 on Python 3.14, where F-11 #10 also applies); every correct behavior pinned, 40 new mutation specs, most surviving the pre-existing suites. Four premises corrected: T6-1's shutdown race needs a *second* interrupt; T6-4's rebuild serialization has two independent mechanisms; T7-2's lost update cannot occur on GIL builds; and the T4-4 "unreachable" guard is reachable (now pinned). ADR-0027 amended. Hammers are marked `@pytest.mark.hammer` and deselected by default; each has an unmarked small sibling in the gate | Fast cases PR gate; hammers nightly |
 | **C5** | T8 property batteries + T9 numerics + T10-2 + F-1 + the nightly `campaign.yml` — **done**. P-3 approved: `hypothesis` added dev-only, with a derandomized "ci" profile in the gate and a 5000-example "nightly" one. 27 agent properties and 11 frontend sweeps hold; 38 new mutation specs, all killed. F-1 is fixed, and ADR-0022 is amended to match. The T9-7 numpy-floor legs are in `ci-matrix.yml`. New defects are ledgered as F-13, F-14 and F-15; **F-12 needs your decision**: the ADR-0029 acceptance bar passes on about one seed pair in eleven. `campaign.yml` runs the mutation sweep, the hammers, the nightly property profile and the margin sweep | Nightly + main-push |
-| **C6** | T11-1 GraphCanvas harness + T11-6/7; T12 live-system probes executed and findings appended to this document in the F-N format | Manual + PR gate |
+| **C6** | T11-1 GraphCanvas harness, T11-6/7, and T12 live-system probes — **done**. 38 new mutation specs (20 GraphCanvas, 18 hooks, panels and matchMedia; 222 in total), all killed, each caught by a passing test. Frontend: 886 → 1018 passing (+132), 13 → 21 `it.fails` (+8), identical across three runs of the merged tree. T12 was run by hand in the in-app browser against real servers (T12-1..T12-4), with the results recorded in each row. **Three findings**: F-16 (the graph column collapses to 0 px at a 1024-px viewport) and F-17 (a seekable replay's value inspector goes blank during Play and after a loss-curve seek) are the two that matter; F-18 is six component-level defects, ledgered as eight `it.fails` tests. The T5-1 fix was also verified with real signals (T12-4) | Manual + PR gate |
 
 ## Findings
 
@@ -614,6 +614,96 @@ Ledgered as `it.fails`, minimized by hand.
   keys, an undocumented sibling of the documented case caveat.
 - **Network dimensions above 2^53** lose precision, so two different huge dimensions can
   compare equal (same behavior as `Number()`).
+
+### F-16 — The graph canvas collapses at common laptop widths (T12-1)
+
+**Location.** `packages/frontend/src/App.tsx`, the shell grid: `gridTemplateColumns: "auto 1fr auto"`.
+
+**Reproducer.** Serve any graph, open the UI at a 1024 × 768 viewport, and measure `<main>`.
+
+**Observed.** The two `auto` side columns grow to the unwrapped width of their widest content,
+and the `1fr` graph column gets what is left, down to its min-content, which is 0. Measured: the
+left column is 447 px, set entirely by the Session Library's empty-state sentence ("No stored
+sessions. Start the server with --store to save sessions.") laid out on one line, and the right
+column 571–630 px, set by the inspector and stats panels. At 1024 px the graph column is **0 px**
+(the Sigma canvases are 1 px wide). At 1440 px it gets 357 px, a quarter of the screen. It takes
+roughly 1100 px before any graph is visible at all.
+
+**Expected.** The graph — the product's main view — keeps most of the width at any common
+laptop size, and the side panels wrap their text.
+
+**Fix.** Bound the side tracks, e.g.
+`gridTemplateColumns: "fit-content(320px) minmax(0, 1fr) fit-content(420px)"`, so panel text
+wraps instead of widening its column. Not ledgered: jsdom has no layout engine, so no unit test
+can see it. It is a candidate for the deferred browser-automation decision (T12's Playwright
+note).
+
+**Severity.** Medium — the main view is invisible at 1024 px and cramped at 1280–1440 px, and
+nothing signals why.
+
+### F-17 — In a seekable session, only the scrubber loads the event window (T12-1)
+
+**Location.** `packages/frontend/src/panels/TimelinePanel.tsx`, `handleSeekablePlayheadChange`:
+the debounced `trace_seek_request` lives in the scrubber's change handler. Every other
+`setPlayhead` caller moves the playhead without it: `graph/useTracePlayback.ts` (Play),
+`panels/LossCurvePanel.tsx` (click-to-seek), `panels/CausalPathPanel.tsx` (hop click), and
+`panels/ValueInspectorPanel.tsx` (call-stack frame click).
+
+**Reproducer.** Serve the nn demo (`packages/nn/run-a.jsonl`, 25,870 events — any
+`--trace-source` replay over 200 events is seekable). Then (a) click the middle of the loss
+curve, or (b) scrub to 0 and press Play.
+
+**Observed.** (a) The playhead jumps to event 12,964, but the value inspector shows "No event at
+this position.", and "next ▶" does nothing. A second click at event 21,134 does the same. (b)
+From event 201 on — the default 200-event window — every sample during playback shows "No event
+at this position." Dragging the scrubber to event 12,000 loads the window, and the inspector
+shows `call Sequential.backward` at depth 4.
+
+**Expected.** Wherever the playhead moves, the events around it load, so the time-travel
+inspector works during playback and after every seek.
+
+**Fix.** Move the window fetch out of the scrubber handler into one place every playhead move
+passes through — an effect keyed on `tracePlayhead` in seekable mode, fetching when the playhead
+leaves the loaded window. Not ledgered yet: the right test depends on where the fetch ends up (a
+panel-level test would miss an App-level hook). Worth writing alongside the fix.
+
+**Severity.** Medium-high — every `--trace-source` replay over 200 events is seekable, including
+the nn "watch it learn" demo, and there the headline interactions (Play and loss-curve seek)
+land on an empty inspector.
+
+### F-18 — Frontend hooks and panels: six defects, eight `it.fails` tests (T11-1, T11-6)
+
+Each has a passing control test beside it, and each was flipped to a plain `it` once to confirm it
+fails on its final assertion rather than during setup.
+
+| # | Defect | Location | Fix direction | Severity |
+|---|---|---|---|---|
+| a | A node removed and then **restored within its 400 ms fade** is still dropped. The fading node is still in the live graph, so `applyGraphDiff` sees nothing structural, `isEmptyDiff` is true, and the effect returns before `recordDiffAnimations` — the only code that cancels a fade — so the rAF tick then drops the node. The store graph has it; the live graph and canvas do not, until the next structural re-push. Repro: mount, wait out the 5 s settle, push the graph without an isolated node (an empty `pkg/__init__.py`), 100 ms later push the original back, advance 800 ms. It happens only when the restoring push brings back no edge; a passing companion shows the same restore survives when the node's edges return with it. | `graph/GraphCanvas.tsx` (the early return at ~line 468) | remove that early return — checked once, not committed: exactly the one `it.fails` turns red and the other 35 stay green | Low-medium — a stale canvas after an editor blink |
+| b | **Speed multipliers are not proportional.** Each frame advances `max(1, round(dt·0.05·speed))` and throws the fractional part away. At 16 ms frames 4× runs at 3.02× the 1× rate; at 120 Hz, 2× plays at exactly the 1× rate and 1× runs at 120 events/s against the documented 50. One second at 1× and at 4× gives 62 and 184 events (2 tests) | `graph/useTracePlayback.ts` | carry the fractional remainder across frames | Low-medium — playback speed depends on the display's refresh rate |
+| c | **The heat map freezes during seekable playback.** The canvas paints `agentHeat` whenever it is non-null, but `TimelinePanel` re-queries it only after the playhead has been still for 150 ms, which never happens while playing. Repro: a seekable session, play for 1 s — the playhead is past 50 and the heat is still the value computed at playhead 0. It contradicts `PredictedHeatPanel`'s own header, which says the heat is re-queried "on every playhead move". Same class as F-17 | `graph/useHeatmap.ts` with `panels/TimelinePanel.tsx` | fix together with F-17: one place every playhead move passes through | Medium |
+| d | **The event-type filter is ignored in seekable + cumulative mode.** The agent-heat branch never checks the filter and the query carries none. Repro: with the filter set to `{"exception"}` and no exception events, `maxHeat` is 90 rather than 0 | `graph/useHeatmap.ts` | pass the filter in the query, or apply it client-side | Low-medium |
+| e | **`SessionLibraryPanel` shows "Error: Error: session_list_request timed out"**, because `String(err)` already starts with "Error:" | `panels/SessionLibraryPanel.tsx` | use `err.message` | Low |
+| f | **`SessionLibraryPanel` has no retry after a failed request** (the Refresh button exists only when the list is non-empty), **and a failed Refresh while sessions are listed shows nothing**, because `error` is rendered only in the empty branch, so the stale list stays up and reads as current (2 tests) | `panels/SessionLibraryPanel.tsx` | always render Refresh and the error | Low-medium |
+
+**Recommendation.** Fix F-17 and F-18 c together, since they are one mechanism: the debounced seek
+lives in the scrubber's handler, and every other playhead move bypasses it. The rest are
+independent, small changes.
+
+### C6 observations (not ledgered)
+
+- **Concurrent live producers merge in the UI** (T12-3): two sessions streamed at once appear
+  as one interleaved timeline, since `trace_event` carries no session id and the frontend models
+  a single live session; the recording sink keeps them separate.
+- **Watch re-push drifts surviving nodes slightly** as the layout reheats, and the camera re-fits
+  to new nodes (T12-2) — the Phase 10.7 design, recorded here so it is not re-reported as a bug.
+- **The theme follows the OS only on the first visit.** `useTheme` writes the OS-derived default to `localStorage`, so it is never consulted again. This may be intended; the question is whether to persist only an explicit choice.
+- **One existing theme test proves less than its name:** `useTheme.test.ts`'s "reads stored theme from localStorage on init" never re-runs the initializer. The new `useTheme.colorScheme.test.ts` covers that path.
+- **ADR-0015 is stale on rAF:** it says jsdom has no `requestAnimationFrame`, but vitest's jsdom does (the T11-1 and T11-6 suites both rely on it).
+- **Misleading empty-state copy:** the Session Library's "Start the server with --store" shows even when the server already has `--store` but no sessions yet — it is also the sentence that set the left column's width in F-16.
+- **Loading a session while disconnected silently does nothing.**
+- **Unverified, from reading library source only:** `graphology-layout-forceatlas2`'s worker `kill()` does not appear to clear its pending `setTimeout(0)` respawn, so a graph change just before `kill()` could start a worker after the kill that is never stopped. This is upstream of `GraphCanvas`, and the harness fakes FA2, so it cannot see it.
+- **Test-writing pitfalls recorded for the next suite author:** jsdom's `localStorage.setItem` queues a timer, so `useTheme.setTheme()` shows up in `vi.getTimerCount()`; graphology's `edges(a, b)` also matches a `b → a` edge on a directed graph, so use `outEdges(a, b)`.
+- `GraphCanvas.reducedMotion.test.tsx` (T11-7) overlaps T11-1's reduced-motion case. It stays because it uses the honest stub and adds the node and edge paint assertions; it could later be folded into `GraphCanvas.test.tsx`.
 
 ### Open observation (C2) — one unexplained full-suite stall
 

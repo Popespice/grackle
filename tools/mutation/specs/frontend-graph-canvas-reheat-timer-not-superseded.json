@@ -1,0 +1,15 @@
+{
+  "id": "frontend-graph-canvas-reheat-timer-not-superseded",
+  "description": "A second reheat does not clear the first one's timer, so the first deadline unpins and stops the layout mid-way through the second reheat (T11-1).",
+  "target": {
+    "file": "packages/frontend/src/graph/GraphCanvas.tsx",
+    "find": "    if (reheatTimerRef.current !== null) clearTimeout(reheatTimerRef.current);\n    fa2.stop();",
+    "replace": "    fa2.stop();"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/GraphCanvas.test.tsx"]
+  },
+  "expect": "killed"
+}

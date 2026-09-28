@@ -1,0 +1,15 @@
+{
+  "id": "frontend-use-trace-playback-seekable-bound-window",
+  "description": "useTracePlayback stops at the end of the in-memory window in seekable mode instead of at traceTotal — playback of a seekable trace halts a few events in (T11-6).",
+  "target": {
+    "file": "packages/frontend/src/graph/useTracePlayback.ts",
+    "find": "const bound = traceSeekable ? traceTotal : traceEvents.length;",
+    "replace": "const bound = traceEvents.length;"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/useTracePlayback.test.ts"]
+  },
+  "expect": "killed"
+}

@@ -1,0 +1,15 @@
+{
+  "id": "frontend-graph-canvas-rebuild-leaks-old-sigma",
+  "description": "A scratch rebuild drops its reference to the old Sigma without killing it, leaving two live renderers on one container (T11-1).",
+  "target": {
+    "file": "packages/frontend/src/graph/GraphCanvas.tsx",
+    "find": "    sigmaRef.current?.kill();\n    sigmaRef.current = null;\n\n    const graphology",
+    "replace": "    sigmaRef.current = null;\n\n    const graphology"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/GraphCanvas.test.tsx"]
+  },
+  "expect": "killed"
+}

@@ -1,0 +1,15 @@
+{
+  "id": "frontend-graph-canvas-reduced-motion-keeps-removed-node",
+  "description": "With nothing to animate (reduced motion), removed nodes are never dropped, so deleted code stays on the canvas (T11-1).",
+  "target": {
+    "file": "packages/frontend/src/graph/GraphCanvas.tsx",
+    "find": "      for (const id of result.removedNodes) {\n        if (live.hasNode(id)) live.dropNode(id);\n      }\n",
+    "replace": ""
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/GraphCanvas.test.tsx"]
+  },
+  "expect": "killed"
+}

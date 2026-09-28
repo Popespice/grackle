@@ -1,0 +1,15 @@
+{
+  "id": "frontend-graph-canvas-reheat-ignores-initial-settle",
+  "description": "A re-push during the initial full-graph settle pins survivors and restarts FA2, freezing a half-settled layout (T11-1).",
+  "target": {
+    "file": "packages/frontend/src/graph/GraphCanvas.tsx",
+    "find": "    if (initialSettleTimerRef.current !== null) return;\n",
+    "replace": ""
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/GraphCanvas.test.tsx"]
+  },
+  "expect": "killed"
+}

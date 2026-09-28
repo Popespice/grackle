@@ -1,0 +1,15 @@
+{
+  "id": "frontend-graph-canvas-repaint-without-refresh",
+  "description": "The repaint effect swaps the reducer and label color but never calls refresh(), so filter, selection and theme changes do not show until the next unrelated render (T11-1).",
+  "target": {
+    "file": "packages/frontend/src/graph/GraphCanvas.tsx",
+    "find": "    sigma.setSetting(\"labelColor\", { color: labelColorForTheme(theme) });\n    sigma.refresh();",
+    "replace": "    sigma.setSetting(\"labelColor\", { color: labelColorForTheme(theme) });"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/GraphCanvas.test.tsx"]
+  },
+  "expect": "killed"
+}

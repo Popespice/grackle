@@ -1,0 +1,15 @@
+{
+  "id": "frontend-graph-canvas-teardown-raf-not-cancelled",
+  "description": "The unmount teardown leaves the animation frame pending, so the tick keeps refreshing a killed Sigma (T11-1).",
+  "target": {
+    "file": "packages/frontend/src/graph/GraphCanvas.tsx",
+    "find": "      if (rafIdRef.current !== null) cancelAnimationFrame(rafIdRef.current);\n",
+    "replace": ""
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/GraphCanvas.test.tsx"]
+  },
+  "expect": "killed"
+}

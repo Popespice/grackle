@@ -1,0 +1,15 @@
+{
+  "id": "frontend-use-trace-playback-resume-jump",
+  "description": "useTracePlayback keeps the last frame timestamp across a pause — resuming jumps the playhead by the whole paused duration (T11-6).",
+  "target": {
+    "file": "packages/frontend/src/graph/useTracePlayback.ts",
+    "find": "lastTimeRef.current = null;",
+    "replace": "lastTimeRef.current = lastTimeRef.current;"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/useTracePlayback.test.ts"]
+  },
+  "expect": "killed"
+}

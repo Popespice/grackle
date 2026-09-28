@@ -1,0 +1,15 @@
+{
+  "id": "frontend-graph-animation-reduced-motion-wrong-query",
+  "description": "prefersReducedMotion asks for the no-preference media feature value instead of reduce — it reports reduced motion for exactly the users who did not ask for it. A stub that matches on the feature name alone answers this query true as well, so behavior tests only catch it through a stub that matches the whole query (T11-7).",
+  "target": {
+    "file": "packages/frontend/src/graph/graphAnimation.ts",
+    "find": "window.matchMedia(\"(prefers-reduced-motion: reduce)\")",
+    "replace": "window.matchMedia(\"(prefers-reduced-motion: no-preference)\")"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/GraphCanvas.reducedMotion.test.tsx"]
+  },
+  "expect": "killed"
+}

@@ -1,0 +1,15 @@
+{
+  "id": "frontend-graph-canvas-click-edge-jumps-to-target-file",
+  "description": "clickEdge opens the evidence line in the TARGET's file instead of the source's, where the call site actually is (T11-1).",
+  "target": {
+    "file": "packages/frontend/src/graph/GraphCanvas.tsx",
+    "find": "const path = g.getNodeAttribute(source, \"path\");",
+    "replace": "const path = g.getNodeAttribute(target, \"path\");"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/GraphCanvas.test.tsx"]
+  },
+  "expect": "killed"
+}

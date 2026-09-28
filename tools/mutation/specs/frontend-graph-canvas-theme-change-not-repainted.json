@@ -1,0 +1,15 @@
+{
+  "id": "frontend-graph-canvas-theme-change-not-repainted",
+  "description": "The repaint effect does not depend on the theme, so labels keep the old theme's color (invisible on the new background) until some unrelated repaint (T11-1).",
+  "target": {
+    "file": "packages/frontend/src/graph/GraphCanvas.tsx",
+    "find": "    predictedOverlay,\n    theme,\n  ]);",
+    "replace": "    predictedOverlay,\n  ]);"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/GraphCanvas.test.tsx"]
+  },
+  "expect": "killed"
+}

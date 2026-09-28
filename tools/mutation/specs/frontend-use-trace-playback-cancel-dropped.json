@@ -1,0 +1,15 @@
+{
+  "id": "frontend-use-trace-playback-cancel-dropped",
+  "description": "useTracePlayback's effect cleanup no longer cancels the pending frame — a frame outlives pause and unmount, and an unmounted loop keeps advancing the playhead (T11-6).",
+  "target": {
+    "file": "packages/frontend/src/graph/useTracePlayback.ts",
+    "find": "cancelAnimationFrame(rafRef.current);",
+    "replace": "void rafRef.current;"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/useTracePlayback.test.ts"]
+  },
+  "expect": "killed"
+}
