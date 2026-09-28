@@ -1,0 +1,20 @@
+{
+  "id": "agent-aggregates-sparse-samples-wrong-phase",
+  "description": "TraceAggregates.build samples the event at index k-1 of each sparse bucket instead of index 0, which still satisfies the documented <= true-count band but no longer records what the docstring says it records (campaign T8-2: sparse heat equals the exact sampled recount, not merely the band).",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/aggregates.py",
+    "find": "                        if sparse_k == 1 or index % sparse_k == 0:",
+    "replace": "                        if sparse_k == 1 or index % sparse_k == sparse_k - 1:"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_properties_aggregates.py",
+      "-k",
+      "sparse_queries"
+    ]
+  },
+  "expect": "killed"
+}

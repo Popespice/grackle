@@ -1,0 +1,15 @@
+{
+  "id": "agent-aggregates-coverage-bisect-left",
+  "description": "coverage_count switches bisect_right to bisect_left, so a node first seen on the event just before the playhead is not yet counted as covered (campaign T8-2: coverage equals a naive recount at every at_index).",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/aggregates.py",
+    "find": "        return bisect.bisect_right(self._sorted_first, at_index - 1)",
+    "replace": "        return bisect.bisect_left(self._sorted_first, at_index - 1)"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_properties_aggregates.py"]
+  },
+  "expect": "killed"
+}

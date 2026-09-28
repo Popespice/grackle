@@ -1,0 +1,20 @@
+{
+  "id": "agent-jsonl-index-offset-from-stripped-length",
+  "description": "JsonlIndex.build advances its byte offset by the stripped line length plus one, which is right only for an unpadded LF line: after the first CRLF, padded or blank line every offset drifts and seeks land mid-line (campaign T8-3: the index returns exactly what read_jsonl returns).",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/jsonl_index.py",
+    "find": "                offset += len(raw_line)",
+    "replace": "                offset += len(stripped) + 1"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_properties_jsonl_index.py",
+      "-k",
+      "exactly_the_written"
+    ]
+  },
+  "expect": "killed"
+}

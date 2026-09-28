@@ -7,6 +7,19 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from hypothesis import settings as _hypothesis_settings
+
+# Hypothesis profiles (campaign C5, tier T8). "ci" is the default: derandomized
+# and database-free, so a property test is exactly as reproducible as any other
+# test in the gate and writes nothing to the tree. The nightly campaign workflow
+# selects "nightly" (HYPOTHESIS_PROFILE=nightly) for fresh randomness and a far
+# larger example budget. deadline=None in both: per-example timing on shared CI
+# runners (Windows especially) is too noisy to be a signal.
+_hypothesis_settings.register_profile(
+    "ci", max_examples=100, deadline=None, derandomize=True, database=None
+)
+_hypothesis_settings.register_profile("nightly", max_examples=5000, deadline=None)
+_hypothesis_settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "ci"))
 
 
 @pytest.fixture

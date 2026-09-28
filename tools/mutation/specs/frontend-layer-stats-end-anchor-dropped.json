@@ -1,0 +1,15 @@
+{
+  "id": "frontend-layer-stats-end-anchor-dropped",
+  "description": "The arity-built stats regex loses its end anchor, so a payload with trailing text after the tuple (`(0, 0.1, 0.2)junk`, two reprs run together) is half-parsed into a point instead of ignored.",
+  "target": {
+    "file": "packages/frontend/src/graph/layerStats.ts",
+    "find": "return new RegExp(`^\\\\((\\\\d+)${floatGroups}\\\\)$`);",
+    "replace": "return new RegExp(`^\\\\((\\\\d+)${floatGroups}\\\\)`);"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/beaconGrammar.sweep.test.ts"]
+  },
+  "expect": "killed"
+}

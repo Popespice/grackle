@@ -1,0 +1,15 @@
+{
+  "id": "agent-paths-walk-up-allowed",
+  "description": "relative_to(..., walk_up=True), which the docstring forbids: a path outside the root comes back as '../x' instead of raising, emitting '..' segments into node ids (campaign T8-4: never escapes the root).",
+  "target": {
+    "file": "packages/agent/src/grackle/paths.py",
+    "find": "    return p.resolve().relative_to(root.resolve()).as_posix()",
+    "replace": "    return p.resolve().relative_to(root.resolve(), walk_up=True).as_posix()"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_properties_paths.py", "-k", "escape"]
+  },
+  "expect": "killed"
+}

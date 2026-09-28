@@ -1,0 +1,15 @@
+{
+  "id": "nn-layers-tanh-clipped-before-saturation",
+  "description": "T9-4: an overflow guard clips Tanh's input to [-10, 10], so saturation stops at tanh(10) = 0.99999999588 with a slope of 8e-9 instead of exactly +/-1 and 0. Invisible at the 0.1-0.3 and standard-normal inputs the old tests use.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/layers.py",
+    "find": "        self._t = np.tanh(x)",
+    "replace": "        self._t = np.tanh(np.clip(x, -10.0, 10.0))"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/test_layers_boundary.py"]
+  },
+  "expect": "killed"
+}

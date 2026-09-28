@@ -3,7 +3,7 @@
 **Date drafted**: 2026-08-20
 **Under test**: `v0.12.0-phase-12` (main `c305deb`) — the entire stack
 **Environment**: macOS 26.5 / arm64 primary; CI matrix Ubuntu + Windows (+ macOS on main-push), Python 3.12/3.13, Node 22
-**Status**: EXECUTING — C0–C4 done, C5–C6 pending; findings recorded here as tiers execute
+**Status**: EXECUTING — C0–C5 done, C6 pending; findings recorded here as tiers execute
 
 ## Lineage and doctrine
 
@@ -157,24 +157,25 @@ input spaces and, in two cases, exact oracles:
 
 | Probe | Property / oracle | Fails if |
 |---|---|---|
-| T8-1: `value_repr.safe_repr` over generated adversarial objects | Bounded output (≤ max_len / max_depth / max_items), never raises, never invokes user code — the canonical property shape, over the package's largest pure surface (708 LOC, 66 excellent but purely example-based tests) | Any generated object breaks a bound or triggers a user `__repr__`. |
-| T8-2: `TraceAggregates` metamorphic oracle | For any generated event list and any `at_index`: `cumulative_heat` / `coverage_count` / `top_k` equal a naive linear recount (inequality band where `sparse_k > 1` is documented approximate) | The bisect `at_index - 1` logic disagrees with the oracle anywhere. |
-| T8-3: `JsonlIndex` vs `read_jsonl` differential | Same file, both implementations, byte-generated payloads **including U+0085 / U+2028 / U+2029** — the exact `split("\n")` vs `splitlines()` hazard `writer.py:78-83` documents; window concatenation reconstructs the file; absurd windows never raise | The two implementations disagree → seek corruption. |
-| T8-4: `to_posix` path properties | Never contains `\`; never escapes root; round-trips — generated over unicode, reserved Windows stems (`CON`, `NUL`), trailing dots, long names | Exactly where the Windows-only bug class lives. |
-| T8-5: `diff.py` algebra | `diff(g,g)` empty; A→B and B→A inverse | |
-| T8-6: frontend beacon grammar (hand-adversarial extension, no new dep) | Extend the 12.4 adversarial-payload corpus for `FLOAT` / `EPOCH_RET_RE` / the arity-built stats regex — generated-ish sweeps via seeded loops rather than fast-check, keeping the frontend dep surface untouched | |
+| T8-1: `value_repr.safe_repr` over generated adversarial objects | Bounded output (≤ max_len / max_depth / max_items), never raises, never invokes user code — the canonical property shape, over the package's largest pure surface (708 LOC, 66 excellent but purely example-based tests) | Any generated object breaks a bound or triggers a user `__repr__`. **Done (C5):** 10 properties hold (bounded, never raises; `truncated` false exactly when the text equals `repr()`; exact-fit limits; no leaf past depth/width; generated hostile classes' hooks never called; lazy iterators never advanced; sensitive names redacted before the value is touched); 5 specs killed. **Ledgered F-14 a–d** (4 xfails): the module runs user code it promises not to (`isinstance` reads the instance's `__class__`, a `str`-subclass key's `.lower()`, a class-defined `__dict__` property), and its `<unreprable>` fallback skips the `max_len` clamp. |
+| T8-2: `TraceAggregates` metamorphic oracle | For any generated event list and any `at_index`: `cumulative_heat` / `coverage_count` / `top_k` equal a naive linear recount (inequality band where `sparse_k > 1` is documented approximate) | The bisect `at_index - 1` logic disagrees with the oracle anywhere. **Done (C5) — holds.** Every query matches a naive recount at every `at_index`; with `sparse_k > 1`, results match an exact recount of the documented sampling and never exceed the true count; `build_seekable` agrees with `build`; heat and coverage are monotone. 4 specs killed. Confirms C3's note that the `sparse_k` docstring bound ("at most `sparse_k - 1`") is false on dense traces. |
+| T8-3: `JsonlIndex` vs `read_jsonl` differential | Same file, both implementations, byte-generated payloads **including U+0085 / U+2028 / U+2029** — the exact `split("\n")` vs `splitlines()` hazard `writer.py:78-83` documents; window concatenation reconstructs the file; absurd windows never raise | The two implementations disagree → seek corruption. **Done (C5).** Both readers return exactly the written events, including raw U+0085/U+2028/U+2029 — the documented hazard holds; windows concatenate back to the trace; absurd windows clamp; `write_jsonl` round-trips byte for byte. 3 specs killed. **Ledgered F-14 e** (1 xfail): the readers disagree on what a *blank* line is (`read_jsonl`'s `str.strip()` vs the index's `bytes.strip()` vs `read_window`'s no strip) for U+0085, U+001C–U+001F, NBSP and U+3000. |
+| T8-4: `to_posix` path properties | Never contains `\`; never escapes root; round-trips — generated over unicode, reserved Windows stems (`CON`, `NUL`), trailing dots, long names | Exactly where the Windows-only bug class lives. **Done (C5).** Round-trips on real files (Unicode, reserved stems, trailing dots/spaces, long names; OS-aware — Windows filters what it cannot create), `..` never escapes, symlinks out of root raise and in-root ones resolve; 3 specs killed. **Premise narrowed:** on POSIX a backslash in a filename passes through verbatim, so "never contains `\`" holds on Windows only. **Ledgered F-14 f** (1 xfail): one escaping symlink aborts the *whole* static parse, for all four languages. **Not run on Windows locally** — CI is the first check. |
+| T8-5: `diff.py` algebra | `diff(g,g)` empty; A→B and B→A inverse | **Done (C5) — holds.** `diff(A, A)` all `same`; A→B is the exact inverse of B→A; every entry matches a naive recount in severity order; appending events never yields `gone`/`colder`; the static diff equals a trace diff against an empty baseline. 4 specs killed. |
+| T8-6: frontend beacon grammar (hand-adversarial extension, no new dep) | Extend the 12.4 adversarial-payload corpus for `FLOAT` / `EPOCH_RET_RE` / the arity-built stats regex — generated-ish sweeps via seeded loops rather than fast-check, keeping the frontend dep surface untouched | **Done (C5).** Seeded sweeps (mulberry32, no new dependency; ~0.3 s) over all three grammars: round-trips against a CPython-verified repr formatter, mutation sweeps against a regex-free reference recognizer, and cross-path consistency. 7 specs, all surviving the pre-existing suite and killed by the sweeps. **Ledgered F-15** as 4 `it.fails`: digit runs of 309+ overflow to `Infinity` in all three parsers; the live network panel's architecture latch disagrees with a one-shot replay of the same trace. |
 
 ### T9 — Numerics and the ML envelope
 
 | Probe | Fails if | Status |
 |---|---|---|
-| T9-1: acceptance-margin telemetry | The bar sits at +0.05 with a **measured single-point margin of ~0.056** — 0.006 of headroom — and both computed metrics are consumed by bare asserts; `top10` is computed and **discarded**. Probe: emit margin + top10 on the passing path (minutes of work); nightly N-seed sweep over `(split_rng, train_seed)` characterizing the margin *distribution* — additive, per ADR-0029's never-unseed rule. Fails if the distribution's lower tail crosses the bar — i.e. the bar is a coin-flip, discovered before CI discovers it for us. | **Seeded finding** |
-| T9-2: SoftmaxCE `backward()` at extreme logits | Forward at `|logits|~1e4` is tested for *finiteness only*, one input, argmax-is-correct-class only; **backward at saturation is tested by nothing**, and the gradcheck runs at `standard_normal` magnitude (finite differences are useless at 1e4 — needs the analytic `(probs − onehot)/B` oracle). | Open |
+| T9-1: acceptance-margin telemetry | The bar sits at +0.05 with a **measured single-point margin of ~0.056** — 0.006 of headroom — and both computed metrics are consumed by bare asserts; `top10` is computed and **discarded**. Probe: emit margin + top10 on the passing path (minutes of work); nightly N-seed sweep over `(split_rng, train_seed)` characterizing the margin *distribution* — additive, per ADR-0029's never-unseed rule. Fails if the distribution's lower tail crosses the bar — i.e. the bar is a coin-flip, discovered before CI discovers it for us. **Done (C5) — the finding is worse than a coin-flip.** The passing path now reports margin, headroom and top10 (seeds and bars unchanged; margin bit-identical at +0.05565). A new `scripts/margin_sweep.py` (nightly, report-only) measured 200 joint seed pairs: **91% fall below the +0.05 bar**, median margin +0.008, only 57.5% above zero — the test passes on roughly a 1-in-11 draw, and on held-out graphs the model is statistically indistinguishable from raw in-degree. See **F-12** — an owner decision under ADR-0029's escape hatch. | **Confirmed (C5) — owner decision** |
+| T9-2: SoftmaxCE `backward()` at extreme logits | Forward at `|logits|~1e4` is tested for *finiteness only*, one input, argmax-is-correct-class only; **backward at saturation is tested by nothing**, and the gradcheck runs at `standard_normal` magnitude (finite differences are useless at 1e4 — needs the analytic `(probs − onehot)/B` oracle). **Done (C5) — pinned.** Backward at ±1e2..1e4, ties, mixed scales and underflow matches `(softmax − onehot)/B` computed in 60-digit `decimal` from the exact float inputs (rtol 1e-12), plus a hypothesis property; 2 specs killed. | **Done (C5)** |
 | T9-3: Adam with non-constant gradients | The only Adam test uses a constant gradient, where bias correction cancels **exactly** — and Adam is the optimizer the shipped `train_heat_model` actually uses; the well-tested SGD is the one the demo uses. Sign-flipping/varying gradient sequences against a NumPy reference implementation, steps 1..N. **Done in C3 via T4-5** — see the T4-5 row (the premise about which bug the old test misses was corrected). | **Done (C3)** |
-| T9-4: ReLU/Tanh boundary sweep | `x == 0.0` subgradient convention unpinned (gradcheck *deliberately* excludes the kink, correctly — but nothing else covers it); Tanh saturation/±inf/nan unswept. | Open |
-| T9-5: `test_train.py:100` window alignment | Pins **final-epoch-only** accuracy while `test_traceability.py:195` uses min-over-last-5 — and the codebase itself documents why final-only is fragile. One line. | **Seeded finding** |
-| T9-6: checkpoint key-set pin | The `allow_pickle` history (a stray bool array written into every checkpoint on numpy 2.0/2.1) would be caught by exactly one thing — asserting the written npz's **key set** — which no test does. | Open |
-| T9-7: numpy floor matrix | Declared `numpy>=2,<3`; locked 2.5.2; CI runs `--frozen` everywhere — **the 2.0/2.1 regime the code comments about is exercised by nothing**, `packages/nn` isn't even Dependabot-covered, and only two value-sensitive assertions defend demo convergence against a BLAS change (one of them the weak T9-5). Probe: a `ci-matrix.yml` main-push leg syncing `numpy==2.0.x` / `2.1.x` and running the nn suite. | **Seeded finding** |
+| T9-4: ReLU/Tanh boundary sweep | `x == 0.0` subgradient convention unpinned (gradcheck *deliberately* excludes the kink, correctly — but nothing else covers it); Tanh saturation/±inf/nan unswept. **Done (C5).** ReLU's subgradient at exactly 0 is 0 (including ±5e-324 and −0.0), nan propagates forward and its gradient is blocked; Tanh saturates to exactly ±1 with slope exactly 0 for |x| ≥ 22, including ±inf; 3 specs killed. **Ledgered F-13 b** (2 xfails): ReLU's multiplicative mask turns `-inf` into nan, and an infinite upstream gradient at an inactive unit into nan. | **Done (C5); 1 defect ledgered** |
+| T9-5: `test_train.py:100` window alignment | Pins **final-epoch-only** accuracy while `test_traceability.py:195` uses min-over-last-5 — and the codebase itself documents why final-only is fragile. One line. **Done (C5):** the demo test now asserts `min(acc over the last 5 epochs) >= 0.95` — strictly stronger than final-only (actual: 0.9792 min, 0.9870 final; ≥0.95 continuously since epoch 50). | **Done (C5)** |
+| T9-6: checkpoint key-set pin | The `allow_pickle` history (a stray bool array written into every checkpoint on numpy 2.0/2.1) would be caught by exactly one thing — asserting the written npz's **key set** — which no test does. **Done (C5) — pinned.** The exact key/dtype/shape table for `HeatModel.save` (10 keys) and `Sequential.save` (p0..p5), checked through both the ZIP directory and `np.load(allow_pickle=False)`, on direct saves and on the production path (`ml_bridge.train_and_save` → `predict_scores`); stray-key specs killed. | **Done (C5)** |
+| T9-7: numpy floor matrix | Declared `numpy>=2,<3`; locked 2.5.2; CI runs `--frozen` everywhere — **the 2.0/2.1 regime the code comments about is exercised by nothing**, `packages/nn` isn't even Dependabot-covered, and only two value-sensitive assertions defend demo convergence against a BLAS change (one of them the weak T9-5). Probe: a `ci-matrix.yml` main-push leg syncing `numpy==2.0.x` / `2.1.x` and running the nn suite. **Done (C5):** two `ci-matrix.yml` main-push legs sync the lock, swap numpy to 2.0.* / 2.1.*, and run the nn suite. Probed first on macOS arm64: 212 passed on both floors (including the new T10-2 golden and the acceptance test), with 276 spurious matmul `RuntimeWarning`s the locked 2.5 does not emit — consistent with numpy <2.2's Accelerate floating-point flags, not a correctness failure. | **Done (C5)** |
+| T9-8 (new, C5): the 1e-8 std floor | `train_heat_model` sets `norm_std = max(std, 1e-8)`, so a feature constant in training (e.g. `is_async` in a project with no async functions) reaches the MLP as `(1 − 0)/1e-8 = 1e8` the moment an unseen value appears. With `grackle learn`'s defaults, marking one node async moved its predicted heat from 0.44 to 0.0. Ledgered strict-xfail (`tests/ml/test_standardization_envelope.py`, with a precondition test so it cannot pass for the wrong reason). **Entangled with T9-1:** the obvious fix (scale 1.0 for zero-variance columns) turns the acceptance test red (margin +0.0333), so it cannot land before the T9-1 decision. See F-13. | **Confirmed, ledgered (C5)** |
 
 ### T10 — Cross-platform byte discipline
 
@@ -185,7 +186,7 @@ The gaps:
 | Probe | Fails if |
 |---|---|
 | T10-1: server-produced recording bytes | No direct assertion a *recording* is CRLF-free (only transitively via the shared writer). One byte-level check on a real recorded session. **Done (C4) — pinned.** The producer's frames were pretty-printed with CRLF and carried non-ASCII text, an escaped CR LF and a raw U+2028. The server's recording has no `\r` byte and is byte-identical to `write_jsonl`'s output. |
-| T10-2: checkpoint reload-equivalence cross-platform | `heat-model.npz` has no byte pin (unattainable — ZIP embeds mtimes) **and no reload-equivalence pin either**: nothing asserts a fixed-seed model trained on OS A predicts identically loaded on OS B. Given the 1-ULP libm history lives exactly in this pipeline, a seeded predict-vector golden (tolerance-banded) is the probe. *Moved to C5 (numerics).* |
+| T10-2: checkpoint reload-equivalence cross-platform | `heat-model.npz` has no byte pin (unattainable — ZIP embeds mtimes) **and no reload-equivalence pin either**: nothing asserts a fixed-seed model trained on OS A predicts identically loaded on OS B. Given the 1-ULP libm history lives exactly in this pipeline, a seeded predict-vector golden (tolerance-banded) is the probe. *Moved to C5 (numerics).* **Done (C5).** A seeded 30-epoch model on a tiny rng-free graph (~6 ms): reload is bit-identical in-process, and 12 interior prediction rows match a committed golden at `atol=1e-6`, with a companion test proving seed±1, epochs±1, batch size and lr×1.1 each move the rows by >1000× the tolerance. Tolerance rationale: emulated BLAS reordering moved the rows ≤7e-15 and ±2-ulp libm noise ≤4.3e-8 (almost all of it through T9-8's floor), while the smallest real change moved them 0.043. Holds on numpy 2.0.2, 2.1.3 and the locked 2.5 locally; Ubuntu/Windows CI is the first cross-OS check. |
 | T10-3: `sessions.db` forward-compat | `CREATE TABLE IF NOT EXISTS` + no migration path: open a db created by the previous schema, probe read + write. **Done (C4).** The schema has not changed since 8.3, so no older-schema db exists in the wild; the probe tests the mechanism the next schema change (13.0's `root` column) will hit. A db with extra columns, one of them mid-table, reads and writes correctly (pinned by `SELECT *` and column-list-free INSERT specs). **Ledgered: F-8's e–f** (INSERT OR REPLACE wipes columns this version doesn't know; no migration path, so any added column breaks every existing library). |
 
 ### T11 — Frontend rendering and panel hardening
@@ -233,7 +234,7 @@ Following the phase-1 T8 tradition: claims vs reality.
 | **C2** | T5 expected-fail ledger — **done**: all six probes executed against the real system (see the T5 table for per-probe outcomes). T5-1 and T5-2 confirmed, fixed, and promoted in the same PR; T5-4, T5-6's retry case, and the new T5-7 ledgered strict-xfail; T5-3 pinned as documented behavior; T5-5's premise refuted and the tolerance it doubted pinned. Every passing pin is backed by a committed mutation spec (8 new, all killed). Findings F-2–F-7 below — F-7 is a defect in C0's own mutation harness, found and fixed during this chunk | PR gate |
 | **C3** | T4 mutation battery + T11-2..T11-5 — **done**: 95 new committed specs (106 in total), all behaving as declared in the full sweep. Of the 78 T4-1..T4-3 mutants, the pre-existing suites killed 60; the other 18 exposed real test gaps, each closed by an additive test proven to fail under its mutant. The 17 panel specs back new or strengthened tests: 13 cover paint paths that had no coverage at all before T11-2, and 4 are ranking mutants that survived the old StatsPanel/CyclesPanel tests. The 12.4 "30/30" claim mostly reproduces (31/34 re-specified). The Adam premise was corrected (see T4-5). One product defect was ledgered (T5-8). `pnpm mutation:check` is now in the PR gate and in pre-push; the full sweep (`pnpm mutation`) goes to C5's nightly workflow | Harness runs nightly; specs' *presence* checked at PR gate |
 | **C4** | T6 fault injection + T7 concurrency (+ T10-1 and T10-3, which the original plan assigned to no chunk) — **done**. 26 product defects confirmed and ledgered as 59 strict xfails (F-8–F-11; 61 on Python 3.14, where F-11 #10 also applies); every correct behavior pinned, 40 new mutation specs, most surviving the pre-existing suites. Four premises corrected: T6-1's shutdown race needs a *second* interrupt; T6-4's rebuild serialization has two independent mechanisms; T7-2's lost update cannot occur on GIL builds; and the T4-4 "unreachable" guard is reachable (now pinned). ADR-0027 amended. Hammers are marked `@pytest.mark.hammer` and deselected by default; each has an unmarked small sibling in the gate | Fast cases PR gate; hammers nightly |
-| **C5** | T8 property batteries (if P-3 approved) + T9 numerics (telemetry + sweeps + numpy matrix in `ci-matrix.yml`) + `campaign.yml` (nightly: mutation sweep, margin sweep, property long-runs, hammer tests) | Nightly + main-push |
+| **C5** | T8 property batteries + T9 numerics + T10-2 + F-1 + the nightly `campaign.yml` — **done**. P-3 approved: `hypothesis` added dev-only, with a derandomized "ci" profile in the gate and a 5000-example "nightly" one. 27 agent properties and 11 frontend sweeps hold; 38 new mutation specs, all killed. F-1 is fixed, and ADR-0022 is amended to match. The T9-7 numpy-floor legs are in `ci-matrix.yml`. New defects are ledgered as F-13, F-14 and F-15; **F-12 needs your decision**: the ADR-0029 acceptance bar passes on about one seed pair in eleven. `campaign.yml` runs the mutation sweep, the hammers, the nightly property profile and the margin sweep | Nightly + main-push |
 | **C6** | T11-1 GraphCanvas harness + T11-6/7; T12 live-system probes executed and findings appended to this document in the F-N format | Manual + PR gate |
 
 ## Findings
@@ -280,7 +281,9 @@ grackle reports under *normal* Node execution, and inlining is normal.
 red CI on unrelated PRs, which is the precise failure mode that trains a team to ignore the gate.
 It also predates this campaign; no PR in flight introduced it.
 
-**Recommendation.** Fold into **T9** (numerics and the ML envelope) as an exact-vs-tolerance
+**Status: fixed in C5.** `test_coverage_emits_live_heat` now asserts that `count` is a positive int bounded by the program's true call counts (`add` ≤ 2,000,000; `fib` ≤ 2·F(31) − 1), with a guard that fails if `main.ts` stops making those calls. It does not disable the JIT. Under 24-way concurrent load the old exact assertion failed 60 of 96 runs; the new one passed 96/96. Three specs (count dropped, zeroed, or swapped with the timestamp) are killed, each by a different assertion. The class-wide audit below found no other assertion of this kind. ADR-0022 is amended: the live path's counts are a lower bound, exact only for functions V8 never inlines.
+
+**Recommendation (original).** Fold into **T9** (numerics and the ML envelope) as an exact-vs-tolerance
 audit: grep the agent and nn suites for equality assertions on any quantity produced by a
 sampling profiler, a JIT-instrumented counter, or a wall-clock timer, and convert each to the
 invariant that survives optimization. This finding is one instance of a class.
@@ -530,6 +533,87 @@ together; 5–11 are one-line guards each (#11: catch `ValueError` beside `OSErr
   worked around in the test; server-side exposure not investigated.
 - Live ingest runs at about 0.46 ms per event with no consumers attached (~2k events/s). Not
   investigated.
+
+### F-12 — The ADR-0029 acceptance bar passes on roughly one seed pair in eleven (T9-1)
+
+**Location.** `packages/nn/tests/ml/test_synthetic_acceptance.py` (now via the shared
+`tests/ml/acceptance_eval.py`), against the bar ADR-0029 set: mean model Spearman > 0.5 **and**
+at least +0.05 over the raw-in-degree baseline, on held-out synthetic graphs.
+
+**Reproducer.** `cd packages/nn && uv run python scripts/margin_sweep.py --seeds 200 --json out.json`
+(about a minute). The nightly campaign workflow runs it and publishes the distribution.
+
+**Observed.** At the test's own draw (split 0, train 0) the margin is +0.0557 — 0.006 of
+headroom. Over 200 joint seed pairs:
+
+| Sweep | n | min | p5 | median | mean | max | below +0.05 |
+|---|---|---|---|---|---|---|---|
+| joint (k, k) | 200 | −0.192 | −0.065 | +0.008 | +0.002 | +0.095 | **91.0%** |
+| train seed only (0, k) | 100 | −0.062 | −0.053 | −0.008 | +0.009 | +0.092 | 68% |
+| split seed only (k, 0) | 100 | −0.059 | −0.028 | +0.005 | +0.007 | +0.066 | 93% |
+
+Only 57.5% of joint draws beat the baseline at all, and 187 of 200 fall below the test's own
+draw. No draw misses the absolute bar (Spearman > 0.5); every failure is the margin. Platform
+noise is not the risk (emulated BLAS reordering and 1-ulp libm noise left the (0, 0) margin
+unchanged in 24/24 runs, consistent with CI passing on every OS); real changes are — dropping
+the minibatch shuffle gives +0.0455, and T9-8's natural fix gives +0.0333, both failing.
+
+**Expected.** A bar that a correct model clears on most draws, so that the test detects
+regressions rather than seed luck. The signal exists: a model that knew the generator's
+noiseless formula beats the baseline by +0.102 on average; the trained model does not
+capture it.
+
+**Fix.** Not applied, and not ledgered as an xfail — this is an owner decision under
+ADR-0029's escape hatch (the seeds are never changed). Options: evaluate over k-fold splits and
+bar the mean; lower the margin bar to what the distribution supports; or treat it as a model-
+quality finding and improve the model/features until the bar holds on most draws.
+
+**Severity.** High for what the test claims, not for the product: the acceptance test is the
+evidence that `predicted_heat` beats a trivial baseline, and today that evidence is one
+favorable seed.
+
+### F-13 — Numerics: two defects in the nn package (T9-4, T9-8)
+
+| # | Defect | Location | Fix direction | Severity |
+|---|---|---|---|---|
+| a | **The 1e-8 std floor**: a feature constant in training reaches the MLP as ~1e8 when an unseen value appears; one async node's predicted heat went 0.44 → 0.0 (T9-8) | `grackle_nn/ml/heat_model.py` `train_heat_model` | scale 1.0 for zero-variance columns (existing checkpoints keep 1e-8 and need re-learning) — but this turns the acceptance test red, so it waits on F-12 | **Medium** — silently wrong predictions for async functions, decorators, dunders, inherit or cross-language edges absent from training, under `serve --watch` or when a model scores another project |
+| b | ReLU's multiplicative mask: `ReLU(-inf)` is nan, and an infinite gradient at an inactive unit comes back nan (2 xfails) | `grackle_nn/layers.py` ReLU | `np.maximum(x, 0.0)` / `np.where(mask, grad, 0.0)` — verified to flip exactly those two tests with the rest of the suite (golden traces included) green | Low — latent; needs an already-diverged activation |
+
+### F-14 — Agent: safe_repr runs user code; a symlink aborts the parse (T8-1, T8-3, T8-4)
+
+All strict xfails with the shrunk counterexample as an `@example`.
+
+| # | Defect | Location | Fix direction | Severity |
+|---|---|---|---|---|
+| a | `isinstance` checks in the dispatch read the *instance's* `__class__`, so a `__class__` property or `__getattribute__` override runs (5× per value), and if it raises the whole enclosing value becomes `<unreprable>` — the module docstring names this exact trap as avoided | `python_runtime/value_repr.py` `_repr1_dispatch`, `_repr_dict_safe` | test `type(x)` with `issubclass` | Low-medium — reachable through common proxies (Django `SimpleLazyObject`/`LazySettings` get force-evaluated; wrapt, werkzeug) and any captured `self` overriding `__getattribute__`; capture is opt-in |
+| b | `is_sensitive_name(key)` calls a `str` subclass key's own `.lower()` | same module | `str.lower(key)` | Low |
+| c | `_read_dataclass_field` trusts a class-defined `__dict__` property (output shows `DC(a=-1)` for `a=0`) | same module | accept only the C-level getset descriptor, as for slots | Low |
+| d | The `<unreprable: T>` fallback skips the `max_len` clamp (a 300-character class name yields 314 characters at the default limit of 120) | same module | route the fallback through the clamp | Low |
+| e | The JSONL readers disagree on what a blank line is: `read_jsonl` (`str.strip`) vs `JsonlIndex`/aggregates (`bytes.strip`) vs `read_window` (no strip), for U+0085, U+001C–U+001F, NBSP, U+2028/9, U+3000 — so the seekable and non-seekable replay of one file report different counts | `writer.py`, `jsonl_index.py`, `aggregates.py` | fold into F-11's shared per-line decode helper | Low |
+| f | **One symlink escaping the root aborts the whole static parse** (`ValueError` from `to_posix`), for Python, TypeScript, Go and Rust: `grackle parse` exits 1 with a traceback, `serve` pushes no graph at all | `python_parser/walker.py`, `tree_sitter_walker.py` | one guarded posix-key helper for the walkers, skipping with a warning as `watcher._safe_posix_key` already does | **Medium** — a single shared-module symlink, common in monorepos, takes down the whole project's graph |
+
+### F-15 — Frontend beacon grammars (T8-6)
+
+Ledgered as `it.fails`, minimized by hand.
+
+| # | Defect | Location | Severity |
+|---|---|---|---|
+| a | Every grammar takes an unbounded `\d+` and decodes it with `parseInt`, so a 309+-digit field becomes `Infinity`: an `Infinity` epoch gives the loss curve NaN x-coordinates, and two different oversized dimensions both become `Infinity`, so the network chain check passes when it should not (3 `it.fails`, one per parser; a passing boundary test shows 1e308 still parses) | `graph/epochSeries.ts`, `layerStats.ts`, `networkSpec.ts` | Low — the default `max_value_len=120` truncates the repr first; needs a raised limit or a hand-written trace |
+| b | The architecture latch disagrees with a one-shot scan: resuming with `cache.spec ?? extractNetworkSpec(events, cache.scanned)` walks past a `record_architecture` beacon that parses but is incoherent, which a one-shot scan stops at — so the live panel shows `model: 1-1` while a replay of the same trace shows "No network beacons" (1 `it.fails`, at panel level so it stays right whichever layer is fixed) | `panels/NetworkViewPanel.tsx` + `graph/networkSpec.ts` | Low |
+
+### C5 observations (not ledgered)
+
+- **`profile_reconstruct` does not clamp a negative `timeDeltas`.** If V8 ever emits one, the
+  sampling path's documented time order breaks and `node_runtime/test_e2e.py`'s ordering check
+  would fail. That would be a product bug to record, not a test to loosen. Not reproduced
+  locally (0 negatives in 15 runs).
+- **`to_posix` docstring drift:** it says a symlink loop raises `RuntimeError`, but Python 3.13's
+  `resolve()` no longer raises on loops (it returns `"loop/x.py"`). On 3.12 a self-referential
+  symlink still aborts the parse (F-14 f's sibling), so that case was left out of the xfail.
+- **macOS Unicode normalization:** NFC and NFD spellings of one file give different `to_posix`
+  keys, an undocumented sibling of the documented case caveat.
+- **Network dimensions above 2^53** lose precision, so two different huge dimensions can
+  compare equal (same behavior as `Number()`).
 
 ### Open observation (C2) — one unexplained full-suite stall
 

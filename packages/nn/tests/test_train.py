@@ -97,7 +97,13 @@ def test_demo_main_defaults_reach_target_accuracy(monkeypatch: pytest.MonkeyPatc
     history = main()
 
     assert len(history) == 60
-    assert history[-1][2] >= 0.95
+    # Campaign T9-5: held over the final five epochs, not the last one alone,
+    # the same window test_traceability.py::test_epoch_metrics_show_learning
+    # uses. Strictly stronger than the old final-epoch-only check (the min over
+    # the window bounds the final epoch too): it asks for converged accuracy,
+    # so a lucky last epoch after a dip no longer passes.
+    last_window_accuracy = min(entry[2] for entry in history[-5:])
+    assert last_window_accuracy >= 0.95, [entry[2] for entry in history[-5:]]
 
 
 def test_demo_main_env_overrides_are_honored(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,0 +1,15 @@
+{
+  "id": "nn-losses-softmax-probs-from-unshifted-logits",
+  "description": "T9-2: backward's cached probabilities are computed from the raw logits (np.exp(logits) / sum), not the row-max-shifted ones. The loss still comes from the shifted log-probs, so forward stays finite at |logits| ~ 1e4 and the standard-normal gradcheck agrees; only backward at saturation goes inf/inf = nan.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/losses.py",
+    "find": "        self._probs = exp_shifted / sum_exp",
+    "replace": "        self._probs = np.exp(logits) / np.exp(logits).sum(axis=1, keepdims=True)"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/test_losses_saturation.py"]
+  },
+  "expect": "killed"
+}

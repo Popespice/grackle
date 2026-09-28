@@ -1,0 +1,15 @@
+{
+  "id": "agent-paths-case-folded",
+  "description": "A 'fix' for the documented macOS case caveat that lower-cases every id: case-variant references now collapse, but every mixed-case file's id stops round-tripping to the file (campaign T8-4: round trip on real files).",
+  "target": {
+    "file": "packages/agent/src/grackle/paths.py",
+    "find": "    return p.resolve().relative_to(root.resolve()).as_posix()",
+    "replace": "    return p.resolve().relative_to(root.resolve()).as_posix().lower()"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": ["-q", "tests/test_properties_paths.py", "-k", "round_trip"]
+  },
+  "expect": "killed"
+}

@@ -1,0 +1,15 @@
+{
+  "id": "frontend-layer-stats-finite-check-first-layer-only",
+  "description": "record_layer_stats only checks the first layer's (w, dw) pair for finiteness, so a diverged deeper layer's inf/nan reaches the network view as a bundle width instead of being counted as dropped. Every pre-existing non-finite case is a one-layer tuple.",
+  "target": {
+    "file": "packages/frontend/src/graph/layerStats.ts",
+    "find": "if (nums.some((n) => !Number.isFinite(n))) {",
+    "replace": "if (nums.slice(0, 2).some((n) => !Number.isFinite(n))) {"
+  },
+  "suite": {
+    "kind": "vitest",
+    "cwd": "packages/frontend",
+    "args": ["run", "src/graph/beaconGrammar.sweep.test.ts"]
+  },
+  "expect": "killed"
+}

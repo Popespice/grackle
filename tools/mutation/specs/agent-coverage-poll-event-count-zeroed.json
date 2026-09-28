@@ -1,0 +1,20 @@
+{
+  "id": "agent-coverage-poll-event-count-zeroed",
+  "description": "coverage_event reports a zero call count for every active function, so live heat weighted by metadata.count goes dark. The lower bound (count > 0) of the F-1 assertion in the Node e2e test must kill this (campaign C5, F-1).",
+  "target": {
+    "file": "packages/agent/src/grackle/node_runtime/coverage_poll.py",
+    "find": "{\"live\": True, \"count\": delta})",
+    "replace": "{\"live\": True, \"count\": 0})"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/node_runtime/test_e2e.py",
+      "-k",
+      "coverage_emits_live_heat"
+    ]
+  },
+  "expect": "killed"
+}

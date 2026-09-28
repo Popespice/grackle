@@ -1,0 +1,20 @@
+{
+  "id": "agent-value-repr-redacted-value-still-read",
+  "description": "A sensitive dict key's value is formatted and discarded before '<redacted>' is shown, so the secret's own __class__ property or __getattribute__ runs; redaction must happen before the value is touched (campaign T8-1: the redaction property).",
+  "target": {
+    "file": "packages/agent/src/grackle/python_runtime/value_repr.py",
+    "find": "            if isinstance(key, str) and is_sensitive_name(key):\n                valrepr = \"<redacted>\"",
+    "replace": "            if isinstance(key, str) and is_sensitive_name(key):\n                valrepr = \"<redacted>\" if self.repr1(val, newlevel) else \"\""
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_properties_value_repr.py",
+      "-k",
+      "redacts_before"
+    ]
+  },
+  "expect": "killed"
+}
