@@ -52,7 +52,11 @@ from grackle.adapters.runtime_resolution import UNRESOLVED
 from grackle.go_runtime.covdata_parse import parse_textfmt
 from grackle.go_runtime.resolution import GoResolver
 from grackle.node_runtime.coverage_poll import iter_coverage_deltas
-from grackle.node_runtime.launcher import _make_resolve, _resolve_coverage_delta
+from grackle.node_runtime.launcher import (
+    _line_map_for_url,
+    _make_resolve,
+    _resolve_coverage_delta,
+)
 from grackle.node_runtime.node_resolution import NodeResolver
 from grackle.node_runtime.profile_reconstruct import reconstruct
 from grackle.python_runtime.aggregates import TraceAggregates, build_seekable
@@ -1245,6 +1249,31 @@ def _ref_counts(result: list[Any]) -> dict[tuple[str, int], int]:
     return counts
 
 
+@pytest.mark.xfail(
+    strict=True,
+    raises=ValueError,
+    reason=(
+        "F-11 #11: _line_map_for_url catches OSError only, so a NUL in a coverage script's "
+        "path escapes as ValueError and aborts the --stream session on platforms whose path "
+        "resolution does not reject it first (docs/test-campaigns/phase-12.md)"
+    ),
+)
+def test_a_nul_in_a_coverage_path_does_not_escape_the_line_map_lookup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_line_map_for_url`'s docstring promises `None` for "read failures", but it
+    catches `OSError` only, and `Path.read_bytes()` on a path containing a NUL
+    raises `ValueError` on every platform. Whether a hostile URL gets that far
+    depends on the resolver rejecting it first, which differs by platform and
+    Python version: it does on POSIX and Windows py3.12 (the corpus sweep below
+    passes there) and does not on Windows py3.13 (where it failed CI). Handing the
+    function a NUL path directly makes the defect deterministic everywhere."""
+    _, resolver, _ = _v8_project(tmp_path)
+    nul_path = tmp_path / "a.ts\x00"
+    monkeypatch.setattr(resolver, "source_path", lambda url: nul_path)
+    assert _line_map_for_url(resolver, {}, "file:///x/a.ts%00") is None
+
+
 @pytest.mark.parametrize("seed", range(8))
 def test_v8_coverage_polling_survives_the_malformed_corpus(tmp_path: Path, seed: int) -> None:
     root, resolver, graph_ids = _v8_project(tmp_path)
@@ -1260,7 +1289,17 @@ def test_v8_coverage_polling_survives_the_malformed_corpus(tmp_path: Path, seed:
         assert isinstance(delta["function_name"], str)
     line_maps: dict[str, Any] = {}
     for delta in deltas:
-        _assert_safe_node_id(_resolve_coverage_delta(resolver, line_maps, delta), graph_ids)
+        try:
+            node_id = _resolve_coverage_delta(resolver, line_maps, delta)
+        except ValueError:
+            # F-11 #11 (docs/test-campaigns/phase-12.md), pinned deterministically by
+            # test_a_nul_in_a_coverage_path_does_not_escape_the_line_map_lookup: a NUL
+            # in the URL reaches `read_bytes()` on platforms whose path resolution does
+            # not reject it first (Windows, py3.13 — this sweep's seeds 4-7 failed
+            # there). Only that known case is tolerated; any other ValueError still fails.
+            assert "%00" in delta["url"].lower(), delta["url"]
+            continue
+        _assert_safe_node_id(node_id, graph_ids)
     control, _ = iter_coverage_deltas(
         [
             {
