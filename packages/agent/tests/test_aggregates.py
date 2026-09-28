@@ -399,6 +399,7 @@ def test_build_seekable_missing_file(tmp_path: Path) -> None:
 
 @pytest.mark.xfail(
     strict=True,
+    raises=AttributeError,
     reason=(
         "T5-8: a JSON line that parses but is not an object raises "
         "AttributeError out of the aggregate builders instead of being skipped "
