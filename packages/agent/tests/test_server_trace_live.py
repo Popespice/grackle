@@ -432,6 +432,18 @@ async def _processed(ws: Any, tag: str) -> None:
             pass
 
 
+async def _registered(store: SessionStore, session_id: str, *, timeout: float = 5.0) -> None:
+    """Poll until the store has a row for *session_id*: for the tests whose
+    producer is gone (or has already been waited on) and so cannot ping. The row
+    is written after the recording is renamed into place, so the file existing
+    does not mean the row does."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while store.get_session(session_id) is None:
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError(f"timed out waiting for a store row for {session_id!r}")
+        await asyncio.sleep(0.01)
+
+
 async def test_live_session_recorded_to_store(
     store_server: tuple[int, SessionStore, Path],
 ) -> None:
@@ -467,7 +479,7 @@ async def test_producer_disconnect_without_end_finalizes(
             await producer.send(_make_trace_event(i))
         # producer goes out of scope without sending trace_session_end.
 
-    await asyncio.sleep(0.2)
+    await _registered(store, "rec-2")
 
     meta = store.get_session("rec-2")
     assert meta is not None
@@ -692,6 +704,7 @@ async def test_duplicate_session_id_second_producer_skipped(
         # A finishes cleanly.
         await producer_a.send(_make_session_end("rec-dup", count=1))
         await _wait_for(final)
+        await _registered(store, "rec-dup")
 
     meta = store.get_session("rec-dup")
     assert meta is not None
