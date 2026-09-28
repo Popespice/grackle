@@ -268,7 +268,9 @@ async def test_peer_startup_sweep_loses_an_idle_live_recording(
 
 @pytest.mark.xfail(
     strict=True,
-    raises=AssertionError,
+    # POSIX: the session is swept and lost (the assertions below fail). Windows
+    # refuses to unlink the open .part, so the peer's startup raises instead.
+    raises=(AssertionError, PermissionError),
     reason=(
         "T6-2: the sweep judges a .part idle by its mtime, which only advances "
         "when the writer's buffer flushes, so a peer's startup sweep deletes a "
