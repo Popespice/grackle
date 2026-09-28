@@ -798,6 +798,12 @@ async def test_loading_a_session_whose_source_is_a_fifo_never_opens_it(
     after a Ctrl-C and exited only once the FIFO got a writer. (Not executed,
     by reading: a device such as ``/dev/zero`` passes ``exists()`` too, and
     ``build_seekable`` would read it line by line with no newline arriving.)"""
+    if sys.platform == "win32":
+        # Already skipped at runtime by the skipif above; this branch exists so
+        # `mypy --strict` narrows the rest of the body away on the Windows CI
+        # leg, where typeshed has no os.mkfifo / os.O_NONBLOCK (a decorator
+        # does not narrow). The same reason test_cli_learn.py gates its mkfifo.
+        pytest.skip("FIFOs are POSIX-only")
     port, store, tmp_path = library_server
     fifo = tmp_path / "pipe.jsonl"
     os.mkfifo(fifo)
