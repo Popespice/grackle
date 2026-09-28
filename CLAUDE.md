@@ -76,7 +76,7 @@ pnpm --filter @grackle/frontend typecheck
 # nn-only (Python, standalone package — "watch it learn", Phase 11)
 (cd packages/nn && uv sync)
 (cd packages/nn && uv run pytest -q)
-(cd packages/nn && uv run ruff check . && uv run mypy --strict src tests)
+(cd packages/nn && uv run ruff check . && uv run mypy --strict src tests scripts)
 pnpm nn:trace                             # trace the training demo -> packages/nn/run-a.jsonl
 ```
 

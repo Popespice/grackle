@@ -97,13 +97,13 @@ def test_relu_gradient_at_negative_infinity_is_zero() -> None:
     assert_array_equal(layer.backward(np.array([[4.0]])), [[0.0]])
 
 
-@pytest.mark.xfail(strict=True, reason=_T94)
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_T94)
 def test_relu_of_negative_infinity_is_zero() -> None:
     _, out = _relu([-math.inf])
     assert_array_equal(out, [[0.0]])  # observed: nan
 
 
-@pytest.mark.xfail(strict=True, reason=_T94)
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_T94)
 def test_relu_blocks_an_infinite_gradient_at_an_inactive_unit() -> None:
     layer, _ = _relu([-1.0, 0.0])
     with warnings.catch_warnings():

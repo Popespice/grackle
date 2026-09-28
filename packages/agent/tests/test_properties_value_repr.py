@@ -770,6 +770,7 @@ def _class_hook_object(hook: str) -> object:
 
 @pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason=(
         "T8-1(a): isinstance() on a captured value reads x.__class__ through the "
         "instance's own attribute lookup, so a __class__ property or a "
@@ -802,6 +803,7 @@ class _LoweringKey(str):
 
 @pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason=(
         "T8-1(b): the sensitive-key check calls key.lower() on a str-subclass "
         f"dict key, running the subclass's override {_LEDGER}"
@@ -830,6 +832,7 @@ class _DictPropertyDC:
 
 @pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason=(
         "T8-1(c): a dataclass field is read via object.__getattribute__(x, "
         "'__dict__'), which runs a __dict__ data descriptor defined on the "
@@ -851,6 +854,7 @@ def _internal_failure(*_args: Any) -> str:
 
 @pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason=(
         "T8-1(d): safe_repr's '<unreprable: TypeName>' fallback returns before "
         "the max_len clamp, so any internal failure (a raising hook, a dict "

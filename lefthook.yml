@@ -47,7 +47,7 @@ pre-push:
       run: uv run ruff check .
     mypy-nn:
       root: "packages/nn/"
-      run: uv run mypy --strict src tests
+      run: uv run mypy --strict src tests scripts
     test-nn:
       root: "packages/nn/"
       run: uv run pytest -q

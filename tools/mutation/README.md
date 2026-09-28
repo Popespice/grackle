@@ -19,10 +19,13 @@ Every test must be demonstrated able to fail. A spec's `expect` is usually
 `"killed"` — the mutant introduces a real bug and some test must go red. But
 `expect: "survives"` is equally legitimate and often more valuable: it is how
 you *prove* a gap exists rather than merely suspect one. See
-`specs/agent-cache-bounded-race-guard.json` — it demonstrates that no test in
-the package exercises a documented benign-race handler, by showing the suite
-stays green even after that handler is narrowed. That is a finding, recorded
-as an executable fact instead of a claim in prose.
+`specs/agent-cache-bounded-race-guard.json` — it demonstrates that the suite it
+names (`tests/test_server_predicted_heat.py`) never exercises a documented
+benign-race handler, by showing that suite stays green even after the handler is
+narrowed. That is a finding, recorded as an executable fact instead of a claim in
+prose. (Campaign C4 later wrote the tests that do reach the handler; the
+`agent-cache-bounded-race-guard-stalled` and `-hammered` specs are killed by them,
+and this one keeps declaring what its own suite covers.)
 
 ## Usage
 
