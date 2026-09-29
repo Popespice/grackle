@@ -209,7 +209,7 @@ on any other traced program — grackle's own training loop is inspectable with 
 the same thesis Phase 11 established for the demo, now applied to the tool learning about the
 user's own code. One seeded `np.random.default_rng(seed)` threads every `Linear` init and every
 epoch's minibatch shuffle (D10 discipline, ADR-0028 §5), so a run is fully reproducible from `seed`
-alone. Standardization stats (`mean`, `std` floored at `1e-8`) are computed once on the training
+alone. Standardization stats (`mean`, `std`, with scale 1.0 for a column that was constant in training, T9-8) are computed once on the training
 set and stored in the checkpoint (ADR-0030 §"Artifact format") — `predict` always standardizes
 against the *stored* stats, never against whatever batch it's currently scoring, verified by
 `test_predict_uses_stored_norm_stats_not_recomputed_from_input`.
@@ -271,9 +271,9 @@ the margin as the mean over all 8 held-out graphs (`tests/ml/acceptance_eval.py:
 The seeds stay fixed at split 0 / train 0, and the escape hatch still applies: a flake lowers a bar,
 it never reshuffles the seeds.
 
-**What k-fold shows.** Over 100 `(split_seed, train_seed)` pairs the 4-fold mean margin is +0.001
-(median 0.000, range −0.052 to +0.039), and no pair reaches +0.05. The mean model Spearman is 0.806
-against 0.805 for raw in-degree. On this corpus the trained model **matches** the baseline; it does
+**What k-fold shows.** Over 100 `(split_seed, train_seed)` pairs the 4-fold mean margin was +0.001
+(median 0.000, range −0.052 to +0.039), and no pair reached +0.05. The mean model Spearman was 0.806
+against 0.805 for raw in-degree (measured before T9-8's fix, below). On this corpus the trained model **matches** the baseline; it does
 not beat it. §6's claim ("does the learned model beat this") is therefore not met, and k-fold cannot
 make it so: a mean-based bar at +0.05 fails on every draw. The signal exists (a model that knew the
 generator's noiseless formula beats the baseline by about +0.10), so the gap is in the model or
@@ -282,8 +282,8 @@ features, not the corpus.
 **The bars, split in two.**
 
 - **Regression guard (passing):** mean model Spearman > 0.5 **and** margin ≥ −0.06 over the baseline,
-  4-fold, seeds 0/0 (margin +0.0118, headroom 0.072). The floor sits just below the worst of the 100
-  draws (−0.0517), so it holds on every observed seed pair. It catches a model that has become worse
+  4-fold, seeds 0/0 (margin +0.0064, headroom 0.066). The floor sits below the worst of the 100
+  draws (−0.0418), so it holds on every observed seed pair. It catches a model that has become worse
   than the baseline; it does not establish that the model is better. Two mutation tests keep it
   honest (shuffled held-out labels, and an inverted model, must each trip it).
 - **The claim (strict xfail, F-12):** margin ≥ +0.05, k-fold. It fails today and is committed red so
@@ -291,7 +291,12 @@ features, not the corpus.
   marker. Until then `predicted_heat` should be described as "no worse than in-degree on held-out
   synthetic graphs", not "better".
 
-The nightly `margin_sweep.py --folds 4` reports the distribution and never gates. Consequence for
-T9-8 (the 1e-8 standardization floor): its fix was blocked because it moved the old single-split
-margin to +0.0333, under the old +0.05 bar. That bar no longer gates; re-measure T9-8's fix 4-fold when
-it lands.
+The nightly `margin_sweep.py --folds 4` reports the distribution and never gates.
+
+**T9-8 (the 1e-8 standardization floor) is fixed, and re-measured 4-fold as this section asked.** A
+feature constant in training now has scale 1.0 (`heat_model.py::_scale_from_std`), and a checkpoint
+saved under the old floor is repaired on load. The old single-split reading (+0.0333) that blocked the
+fix under the +0.05 bar is moot. Over the same 100 pairs the mean margin moves from +0.001 to +0.006
+(median +0.009, range −0.042 to +0.041; mean model Spearman 0.810 against 0.805), and still no pair
+reaches +0.05, so the claim stays a strict xfail. The guard's numbers above are the post-fix ones; the
+−0.06 floor now has 0.018 to spare over the worst draw rather than 0.008.

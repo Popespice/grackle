@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from grackle_nn.train import EpochStats
 
 _FEATURE_WIDTH = len(FEATURE_NAMES)
+_CONSTANT_STD = 1e-8
 _HIDDEN = (64, 32)
 _REQUIRED_KEYS = (
     "feature_version",
@@ -74,13 +75,27 @@ def _build_architecture(rng: np.random.Generator) -> Sequential:
     )
 
 
+def _scale_from_std(std: Array) -> Array:
+    """The divisor that standardizes a column: its std, or 1.0 if it was constant in training.
+
+    A column that never varied (``is_async`` in a project with no async functions) has a std of
+    0, or a one-ulp residual of it. Dividing by that turns the first value training never saw
+    into ~1e8 and pins the prediction to a clip bound (test campaign T9-8). Scale 1.0 keeps the
+    input an ordinary 0/1 flag; training itself is unchanged, since ``x - mean`` is 0 there. A NaN
+    std is left alone so bad training data still surfaces. Idempotent, so it also repairs a
+    checkpoint saved when the divisor was floored at ``_CONSTANT_STD`` instead.
+    """
+    scale: Array = np.where(std <= _CONSTANT_STD, 1.0, std)
+    return scale
+
+
 class HeatModel:
     """A trained hotspot-prediction model: the MLP plus its standardization stats."""
 
     def __init__(self, model: Sequential, norm_mean: Array, norm_std: Array) -> None:
         self.model = model
         self.norm_mean = norm_mean
-        self.norm_std = norm_std
+        self.norm_std = _scale_from_std(norm_std)
 
     def predict(self, x: Array) -> Array:
         """Standardize -> forward -> squeeze -> clip to ``[0, 1]``."""
@@ -189,7 +204,7 @@ def train_heat_model(
     """
     x, y = stack(train)
     norm_mean: Array = x.mean(axis=0)
-    norm_std: Array = np.maximum(x.std(axis=0), 1e-8)
+    norm_std = _scale_from_std(x.std(axis=0))
     x_std = (x - norm_mean) / norm_std
     y_col = y.reshape(-1, 1)
 

@@ -1,0 +1,15 @@
+{
+  "id": "nn-heat-model-nan-std-hidden",
+  "description": "T9-8: the constant-column rule is written `not (std > floor)`, which is also true for NaN, so a NaN std from bad training data is silently turned into scale 1.0 instead of surfacing.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/ml/heat_model.py",
+    "find": "    scale: Array = np.where(std <= _CONSTANT_STD, 1.0, std)",
+    "replace": "    scale: Array = np.where(~(std > _CONSTANT_STD), 1.0, std)"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/ml/test_standardization_envelope.py"]
+  },
+  "expect": "killed"
+}

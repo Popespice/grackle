@@ -10,8 +10,8 @@ k-fold instead (ADR-0029, "Amendment: k-fold acceptance"): every graph of the
 over all 8 graphs, not 2.
 
 What k-fold measures is that the model **matches** the baseline and does not
-beat it. Over 100 (split, train) seed pairs the mean margin is +0.001, the
-median 0.000, the range -0.052 to +0.039, and no draw reaches +0.05. So the
+beat it. Over 100 (split, train) seed pairs the mean margin is +0.006, the
+median +0.009, the range -0.042 to +0.041, and no draw reaches +0.05. So the
 claim and the guard are tested separately:
 
 - ``test_kfold_model_is_not_worse_than_degree_baseline`` (passing) is the
@@ -59,7 +59,7 @@ if TYPE_CHECKING:
 # ADR-0029's claim: the model beats raw in-degree by this much.
 _MARGIN_BAR = 0.05
 # The regression guard: the model is no worse than in-degree by more than this.
-# The worst k-fold margin over 100 seed pairs was -0.0517.
+# The worst k-fold margin over 100 seed pairs is -0.0418.
 _MARGIN_FLOOR = -0.06
 _ABSOLUTE_BAR = 0.5
 
@@ -109,7 +109,7 @@ def test_kfold_model_is_not_worse_than_degree_baseline(
     raises=AssertionError,
     reason=(
         "F-12: evaluated k-fold over all 8 graphs, the model matches the raw-in-degree baseline "
-        "(mean margin +0.001 over 100 seed pairs, none reaching +0.05) instead of beating it by "
+        "(mean margin +0.006 over 100 seed pairs, none reaching +0.05) instead of beating it by "
         "the +0.05 ADR-0029 claims (docs/test-campaigns/phase-12.md)"
     ),
 )
