@@ -1,0 +1,15 @@
+{
+  "id": "nn-heat-model-legacy-checkpoint-not-repaired",
+  "description": "T9-8: HeatModel stores the norm_std it is given without the constant-column rule, so a checkpoint saved under the old 1e-8 floor keeps dividing an unseen flag by 1e-8 until it is re-learned.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/ml/heat_model.py",
+    "find": "        self.norm_std = _scale_from_std(norm_std)",
+    "replace": "        self.norm_std = norm_std"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/ml/test_standardization_envelope.py"]
+  },
+  "expect": "killed"
+}

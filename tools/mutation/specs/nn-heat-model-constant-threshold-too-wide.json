@@ -1,0 +1,15 @@
+{
+  "id": "nn-heat-model-constant-threshold-too-wide",
+  "description": "T9-8: the constant-column threshold grows from 1e-8 to 1e-3, so a column with real but small variance (std 1e-6) is thrown away as constant and standardized at scale 1.0.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/ml/heat_model.py",
+    "find": "_CONSTANT_STD = 1e-8",
+    "replace": "_CONSTANT_STD = 1e-3"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/ml/test_standardization_envelope.py"]
+  },
+  "expect": "killed"
+}
