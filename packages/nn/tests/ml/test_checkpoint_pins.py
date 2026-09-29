@@ -20,35 +20,34 @@ golden was generated on macOS/arm64 (numpy 2.5, Accelerate BLAS); Linux and
 Windows run OpenBLAS and their own libm, so they reach it through different
 summation orders and differently-rounded ``log1p``/``pow``.
 
-The tolerance, ``atol=1e-6``, was chosen from measurements on this exact
+The tolerance, ``atol=1e-10``, was chosen from measurements on this exact
 configuration (macOS; scripted perturbations, 40 seeds each):
 
 - A different BLAS summation order, emulated by moving every ``Linear``
   matmul output and gradient by up to ``sqrt(K) * eps * sum(|terms|)``, moved
-  the golden rows by at most 7e-15 (6e-14 at ten times that noise).
+  the golden rows by at most 7e-15 (6e-14 at ten times that noise). Measured
+  before the T9-8 fix, which does not touch any summation order.
 - A different libm, emulated by shifting each distinct feature and target
-  value by up to 2 ulps, moved them by up to 4.3e-8 (1.6e-7 at 8 ulps). The
-  response is linear in the ulp count, so training here is not chaotic at
-  this scale. Nearly all of it comes through one channel: a column that is
-  constant in training (``log1p_path_depth = log1p(2)`` on every row) gets a
-  mean one ulp off its value, so a computed ``std`` of 2.2e-16, floored to
-  1e-8; that one-ulp residual is divided by 1e-8 and reaches the network as an
-  input of about 2e-8, and it moves whenever ``log1p(2)`` rounds differently.
-  Holding that one value fixed drops the libm drift to 4e-15. The same floor is
-  ledgered as a defect in ``test_standardization_envelope.py`` (T9-8); if it
-  is fixed, this band can tighten to about 1e-10.
+  value by up to 2 ulps, moves them by up to 4.3e-15 (6.6e-15 at 8 ulps).
+  Before T9-8's fix this was 4.3e-8 (1.6e-7 at 8 ulps) and set the band at
+  1e-6: nearly all of it came through a column that is constant in training
+  (``log1p_path_depth = log1p(2)`` on every row), whose mean is one ulp off
+  its value, so a computed ``std`` of 2.2e-16 was floored to 1e-8 and that
+  residual reached the network as an input of about 2e-8. Such a column now
+  gets scale 1.0 (``test_standardization_envelope.py``), and the residual stays
+  at 1e-16.
 - Real changes to the training configuration moved the golden rows by 0.043
   (one epoch fewer) to 0.53 (seed + 1): ``epochs`` +/- 1, ``batch_size``
   64 -> 32, ``lr`` 1e-3 -> 1.1e-3. The companion test below re-proves this on
-  every run. A change that barely touches the arithmetic, such as Adam's
-  ``eps`` 1e-8 -> 1e-7 (1.5e-6), sits at the band's edge; the band is not
-  meant to catch those.
+  every run. Adam's ``eps`` 1e-8 -> 1e-7 moved them by 1.5e-6 under the old
+  band, which sat at its edge; it is now caught (15000x the band).
 
-So the band is 23x the worst 2-ulp drift and 6x the worst 8-ulp drift, and
-more than four orders of magnitude below the smallest real change. The wire
-rounds ``predicted_heat`` to 4 decimals, so 1e-6 is also 100x finer than
-anything a user can see. The repo's one known cross-platform surprise in this
-pipeline was a single-ulp ``log1p`` disagreement (``test_labels.py``,
+So the band is 1600x the worst BLAS drift at ten times the emulated noise,
+and 15000x the worst libm drift at 8 ulps, and more than eight orders of
+magnitude below the smallest real change. The wire rounds ``predicted_heat``
+to 4 decimals, so 1e-10 is far finer than anything a user can see. The repo's
+one known cross-platform surprise in this pipeline was a single-ulp ``log1p``
+disagreement (``test_labels.py``,
 ``test_make_targets_hottest_node_is_exactly_one``). Verified on macOS only;
 the Ubuntu and Windows legs are the first real cross-OS check.
 
@@ -150,20 +149,20 @@ _GOLDEN_EPOCHS = 30
 _GOLDEN_ROWS = (3, 4, 6, 8, 10, 14, 16, 17, 20, 26, 29, 32)
 # Generated on macOS 26 / arm64, Python 3.12, numpy 2.5.1 (Accelerate BLAS).
 _GOLDEN = (
-    0.23125614866408328,
-    0.4224271578772062,
-    0.48111332462968537,
-    0.5382078046399109,
-    0.2608372551131527,
-    0.10134944554970965,
-    0.07222974026921117,
-    0.09282074731454848,
-    0.10310147224978297,
-    0.09750453289392635,
-    0.09667261302559207,
-    0.09393730465196187,
+    0.23125615829716398,
+    0.4224271055616656,
+    0.48111331814810376,
+    0.5382077865990761,
+    0.2608372228887015,
+    0.10134943600367255,
+    0.07222974224544632,
+    0.0928207318921623,
+    0.10310149477003952,
+    0.09750452207866181,
+    0.096672601699679,
+    0.09393729102474108,
 )
-_GOLDEN_ATOL = 1e-6
+_GOLDEN_ATOL = 1e-10
 
 
 def _train_golden_model(**overrides: Any) -> tuple[HeatModel, Array]:
