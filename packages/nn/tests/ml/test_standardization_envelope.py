@@ -19,8 +19,13 @@ The fix scales a column that was constant in training by 1.0 instead (a std at o
 ``_CONSTANT_STD``, which includes that one-ulp residual). Training is unchanged, because
 ``x - mean`` is 0 on such a column; an unseen 0/1 flag now arrives as exactly 1.0. The same
 rule runs when a checkpoint is loaded, so one saved under the old floor is repaired without
-re-learning. What it does *not* do is make the model's answer to an unseen flag meaningful: that
-column's first-layer weights were never trained, so the response is bounded but arbitrary.
+re-learning.
+
+That alone left the answer to an unseen flag bounded but arbitrary, because the column's
+first-layer weights were never trained: they sat at their random init, and the edited node's
+prediction moved by 0.002 to 0.33 across seeds. Those rows are now zeroed (before training, with
+the column's training input pinned to exactly 0 so Adam cannot move them, and again on load for a
+checkpoint saved before the fix), so an unseen value is ignored outright.
 """
 
 from __future__ import annotations
@@ -28,7 +33,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+import pytest
 
+from grackle_nn.losses import MSE
 from grackle_nn.ml.dataset import build_example, stack
 from grackle_nn.ml.features import FEATURE_NAMES, extract_features
 from grackle_nn.ml.heat_model import HeatModel, train_heat_model
@@ -100,40 +107,108 @@ def test_only_columns_constant_in_training_get_scale_one() -> None:
     assert np.array_equal(model.norm_std[~constant], raw_std[~constant])
 
 
-def test_marking_a_node_async_moves_no_other_row() -> None:
+@pytest.mark.parametrize("seed", [0, 1, 4])
+def test_marking_a_node_async_changes_no_prediction(seed: int) -> None:
     graph, heat = _graph()
-    model, _ = train_heat_model([build_example("root", graph, heat)], seed=0)
+    model, _ = train_heat_model([build_example("root", graph, heat)], seed=seed)
     _, before = extract_features(graph)
     _, after = extract_features(_graph(async_node=4)[0])
-    moved = np.abs(model.predict(after) - model.predict(before))
-    assert np.count_nonzero(moved) <= 1
-    # Bounded, not pinned to a clip bound by a 1e8 input. The size is arbitrary (the flag's
-    # first-layer weights were never trained: 0.25 at seed 0, 0.002 to 0.33 across seeds 0-5).
-    assert moved[4 + 2] < 0.5
+    # Ignored outright, not merely bounded. With only the 1.0 scale the edited row moved by
+    # 0.25, 0.002 and 0.33 at these three seeds, and 0.44 -> 0.0 before T9-8's first fix.
+    assert np.array_equal(model.predict(after), model.predict(before))
 
 
-def _model_with_legacy_floor(tmp_path: Path) -> tuple[HeatModel, HeatModel, Path]:
+def test_constant_columns_have_exactly_zero_first_layer_rows() -> None:
     graph, heat = _graph()
-    model, _ = train_heat_model([build_example("root", graph, heat)], epochs=2, seed=0)
-    path = tmp_path / "legacy.npz"
+    example = build_example("root", graph, heat)
+    # The default 200 epochs: what Adam does to a row is only visible after many steps.
+    model, _ = train_heat_model([example], seed=0)
+    constant = stack([example])[0].std(axis=0) <= _LEGACY_FLOOR
+    first_layer = model.model.parameters()[0]
+    assert constant.any()
+    assert not constant.all()
+    assert np.array_equal(first_layer[constant], np.zeros((int(constant.sum()), 64)))
+    # Only those rows: a column that varied keeps the weights training gave it.
+    assert np.all(np.any(first_layer[~constant] != 0.0, axis=1))
+
+
+def test_the_val_loss_still_belongs_to_the_returned_model_when_val_varies_a_constant_column() -> (
+    None
+):
+    """Zeroing must not make ``val_loss`` stale: a val set in which a training-constant column
+    varies is exactly where a model whose rows were zeroed only at the end would disagree with
+    its own history."""
+    graph, heat = _graph()
+    train = build_example("train", graph, heat)
+    val = build_example("val", _graph(async_node=4)[0], heat)
+    model, history = train_heat_model([train], epochs=3, seed=0, val=[val])
+    val_x, val_y = stack([val])
+    standardized = (val_x - model.norm_mean) / model.norm_std
+    expected = MSE().forward(model.model.forward(standardized), val_y.reshape(-1, 1))
+    assert history[-1][2] == pytest.approx(expected, rel=1e-12, abs=0)
+
+
+_UNTRAINED = 0.3  # what a pre-fix checkpoint holds in a constant column's rows: random init
+
+
+def _rewritten(path: Path, model: HeatModel, **changes: Any) -> HeatModel:
+    """Save *model*, replace some arrays in the file, and load the result."""
     model.save(path)
     with np.load(path) as npz:
         arrays: dict[str, Any] = {key: np.array(npz[key]) for key in npz.files}
-    constant = model.norm_std == 1.0
-    assert constant.any()
-    arrays["norm_std"] = np.where(constant, _LEGACY_FLOOR, arrays["norm_std"])
+    arrays.update(changes)
     with path.open("wb") as fh:
         np.savez(fh, **arrays)
-    return model, HeatModel.load(path), path
+    return HeatModel.load(path)
+
+
+def _trained_fixture() -> tuple[HeatModel, Any]:
+    graph, heat = _graph()
+    example = build_example("root", graph, heat)
+    model, _ = train_heat_model([example], epochs=2, seed=0)
+    return model, stack([example])[0].std(axis=0) <= _LEGACY_FLOOR
+
+
+def _pre_fix_checkpoint(tmp_path: Path) -> tuple[HeatModel, HeatModel, Path]:
+    """A checkpoint as v0.12.0 wrote it: 1e-8 for a constant column, untrained rows for it."""
+    model, constant = _trained_fixture()
+    assert constant.any()
+    w0 = model.model.parameters()[0].copy()
+    w0[constant] = _UNTRAINED
+    path = tmp_path / "legacy.npz"
+    legacy = _rewritten(
+        path, model, norm_std=np.where(constant, _LEGACY_FLOOR, model.norm_std), w0=w0
+    )
+    return model, legacy, path
 
 
 def test_a_checkpoint_saved_under_the_old_floor_is_repaired_on_load(tmp_path: Path) -> None:
-    fresh, legacy, path = _model_with_legacy_floor(tmp_path)
-    with np.load(path) as npz:
-        assert (np.asarray(npz["norm_std"]) == _LEGACY_FLOOR).any()  # really an old file
+    fresh, legacy, path = _pre_fix_checkpoint(tmp_path)
+    with np.load(path) as npz:  # really an old file: the floor, and rows that were never zeroed
+        assert (np.asarray(npz["norm_std"]) == _LEGACY_FLOOR).any()
+        assert (np.asarray(npz["w0"]) == _UNTRAINED).any()
     assert np.array_equal(legacy.norm_std, fresh.norm_std)
+    assert np.array_equal(legacy.model.parameters()[0], fresh.model.parameters()[0])
     _, edited = extract_features(_graph(async_node=4)[0])
     assert np.array_equal(legacy.predict(edited), fresh.predict(edited))
+
+
+def test_load_zeroes_rows_only_up_to_the_old_floor(tmp_path: Path) -> None:
+    model, _ = _trained_fixture()
+    trained = model.model.parameters()[0]
+    varied = [i for i in range(trained.shape[0]) if np.any(trained[i] != 0.0)][:3]
+    assert len(varied) == 3
+    just_above = np.nextafter(_LEGACY_FLOOR, 1.0)
+    std = model.norm_std.copy()
+    std[varied] = [_LEGACY_FLOOR, just_above, 1.0]
+    loaded = _rewritten(tmp_path / "edge.npz", model, norm_std=std)
+    rows = loaded.model.parameters()[0]
+    # The old floor itself means "constant" and is repaired. Anything above it is a real std,
+    # including exactly 1.0, which is also what a constant column now stores: that must not be
+    # taken for one, or a trained row would be thrown away.
+    assert np.array_equal(rows[varied[0]], np.zeros(64))
+    assert np.array_equal(rows[varied[1]], trained[varied[1]])
+    assert np.array_equal(rows[varied[2]], trained[varied[2]])
 
 
 def test_the_constant_column_boundary_is_inclusive_of_the_old_floor() -> None:
