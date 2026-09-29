@@ -1,0 +1,20 @@
+{
+  "id": "nn-acceptance-kfold-drops-the-last-fold",
+  "description": "F-12: evaluate_kfold skips the last fold, so a quarter of the corpus is never held out and the reported margin is a mean over 6 graphs, not 8.",
+  "target": {
+    "file": "packages/nn/tests/ml/acceptance_eval.py",
+    "find": "    for fold in np.array_split(order, folds):",
+    "replace": "    for fold in np.array_split(order, folds)[:-1]:"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": [
+      "-q",
+      "tests/ml/test_synthetic_acceptance.py",
+      "-k",
+      "kfold_holds_every_graph"
+    ]
+  },
+  "expect": "killed"
+}

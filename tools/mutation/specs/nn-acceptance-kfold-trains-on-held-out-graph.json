@@ -1,0 +1,20 @@
+{
+  "id": "nn-acceptance-kfold-trains-on-held-out-graph",
+  "description": "F-12: evaluate_kfold trains each fold on the whole corpus, held-out graph included, so every graph is scored by a model that saw it and the k-fold margin is inflated by leakage.",
+  "target": {
+    "file": "packages/nn/tests/ml/acceptance_eval.py",
+    "find": "        train = [examples[int(i)] for i in order if int(i) not in held_out]",
+    "replace": "        train = [examples[int(i)] for i in order]"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": [
+      "-q",
+      "tests/ml/test_synthetic_acceptance.py",
+      "-k",
+      "kfold_holds_every_graph"
+    ]
+  },
+  "expect": "killed"
+}
