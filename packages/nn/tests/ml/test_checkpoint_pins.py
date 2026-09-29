@@ -28,7 +28,7 @@ configuration (macOS; scripted perturbations, 40 seeds each):
   the golden rows by at most 7e-15 (6e-14 at ten times that noise). Measured
   before the T9-8 fix, which does not touch any summation order.
 - A different libm, emulated by shifting each distinct feature and target
-  value by up to 2 ulps, moves them by up to 4.3e-15 (6.6e-15 at 8 ulps).
+  value by up to 2 ulps, moves them by up to 4.4e-15 (5.9e-15 at 8 ulps).
   Before T9-8's fix this was 4.3e-8 (1.6e-7 at 8 ulps) and set the band at
   1e-6: nearly all of it came through a column that is constant in training
   (``log1p_path_depth = log1p(2)`` on every row), whose mean is one ulp off
@@ -43,7 +43,7 @@ configuration (macOS; scripted perturbations, 40 seeds each):
   band, which sat at its edge; it is now caught (15000x the band).
 
 So the band is 1600x the worst BLAS drift at ten times the emulated noise,
-and 15000x the worst libm drift at 8 ulps, and more than eight orders of
+and 17000x the worst libm drift at 8 ulps, and more than eight orders of
 magnitude below the smallest real change. The wire rounds ``predicted_heat``
 to 4 decimals, so 1e-10 is far finer than anything a user can see. The repo's
 one known cross-platform surprise in this pipeline was a single-ulp ``log1p``

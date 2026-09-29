@@ -3,8 +3,8 @@
   "description": "T4-3: training standardizes with the raw std, so any constant feature column (a one-hot nobody uses, a graph with no async functions) divides by zero and training goes NaN.",
   "target": {
     "file": "packages/nn/src/grackle_nn/ml/heat_model.py",
-    "find": "    norm_std = _scale_from_std(x.std(axis=0))",
-    "replace": "    norm_std = x.std(axis=0)"
+    "find": "    norm_std = _scale_from_std(raw_std)",
+    "replace": "    norm_std = raw_std"
   },
   "suite": {
     "kind": "pytest",

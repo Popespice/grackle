@@ -1,0 +1,15 @@
+{
+  "id": "nn-heat-model-constant-input-not-pinned-to-zero",
+  "description": "T9-8b: the training input of a constant column keeps the one-ulp residual of its mean instead of an exact 0, so Adam (which normalizes a gradient of any size) walks the zeroed rows away from zero over 200 epochs.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/ml/heat_model.py",
+    "find": "    x_std[:, constant] = 0.0\n",
+    "replace": ""
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/ml/test_standardization_envelope.py"]
+  },
+  "expect": "killed"
+}

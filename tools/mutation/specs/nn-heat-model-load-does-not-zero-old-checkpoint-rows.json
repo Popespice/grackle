@@ -1,0 +1,15 @@
+{
+  "id": "nn-heat-model-load-does-not-zero-old-checkpoint-rows",
+  "description": "T9-8b: HeatModel.load keeps the untrained first-layer rows of a checkpoint saved under the old 1e-8 floor, so such a model is only half repaired.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/ml/heat_model.py",
+    "find": "        _zero_first_layer_rows(model, _is_constant(norm_std))\n",
+    "replace": ""
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/ml/test_standardization_envelope.py"]
+  },
+  "expect": "killed"
+}

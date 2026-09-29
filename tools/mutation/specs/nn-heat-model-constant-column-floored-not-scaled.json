@@ -3,7 +3,7 @@
   "description": "T9-8: the old behaviour comes back: a column constant in training is divided by 1e-8 instead of 1.0, so the first unseen value (an async def added under serve --watch) reaches the MLP as ~1e8.",
   "target": {
     "file": "packages/nn/src/grackle_nn/ml/heat_model.py",
-    "find": "    scale: Array = np.where(std <= _CONSTANT_STD, 1.0, std)",
+    "find": "    scale: Array = np.where(_is_constant(std), 1.0, std)",
     "replace": "    scale: Array = np.maximum(std, _CONSTANT_STD)"
   },
   "suite": {

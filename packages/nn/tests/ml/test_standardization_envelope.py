@@ -30,6 +30,7 @@ checkpoint saved before the fix), so an unseen value is ignored outright.
 
 from __future__ import annotations
 
+import dataclasses
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -130,6 +131,20 @@ def test_constant_columns_have_exactly_zero_first_layer_rows() -> None:
     assert np.array_equal(first_layer[constant], np.zeros((int(constant.sum()), 64)))
     # Only those rows: a column that varied keeps the weights training gave it.
     assert np.all(np.any(first_layer[~constant] != 0.0, axis=1))
+
+
+def test_a_constant_column_with_a_one_ulp_residual_stays_out_of_the_model() -> None:
+    """The residual case that pinning the training input to 0 exists for. ``log1p(2)`` on every
+    row has a mean one ulp off its value, so the standardized column is 2.2e-16, not 0; Adam
+    normalizes a gradient of any size, so left alone it walks the zeroed rows away from 0."""
+    graph, heat = _graph()
+    example = build_example("root", graph, heat)
+    column = FEATURE_NAMES.index("log1p_path_depth")
+    x = example.x.copy()
+    x[:, column] = np.log1p(2.0)
+    assert 0.0 < x[:, column].std() <= _LEGACY_FLOOR  # constant, yet the mean is not exact
+    model, _ = train_heat_model([dataclasses.replace(example, x=x)], seed=0)
+    assert np.array_equal(model.model.parameters()[0][column], np.zeros(64))
 
 
 def test_the_val_loss_still_belongs_to_the_returned_model_when_val_varies_a_constant_column() -> (
