@@ -209,7 +209,7 @@ on any other traced program — grackle's own training loop is inspectable with 
 the same thesis Phase 11 established for the demo, now applied to the tool learning about the
 user's own code. One seeded `np.random.default_rng(seed)` threads every `Linear` init and every
 epoch's minibatch shuffle (D10 discipline, ADR-0028 §5), so a run is fully reproducible from `seed`
-alone. Standardization stats (`mean`, `std`, with scale 1.0 for a column that was constant in training, T9-8) are computed once on the training
+alone. Standardization stats (`mean`, `std`, with scale 1.0, and zero first-layer weights, for a column that was constant in training, T9-8) are computed once on the training
 set and stored in the checkpoint (ADR-0030 §"Artifact format") — `predict` always standardizes
 against the *stored* stats, never against whatever batch it's currently scoring, verified by
 `test_predict_uses_stored_norm_stats_not_recomputed_from_input`.
@@ -282,8 +282,8 @@ features, not the corpus.
 **The bars, split in two.**
 
 - **Regression guard (passing):** mean model Spearman > 0.5 **and** margin ≥ −0.06 over the baseline,
-  4-fold, seeds 0/0 (margin +0.0064, headroom 0.066). The floor sits below the worst of the 100
-  draws (−0.0418), so it holds on every observed seed pair. It catches a model that has become worse
+  4-fold, seeds 0/0 (margin +0.0033, headroom 0.063). The floor sits below the worst of the 100
+  draws (−0.0441), so it holds on every observed seed pair. It catches a model that has become worse
   than the baseline; it does not establish that the model is better. Two mutation tests keep it
   honest (shuffled held-out labels, and an inverted model, must each trip it).
 - **The claim (strict xfail, F-12):** margin ≥ +0.05, k-fold. It fails today and is committed red so
@@ -294,9 +294,15 @@ features, not the corpus.
 The nightly `margin_sweep.py --folds 4` reports the distribution and never gates.
 
 **T9-8 (the 1e-8 standardization floor) is fixed, and re-measured 4-fold as this section asked.** A
-feature constant in training now has scale 1.0 (`heat_model.py::_scale_from_std`), and a checkpoint
-saved under the old floor is repaired on load. The old single-split reading (+0.0333) that blocked the
-fix under the +0.05 bar is moot. Over the same 100 pairs the mean margin moves from +0.001 to +0.006
-(median +0.009, range −0.042 to +0.041; mean model Spearman 0.810 against 0.805), and still no pair
-reaches +0.05, so the claim stays a strict xfail. The guard's numbers above are the post-fix ones; the
-−0.06 floor now has 0.018 to spare over the worst draw rather than 0.008.
+feature constant in training now has scale 1.0 (`heat_model.py::_scale_from_std`), and its
+first-layer weight rows are zeroed (`_zero_first_layer_rows`), before training and with that
+column's training input pinned to exactly 0 so Adam cannot move them. The scale bounds an unseen
+value and the zero rows make the model ignore it: with the scale alone the answer was bounded but
+arbitrary, since the weights were untrained init (a node marked async moved by 0.002 to 0.33 across
+seeds); now it does not move at all. A checkpoint saved under the old floor is repaired on load the
+same way. The old single-split reading (+0.0333) that blocked the fix under the +0.05 bar is moot.
+Over the same 100 pairs the mean margin moves from +0.001 to +0.006 (median +0.008, range −0.044 to
++0.042; mean model Spearman 0.811 against 0.805), and still no pair reaches +0.05, so the claim stays
+a strict xfail. Zeroing on top of the scale changed the distribution by almost nothing (mean +0.0056
+to +0.0059). The guard's numbers above are the post-fix ones; the −0.06 floor now has 0.016 to spare
+over the worst draw rather than 0.008.

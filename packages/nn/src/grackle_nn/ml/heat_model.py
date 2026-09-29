@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import numpy as np
+import numpy.typing as npt
 
 from grackle_nn.layers import Linear, ReLU
 from grackle_nn.losses import MSE
@@ -75,18 +76,42 @@ def _build_architecture(rng: np.random.Generator) -> Sequential:
     )
 
 
+def _is_constant(std: Array) -> npt.NDArray[np.bool_]:
+    """Which columns never varied in training: a std of 0, or a one-ulp residual of it.
+
+    ``_CONSTANT_STD`` is inclusive, because it is also what every checkpoint saved before test
+    campaign T9-8 stores for such a column. A NaN std is not constant, so bad training data
+    still surfaces.
+    """
+    constant: npt.NDArray[np.bool_] = std <= _CONSTANT_STD
+    return constant
+
+
 def _scale_from_std(std: Array) -> Array:
     """The divisor that standardizes a column: its std, or 1.0 if it was constant in training.
 
     A column that never varied (``is_async`` in a project with no async functions) has a std of
     0, or a one-ulp residual of it. Dividing by that turns the first value training never saw
     into ~1e8 and pins the prediction to a clip bound (test campaign T9-8). Scale 1.0 keeps the
-    input an ordinary 0/1 flag; training itself is unchanged, since ``x - mean`` is 0 there. A NaN
-    std is left alone so bad training data still surfaces. Idempotent, so it also repairs a
+    input an ordinary 0/1 flag, and keeps a huge unseen value finite so the zero weights of
+    ``_zero_first_layer_rows`` cannot turn it into ``inf * 0``. Idempotent, so it also repairs a
     checkpoint saved when the divisor was floored at ``_CONSTANT_STD`` instead.
     """
-    scale: Array = np.where(std <= _CONSTANT_STD, 1.0, std)
+    scale: Array = np.where(_is_constant(std), 1.0, std)
     return scale
+
+
+def _zero_first_layer_rows(model: Sequential, columns: npt.NDArray[np.bool_]) -> None:
+    """Make the model ignore *columns* outright, by zeroing their first-layer weight rows.
+
+    A column that was constant in training carried no signal, so its weights never moved from
+    their random init. Left there, the first unseen value (an ``async def`` added under ``serve
+    --watch``) is multiplied by arbitrary numbers and shifts that node's prediction by an amount
+    with no meaning (0.002 to 0.33 across seeds). Zero rows make the model answer as if the
+    column were still constant.
+    """
+    first_layer_weights = model.parameters()[0]
+    first_layer_weights[columns, :] = 0.0
 
 
 class HeatModel:
@@ -182,6 +207,10 @@ class HeatModel:
         model = _build_architecture(np.random.default_rng(0))
         for p, key in zip(model.parameters(), _EXPECTED_PARAM_SHAPES, strict=True):
             p[...] = params[key]
+        # A checkpoint saved before T9-8 stores exactly the old floor for a constant column, and
+        # its first-layer rows for that column are untrained init. Later checkpoints already have
+        # zero rows there, so this is a no-op for them.
+        _zero_first_layer_rows(model, _is_constant(norm_std))
         return cls(model, norm_mean, norm_std)
 
 
@@ -204,8 +233,13 @@ def train_heat_model(
     """
     x, y = stack(train)
     norm_mean: Array = x.mean(axis=0)
-    norm_std = _scale_from_std(x.std(axis=0))
+    raw_std = x.std(axis=0)
+    constant = _is_constant(raw_std)
+    norm_std = _scale_from_std(raw_std)
     x_std = (x - norm_mean) / norm_std
+    # Exactly 0, not the one-ulp residual of the mean: a zero input has an exactly zero gradient,
+    # and Adam's step is then exactly zero, so the zeroed rows below stay zero.
+    x_std[:, constant] = 0.0
     y_col = y.reshape(-1, 1)
 
     if val is not None:
@@ -218,6 +252,7 @@ def train_heat_model(
 
     rng = np.random.default_rng(seed)
     model = _build_architecture(rng)
+    _zero_first_layer_rows(model, constant)
     loss_fn = MSE()
     optimizer = Adam(model.parameters(), model.gradients(), lr=lr)
 

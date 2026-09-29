@@ -1,10 +1,10 @@
 {
   "id": "nn-heat-model-constant-boundary-exclusive",
-  "description": "T9-8: the constant-column test is `<` instead of `<=`, so the old floor value itself (1e-8, what every pre-fix checkpoint stores for a constant column) is no longer recognised and is not repaired at load.",
+  "description": "T9-8: the constant-column test is `<` instead of `<=`, so the old floor value itself (1e-8, what every pre-fix checkpoint stores for a constant column) is no longer recognised: not rescaled, and its rows not zeroed on load.",
   "target": {
     "file": "packages/nn/src/grackle_nn/ml/heat_model.py",
-    "find": "    scale: Array = np.where(std <= _CONSTANT_STD, 1.0, std)",
-    "replace": "    scale: Array = np.where(std < _CONSTANT_STD, 1.0, std)"
+    "find": "    constant: npt.NDArray[np.bool_] = std <= _CONSTANT_STD",
+    "replace": "    constant: npt.NDArray[np.bool_] = std < _CONSTANT_STD"
   },
   "suite": {
     "kind": "pytest",

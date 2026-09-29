@@ -1,0 +1,15 @@
+{
+  "id": "nn-heat-model-zeroing-hits-the-varying-columns",
+  "description": "T9-8b: the zeroing is applied to the columns that varied instead of the ones that were constant, so the model throws away everything it learned.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/ml/heat_model.py",
+    "find": "    first_layer_weights[columns, :] = 0.0",
+    "replace": "    first_layer_weights[~columns, :] = 0.0"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/ml/test_standardization_envelope.py"]
+  },
+  "expect": "killed"
+}

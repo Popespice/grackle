@@ -1,0 +1,15 @@
+{
+  "id": "nn-heat-model-load-zeroes-scale-one-columns",
+  "description": "T9-8b: HeatModel.load treats any std up to 1.0 as constant, so a column whose real std is exactly 1.0 (which is also what a constant column stores now) has its trained weights thrown away.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/ml/heat_model.py",
+    "find": "        _zero_first_layer_rows(model, _is_constant(norm_std))",
+    "replace": "        _zero_first_layer_rows(model, norm_std <= 1.0)"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/ml/test_standardization_envelope.py"]
+  },
+  "expect": "killed"
+}

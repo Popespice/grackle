@@ -1,0 +1,15 @@
+{
+  "id": "nn-heat-model-constant-rows-not-zeroed",
+  "description": "T9-8b: training never zeroes the first-layer rows of a constant column, so they keep their random init and an unseen value (an async def added under serve --watch) shifts that node's prediction by an arbitrary 0.002 to 0.33.",
+  "target": {
+    "file": "packages/nn/src/grackle_nn/ml/heat_model.py",
+    "find": "    _zero_first_layer_rows(model, constant)\n    loss_fn = MSE()",
+    "replace": "    loss_fn = MSE()"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": ["-q", "tests/ml/test_standardization_envelope.py"]
+  },
+  "expect": "killed"
+}
