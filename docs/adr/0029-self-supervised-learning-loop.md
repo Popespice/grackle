@@ -254,3 +254,44 @@ against the *stored* stats, never against whatever batch it's currently scoring,
 - **A larger real-trace corpus** — the synthetic/real split (§6) is a data-regime honesty measure
   given today's ~2 real trace-bearing fixtures; as more real traces accumulate (e.g. via the
   session store, ADR-0030 future work), the acceptance bar could migrate toward real data.
+
+## Amendment — k-fold acceptance (test campaign finding F-12, 2026-09-28)
+
+Where this amendment and §6 disagree, this amendment wins.
+
+**What §6 got wrong.** §6 measured the +0.05 margin at one split of two held-out graphs
+(split seed 0, train seed 0, margin +0.0557). The test campaign swept the same pipeline over 200
+`(split_seed, train_seed)` pairs (`packages/nn/scripts/margin_sweep.py`): 91% fell below +0.05, the
+median margin was +0.008, and only 57.5% were above zero. The acceptance test passed because seed 0
+is a favorable draw, not because the model beats the baseline.
+
+**Decision (owner, 2026-09-28): evaluate k-fold.** The acceptance test now holds every graph of the
+8-graph corpus out exactly once (4 folds of 2; each fold trains on the other 6, as before) and takes
+the margin as the mean over all 8 held-out graphs (`tests/ml/acceptance_eval.py::evaluate_kfold`).
+The seeds stay fixed at split 0 / train 0, and the escape hatch still applies: a flake lowers a bar,
+it never reshuffles the seeds.
+
+**What k-fold shows.** Over 100 `(split_seed, train_seed)` pairs the 4-fold mean margin is +0.001
+(median 0.000, range −0.052 to +0.039), and no pair reaches +0.05. The mean model Spearman is 0.806
+against 0.805 for raw in-degree. On this corpus the trained model **matches** the baseline; it does
+not beat it. §6's claim ("does the learned model beat this") is therefore not met, and k-fold cannot
+make it so: a mean-based bar at +0.05 fails on every draw. The signal exists (a model that knew the
+generator's noiseless formula beats the baseline by about +0.10), so the gap is in the model or
+features, not the corpus.
+
+**The bars, split in two.**
+
+- **Regression guard (passing):** mean model Spearman > 0.5 **and** margin ≥ −0.06 over the baseline,
+  4-fold, seeds 0/0 (margin +0.0118, headroom 0.072). The floor sits just below the worst of the 100
+  draws (−0.0517), so it holds on every observed seed pair. It catches a model that has become worse
+  than the baseline; it does not establish that the model is better. Two mutation tests keep it
+  honest (shuffled held-out labels, and an inverted model, must each trip it).
+- **The claim (strict xfail, F-12):** margin ≥ +0.05, k-fold. It fails today and is committed red so
+  that a model or feature improvement that really beats the baseline flips it; that change removes the
+  marker. Until then `predicted_heat` should be described as "no worse than in-degree on held-out
+  synthetic graphs", not "better".
+
+The nightly `margin_sweep.py --folds 4` reports the distribution and never gates. Consequence for
+T9-8 (the 1e-8 standardization floor): its fix was blocked because it moved the old single-split
+margin to +0.0333, under the old +0.05 bar. That bar no longer gates; re-measure T9-8's fix 4-fold when
+it lands.
