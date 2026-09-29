@@ -421,6 +421,29 @@ async def store_server(
     yield port, store, tmp_path / "recordings"
 
 
+async def _processed(ws: Any, tag: str) -> None:
+    """Round-trip a ping on *ws*. One connection's messages are handled in order,
+    so the pong proves every message sent before it -- including a
+    ``trace_session_end``'s awaited finalize, store row and all -- is done.
+    (A fixed sleep here lost that race on a slow Windows runner.)"""
+    await ws.send(json.dumps({"id": tag, "type": "ping", "payload": {}}))
+    async with asyncio.timeout(10):
+        while json.loads(await ws.recv()).get("id") != tag:
+            pass
+
+
+async def _registered(store: SessionStore, session_id: str, *, timeout: float = 5.0) -> None:
+    """Poll until the store has a row for *session_id*: for the tests whose
+    producer is gone (or has already been waited on) and so cannot ping. The row
+    is written after the recording is renamed into place, so the file existing
+    does not mean the row does."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while store.get_session(session_id) is None:
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError(f"timed out waiting for a store row for {session_id!r}")
+        await asyncio.sleep(0.01)
+
+
 async def test_live_session_recorded_to_store(
     store_server: tuple[int, SessionStore, Path],
 ) -> None:
@@ -432,7 +455,7 @@ async def test_live_session_recorded_to_store(
         for i in range(3):
             await producer.send(_make_trace_event(i))
         await producer.send(_make_session_end("rec-1", count=3))
-        await asyncio.sleep(0.1)
+        await _processed(producer, "rec-1-done")
 
     meta = store.get_session("rec-1")
     assert meta is not None
@@ -456,7 +479,7 @@ async def test_producer_disconnect_without_end_finalizes(
             await producer.send(_make_trace_event(i))
         # producer goes out of scope without sending trace_session_end.
 
-    await asyncio.sleep(0.2)
+    await _registered(store, "rec-2")
 
     meta = store.get_session("rec-2")
     assert meta is not None
@@ -528,7 +551,7 @@ async def test_two_sessions_back_to_back(
         await producer.send(_make_trace_event(0))
         await producer.send(_make_trace_event(1))
         await producer.send(_make_session_end("rec-b", count=2))
-        await asyncio.sleep(0.1)
+        await _processed(producer, "rec-b-done")
 
     meta_a = store.get_session("rec-a")
     meta_b = store.get_session("rec-b")
@@ -681,6 +704,7 @@ async def test_duplicate_session_id_second_producer_skipped(
         # A finishes cleanly.
         await producer_a.send(_make_session_end("rec-dup", count=1))
         await _wait_for(final)
+        await _registered(store, "rec-dup")
 
     meta = store.get_session("rec-dup")
     assert meta is not None
