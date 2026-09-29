@@ -3,7 +3,7 @@
 **Date drafted**: 2026-08-20
 **Under test**: `v0.12.0-phase-12` (main `c305deb`) — the entire stack
 **Environment**: macOS 26.5 / arm64 primary; CI matrix Ubuntu + Windows (+ macOS on main-push), Python 3.12/3.13, Node 22
-**Status**: EXECUTED — C0–C6 merged (2026-09-28); F-12 resolved by k-fold evaluation (see F-12); findings recorded here as tiers executed
+**Status**: EXECUTED — C0–C6 merged (2026-09-28); F-12 resolved by k-fold evaluation (see F-12), T9-8 / F-13a fixed; findings recorded here as tiers executed
 
 ## Lineage and doctrine
 
@@ -175,7 +175,7 @@ input spaces and, in two cases, exact oracles:
 | T9-5: `test_train.py:100` window alignment | Pins **final-epoch-only** accuracy while `test_traceability.py:195` uses min-over-last-5 — and the codebase itself documents why final-only is fragile. One line. **Done (C5):** the demo test now asserts `min(acc over the last 5 epochs) >= 0.95` — strictly stronger than final-only (actual: 0.9792 min, 0.9870 final; ≥0.95 continuously since epoch 50). | **Done (C5)** |
 | T9-6: checkpoint key-set pin | The `allow_pickle` history (a stray bool array written into every checkpoint on numpy 2.0/2.1) would be caught by exactly one thing — asserting the written npz's **key set** — which no test does. **Done (C5) — pinned.** The exact key/dtype/shape table for `HeatModel.save` (10 keys) and `Sequential.save` (p0..p5), checked through both the ZIP directory and `np.load(allow_pickle=False)`, on direct saves and on the production path (`ml_bridge.train_and_save` → `predict_scores`); stray-key specs killed. | **Done (C5)** |
 | T9-7: numpy floor matrix | Declared `numpy>=2,<3`; locked 2.5.2; CI runs `--frozen` everywhere — **the 2.0/2.1 regime the code comments about is exercised by nothing**, `packages/nn` isn't even Dependabot-covered, and only two value-sensitive assertions defend demo convergence against a BLAS change (one of them the weak T9-5). Probe: a `ci-matrix.yml` main-push leg syncing `numpy==2.0.x` / `2.1.x` and running the nn suite. **Done (C5):** two `ci-matrix.yml` main-push legs sync the lock, swap numpy to 2.0.* / 2.1.*, and run the nn suite. Probed first on macOS arm64: 212 passed on both floors (including the new T10-2 golden and the acceptance test), with 276 spurious matmul `RuntimeWarning`s the locked 2.5 does not emit — consistent with numpy <2.2's Accelerate floating-point flags, not a correctness failure. | **Done (C5)** |
-| T9-8 (new, C5): the 1e-8 std floor | `train_heat_model` sets `norm_std = max(std, 1e-8)`, so a feature constant in training (e.g. `is_async` in a project with no async functions) reaches the MLP as `(1 − 0)/1e-8 = 1e8` the moment an unseen value appears. With `grackle learn`'s defaults, marking one node async moved its predicted heat from 0.44 to 0.0. Ledgered strict-xfail (`tests/ml/test_standardization_envelope.py`, with a precondition test so it cannot pass for the wrong reason). **Entangled with T9-1:** the obvious fix (scale 1.0 for zero-variance columns) turns the acceptance test red (margin +0.0333), so it could not land before the T9-1 decision. T9-1 is decided (k-fold; the old +0.05 bar no longer gates), so the entanglement is lifted; re-measure the fix 4-fold when it lands. See F-13. | **Confirmed, ledgered (C5)** |
+| T9-8 (new, C5): the 1e-8 std floor | `train_heat_model` sets `norm_std = max(std, 1e-8)`, so a feature constant in training (e.g. `is_async` in a project with no async functions) reaches the MLP as `(1 − 0)/1e-8 = 1e8` the moment an unseen value appears. With `grackle learn`'s defaults, marking one node async moved its predicted heat from 0.44 to 0.0. Ledgered strict-xfail in C5 (`tests/ml/test_standardization_envelope.py`, with a precondition test so it cannot pass for the wrong reason), **entangled with T9-1** until that was decided. **Fixed (2026-09-28):** a column constant in training now has scale 1.0, and a checkpoint saved under the old floor is repaired on load. The xfail is now a passing test beside five new ones, and six mutation specs pin the rule. Re-measured 4-fold, the fix moves the mean margin from +0.001 to +0.006 and the (0, 0) draw from +0.0118 to +0.0064; it also removes the one-ulp residual behind the T10-2 drift (4.3e-8 to 4.3e-15 at 2 ulp), so that golden is regenerated and its band tightens from 1e-6 to 1e-10. See F-13. | **Fixed (2026-09-28)** |
 
 ### T10 — Cross-platform byte discipline
 
@@ -582,7 +582,8 @@ none reaching +0.05; mean model Spearman 0.806 vs 0.805 for raw in-degree. **The
 baseline; it does not beat it.** So the bar was split:
 
 - a passing **regression guard** — mean Spearman > 0.5 and margin ≥ −0.06 (just below the worst of the
-  100 draws, so it holds on every observed pair; the test's own draw is +0.0118), with mutation tests
+  100 draws, so it holds on every observed pair; the test's own draw is +0.0118, or +0.0064 after
+  T9-8's fix), with mutation tests
   for shuffled labels and an inverted model;
 - ADR-0029's **+0.05 claim** as a strict xfail (`test_kfold_model_beats_degree_baseline`), committed
   red so a model or feature improvement that really beats the baseline flips it.
@@ -596,7 +597,7 @@ is "no worse than in-degree on held-out synthetic graphs", not "better".
 
 | # | Defect | Location | Fix direction | Severity |
 |---|---|---|---|---|
-| a | **The 1e-8 std floor**: a feature constant in training reaches the MLP as ~1e8 when an unseen value appears; one async node's predicted heat went 0.44 → 0.0 (T9-8) | `grackle_nn/ml/heat_model.py` `train_heat_model` | scale 1.0 for zero-variance columns (existing checkpoints keep 1e-8 and need re-learning). It turned the old single-split acceptance test red (+0.0333); that bar no longer gates (F-12 is resolved), so this is unblocked — re-measure it 4-fold when it lands | **Medium** — silently wrong predictions for async functions, decorators, dunders, inherit or cross-language edges absent from training, under `serve --watch` or when a model scores another project |
+| a | **The 1e-8 std floor**: a feature constant in training reaches the MLP as ~1e8 when an unseen value appears; one async node's predicted heat went 0.44 → 0.0 (T9-8) | `grackle_nn/ml/heat_model.py` `train_heat_model` | **Fixed (2026-09-28):** scale 1.0 for a column constant in training, applied in `train_heat_model` and again when a checkpoint loads, so existing checkpoints are repaired without re-learning. It had turned the old single-split acceptance test red (+0.0333); re-measured 4-fold it moves the mean margin from +0.001 to +0.006, still short of +0.05. The response to an unseen flag is now bounded but arbitrary, since that column's first-layer weights were never trained | **Medium** (fixed) — was silently wrong predictions for async functions, decorators, dunders, inherit or cross-language edges absent from training, under `serve --watch` or when a model scores another project |
 | b | ReLU's multiplicative mask: `ReLU(-inf)` is nan, and an infinite gradient at an inactive unit comes back nan (2 xfails) | `grackle_nn/layers.py` ReLU | `np.maximum(x, 0.0)` / `np.where(mask, grad, 0.0)` — verified to flip exactly those two tests with the rest of the suite (golden traces included) green | Low — latent; needs an already-diverged activation |
 
 ### F-14 — Agent: safe_repr runs user code; a symlink aborts the parse (T8-1, T8-3, T8-4)
