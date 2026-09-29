@@ -50,8 +50,10 @@ golden traces; `dataset.py` splits train/val by whole graph, never by node; `met
 pure-numpy Spearman + top-k overlap (no scipy); `heat_model.py` trains the Phase-11 MLP
 architecture (`Linear(35,64)→ReLU→Linear(64,32)→ReLU→Linear(32,1)`, Adam+MSE) wired to the
 `record_epoch` beacon, with an atomic, two-pass-validated `heat-model.npz` checkpoint format. A
-seeded synthetic-corpus acceptance test proves the trained model beats a raw-in-degree Spearman
-baseline on held-out graphs by a documented margin; a real-fixture smoke test (no held-out baseline
+seeded synthetic-corpus acceptance test compares the trained model to a raw-in-degree Spearman
+baseline on held-out graphs (as shipped it claimed to beat it by a documented margin; the test
+campaign's F-12 showed that was seed luck, and k-fold evaluation shows the model matches the baseline);
+a real-fixture smoke test (no held-out baseline
 — only ~2 real trace-bearing fixtures exist) covers Python plus the polyglot Go/Rust/Node goldens.
 Import-hygiene is enforced by a fresh-subprocess + AST-scan test pair (`grackle_nn.ml` never
 imports `grackle` at runtime). 84 test functions across 8 files. An 8-angle, 58-agent adversarial
@@ -165,7 +167,7 @@ bidirectional: the agent's lock pins editable `grackle-nn`, the nn package's loc
 | 3 | **35-column feature vector, versioned.** `extract_features` computes all 35 columns from a raw graph dict only (never enriched metadata); `FEATURE_VERSION` gates the column layout; pinned by an exact-literal test on two hand-computed node rows. | **12.1 ✓** automated |
 | 4 | **Label correctness and cross-platform stability.** `make_targets`'s per-graph max-normalized log heat uses one `np.log1p` implementation for numerator and denominator (never a `math`/`numpy` mix), pinned exact (not tolerance) across ten magnitudes. | **12.1 / 12.2 ✓** automated |
 | 5 | **Anti-leakage split.** `split_by_graph` moves whole graphs, never nodes; executable test proves no graph's rows straddle the split. | **12.1 ✓** automated |
-| 6 | **Model beats a from-scratch baseline.** A seeded synthetic-corpus acceptance test proves the trained model's held-out Spearman beats raw in-degree by a documented margin; a mutation test (shuffled labels) proves the bar isn't vacuous. | **12.1 ✓** automated |
+| 6 | **Model beats a from-scratch baseline.** A seeded synthetic-corpus acceptance test proves the trained model's held-out Spearman beats raw in-degree by a documented margin; a mutation test (shuffled labels) proves the bar isn't vacuous. **Corrected (F-12, 2026-09-28):** the margin was seed luck; k-fold over all 8 graphs shows the model matches raw in-degree, and the +0.05 claim is now a strict xfail beside a passing regression guard (ADR-0029 amendment). | **12.1: the "beats" half is not met (F-12)** |
 | 7 | **Labels mirror the agent exactly.** `heat_from_jsonl` reproduces the agent's `TraceAggregates.cumulative_heat_all` byte-for-byte on all 5 committed golden traces. | **12.1 ✓** automated |
 | 8 | **`nn.ml` never imports `grackle` at runtime.** Fresh-subprocess + AST-scan test pair (not regex — catches comma/alias/`TYPE_CHECKING` forms). | **12.1 ✓** automated |
 | 9 | **`ml_bridge` gate mirrors the toolchain precedent.** Cached availability check, remediation message, reset hook — same shape as the Go/Rust capability gates; a broken/absent `grackle-nn` degrades to a clean CLI error, never a traceback. | **12.2 ✓** automated |

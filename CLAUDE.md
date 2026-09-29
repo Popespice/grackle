@@ -147,7 +147,7 @@ whole run in memory and lose it all on a kill; `JsonlPartWriter` now writes per-
 file with atomic finalize; ADR-0020 amendment, no new ADR) — **SHIPPED PR #76, main=`6d89fd6`**;
 **12.1** — ML pipeline (35-column structural features, max-normalized log-heat labels,
 from-scratch Spearman/top-k metrics, an independent Tarjan/BFS reimplementation, a seeded
-synthetic-corpus acceptance bar beating a raw-in-degree baseline, ADR-0029) — **SHIPPED PR #77,
+synthetic-corpus acceptance test against a raw-in-degree baseline, ADR-0029 — evaluated k-fold since the test campaign's F-12: the model *matches* the baseline and the +0.05 beat is a ledgered strict xfail) — **SHIPPED PR #77,
 main=`604e245`**; **12.2** — `grackle learn` CLI + capability-gated `predicted_heat`
 (`src/grackle/ml_bridge.py`, a toolchain-style gate mirroring `go_runtime`/`rust_runtime`; absence
 is byte-identical whether the model is missing, the gate is closed, or the model is broken; ADR-0030)
