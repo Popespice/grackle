@@ -3,7 +3,7 @@
 **Date drafted**: 2026-08-20
 **Under test**: `v0.12.0-phase-12` (main `c305deb`) — the entire stack
 **Environment**: macOS 26.5 / arm64 primary; CI matrix Ubuntu + Windows (+ macOS on main-push), Python 3.12/3.13, Node 22
-**Status**: EXECUTED — C0–C6 built; C3–C6 open as stacked PRs for the owner's review; findings recorded here as tiers executed
+**Status**: EXECUTED — C0–C6 merged (2026-09-28); F-12 resolved by k-fold evaluation (see F-12); findings recorded here as tiers executed
 
 ## Lineage and doctrine
 
@@ -168,14 +168,14 @@ input spaces and, in two cases, exact oracles:
 
 | Probe | Fails if | Status |
 |---|---|---|
-| T9-1: acceptance-margin telemetry | The bar sits at +0.05 with a **measured single-point margin of ~0.056** — 0.006 of headroom — and both computed metrics are consumed by bare asserts; `top10` is computed and **discarded**. Probe: emit margin + top10 on the passing path (minutes of work); nightly N-seed sweep over `(split_rng, train_seed)` characterizing the margin *distribution* — additive, per ADR-0029's never-unseed rule. Fails if the distribution's lower tail crosses the bar — i.e. the bar is a coin-flip, discovered before CI discovers it for us. **Done (C5) — the finding is worse than a coin-flip.** The passing path now reports margin, headroom and top10 (seeds and bars unchanged; margin bit-identical at +0.05565). A new `scripts/margin_sweep.py` (nightly, report-only) measured 200 joint seed pairs: **91% fall below the +0.05 bar**, median margin +0.008, only 57.5% above zero — the test passes on roughly a 1-in-11 draw, and on held-out graphs the model is statistically indistinguishable from raw in-degree. See **F-12** — an owner decision under ADR-0029's escape hatch. | **Confirmed (C5) — owner decision** |
+| T9-1: acceptance-margin telemetry | The bar sits at +0.05 with a **measured single-point margin of ~0.056** — 0.006 of headroom — and both computed metrics are consumed by bare asserts; `top10` is computed and **discarded**. Probe: emit margin + top10 on the passing path (minutes of work); nightly N-seed sweep over `(split_rng, train_seed)` characterizing the margin *distribution* — additive, per ADR-0029's never-unseed rule. Fails if the distribution's lower tail crosses the bar — i.e. the bar is a coin-flip, discovered before CI discovers it for us. **Done (C5) — the finding is worse than a coin-flip.** The passing path now reports margin, headroom and top10 (seeds and bars unchanged; margin bit-identical at +0.05565). A new `scripts/margin_sweep.py` (nightly, report-only) measured 200 joint seed pairs: **91% fall below the +0.05 bar**, median margin +0.008, only 57.5% above zero — the test passes on roughly a 1-in-11 draw, and on held-out graphs the model is statistically indistinguishable from raw in-degree. See **F-12** — an owner decision under ADR-0029's escape hatch. | **Confirmed (C5); resolved: owner chose k-fold — the +0.05 claim is now a strict xfail beside a passing regression guard (see F-12)** |
 | T9-2: SoftmaxCE `backward()` at extreme logits | Forward at `|logits|~1e4` is tested for *finiteness only*, one input, argmax-is-correct-class only; **backward at saturation is tested by nothing**, and the gradcheck runs at `standard_normal` magnitude (finite differences are useless at 1e4 — needs the analytic `(probs − onehot)/B` oracle). **Done (C5) — pinned.** Backward at ±1e2..1e4, ties, mixed scales and underflow matches `(softmax − onehot)/B` computed in 60-digit `decimal` from the exact float inputs (rtol 1e-12), plus a hypothesis property; 2 specs killed. | **Done (C5)** |
 | T9-3: Adam with non-constant gradients | The only Adam test uses a constant gradient, where bias correction cancels **exactly** — and Adam is the optimizer the shipped `train_heat_model` actually uses; the well-tested SGD is the one the demo uses. Sign-flipping/varying gradient sequences against a NumPy reference implementation, steps 1..N. **Done in C3 via T4-5** — see the T4-5 row (the premise about which bug the old test misses was corrected). | **Done (C3)** |
 | T9-4: ReLU/Tanh boundary sweep | `x == 0.0` subgradient convention unpinned (gradcheck *deliberately* excludes the kink, correctly — but nothing else covers it); Tanh saturation/±inf/nan unswept. **Done (C5).** ReLU's subgradient at exactly 0 is 0 (including ±5e-324 and −0.0), nan propagates forward and its gradient is blocked; Tanh saturates to exactly ±1 with slope exactly 0 for |x| ≥ 22, including ±inf; 3 specs killed. **Ledgered F-13 b** (2 xfails): ReLU's multiplicative mask turns `-inf` into nan, and an infinite upstream gradient at an inactive unit into nan. | **Done (C5); 1 defect ledgered** |
 | T9-5: `test_train.py:100` window alignment | Pins **final-epoch-only** accuracy while `test_traceability.py:195` uses min-over-last-5 — and the codebase itself documents why final-only is fragile. One line. **Done (C5):** the demo test now asserts `min(acc over the last 5 epochs) >= 0.95` — strictly stronger than final-only (actual: 0.9792 min, 0.9870 final; ≥0.95 continuously since epoch 50). | **Done (C5)** |
 | T9-6: checkpoint key-set pin | The `allow_pickle` history (a stray bool array written into every checkpoint on numpy 2.0/2.1) would be caught by exactly one thing — asserting the written npz's **key set** — which no test does. **Done (C5) — pinned.** The exact key/dtype/shape table for `HeatModel.save` (10 keys) and `Sequential.save` (p0..p5), checked through both the ZIP directory and `np.load(allow_pickle=False)`, on direct saves and on the production path (`ml_bridge.train_and_save` → `predict_scores`); stray-key specs killed. | **Done (C5)** |
 | T9-7: numpy floor matrix | Declared `numpy>=2,<3`; locked 2.5.2; CI runs `--frozen` everywhere — **the 2.0/2.1 regime the code comments about is exercised by nothing**, `packages/nn` isn't even Dependabot-covered, and only two value-sensitive assertions defend demo convergence against a BLAS change (one of them the weak T9-5). Probe: a `ci-matrix.yml` main-push leg syncing `numpy==2.0.x` / `2.1.x` and running the nn suite. **Done (C5):** two `ci-matrix.yml` main-push legs sync the lock, swap numpy to 2.0.* / 2.1.*, and run the nn suite. Probed first on macOS arm64: 212 passed on both floors (including the new T10-2 golden and the acceptance test), with 276 spurious matmul `RuntimeWarning`s the locked 2.5 does not emit — consistent with numpy <2.2's Accelerate floating-point flags, not a correctness failure. | **Done (C5)** |
-| T9-8 (new, C5): the 1e-8 std floor | `train_heat_model` sets `norm_std = max(std, 1e-8)`, so a feature constant in training (e.g. `is_async` in a project with no async functions) reaches the MLP as `(1 − 0)/1e-8 = 1e8` the moment an unseen value appears. With `grackle learn`'s defaults, marking one node async moved its predicted heat from 0.44 to 0.0. Ledgered strict-xfail (`tests/ml/test_standardization_envelope.py`, with a precondition test so it cannot pass for the wrong reason). **Entangled with T9-1:** the obvious fix (scale 1.0 for zero-variance columns) turns the acceptance test red (margin +0.0333), so it cannot land before the T9-1 decision. See F-13. | **Confirmed, ledgered (C5)** |
+| T9-8 (new, C5): the 1e-8 std floor | `train_heat_model` sets `norm_std = max(std, 1e-8)`, so a feature constant in training (e.g. `is_async` in a project with no async functions) reaches the MLP as `(1 − 0)/1e-8 = 1e8` the moment an unseen value appears. With `grackle learn`'s defaults, marking one node async moved its predicted heat from 0.44 to 0.0. Ledgered strict-xfail (`tests/ml/test_standardization_envelope.py`, with a precondition test so it cannot pass for the wrong reason). **Entangled with T9-1:** the obvious fix (scale 1.0 for zero-variance columns) turns the acceptance test red (margin +0.0333), so it could not land before the T9-1 decision. T9-1 is decided (k-fold; the old +0.05 bar no longer gates), so the entanglement is lifted; re-measure the fix 4-fold when it lands. See F-13. | **Confirmed, ledgered (C5)** |
 
 ### T10 — Cross-platform byte discipline
 
@@ -534,7 +534,7 @@ together; 5–11 are one-line guards each (#11: catch `ValueError` beside `OSErr
 - Live ingest runs at about 0.46 ms per event with no consumers attached (~2k events/s). Not
   investigated.
 
-### F-12 — The ADR-0029 acceptance bar passes on roughly one seed pair in eleven (T9-1)
+### F-12 — The ADR-0029 acceptance bar passes on roughly one seed pair in eleven (T9-1) — resolved: k-fold
 
 **Location.** `packages/nn/tests/ml/test_synthetic_acceptance.py` (now via the shared
 `tests/ml/acceptance_eval.py`), against the bar ADR-0029 set: mean model Spearman > 0.5 **and**
@@ -572,11 +572,31 @@ quality finding and improve the model/features until the bar holds on most draws
 evidence that `predicted_heat` beats a trivial baseline, and today that evidence is one
 favorable seed.
 
+**Resolution (owner chose k-fold, 2026-09-28).** The acceptance test now holds every graph of the
+8-graph corpus out once (4 folds of 2, seeds still 0/0) and takes the margin over all 8
+(`evaluate_kfold` in `tests/ml/acceptance_eval.py`; ADR-0029 has an amendment). Measuring it first
+showed that k-fold does not rescue the +0.05 bar, which this entry's "Fix" paragraph undersold: the
+200-pair sweep's *mean* margin was already +0.002, so a mean-based bar at +0.05 fails on every draw.
+Over 100 `(split, train)` pairs the 4-fold margin is +0.001 (median 0.000, range −0.052 to +0.039),
+none reaching +0.05; mean model Spearman 0.806 vs 0.805 for raw in-degree. **The model matches the
+baseline; it does not beat it.** So the bar was split:
+
+- a passing **regression guard** — mean Spearman > 0.5 and margin ≥ −0.06 (just below the worst of the
+  100 draws, so it holds on every observed pair; the test's own draw is +0.0118), with mutation tests
+  for shuffled labels and an inverted model;
+- ADR-0029's **+0.05 claim** as a strict xfail (`test_kfold_model_beats_degree_baseline`), committed
+  red so a model or feature improvement that really beats the baseline flips it.
+
+Three new mutation specs (225 in total) pin the k-fold evaluator (no graph trained on its own
+held-out fold; every fold used) and the floor. `margin_sweep.py --folds 4` is what the nightly now
+runs. What remains open is the product claim: until the model or features improve, `predicted_heat`
+is "no worse than in-degree on held-out synthetic graphs", not "better".
+
 ### F-13 — Numerics: two defects in the nn package (T9-4, T9-8)
 
 | # | Defect | Location | Fix direction | Severity |
 |---|---|---|---|---|
-| a | **The 1e-8 std floor**: a feature constant in training reaches the MLP as ~1e8 when an unseen value appears; one async node's predicted heat went 0.44 → 0.0 (T9-8) | `grackle_nn/ml/heat_model.py` `train_heat_model` | scale 1.0 for zero-variance columns (existing checkpoints keep 1e-8 and need re-learning) — but this turns the acceptance test red, so it waits on F-12 | **Medium** — silently wrong predictions for async functions, decorators, dunders, inherit or cross-language edges absent from training, under `serve --watch` or when a model scores another project |
+| a | **The 1e-8 std floor**: a feature constant in training reaches the MLP as ~1e8 when an unseen value appears; one async node's predicted heat went 0.44 → 0.0 (T9-8) | `grackle_nn/ml/heat_model.py` `train_heat_model` | scale 1.0 for zero-variance columns (existing checkpoints keep 1e-8 and need re-learning). It turned the old single-split acceptance test red (+0.0333); that bar no longer gates (F-12 is resolved), so this is unblocked — re-measure it 4-fold when it lands | **Medium** — silently wrong predictions for async functions, decorators, dunders, inherit or cross-language edges absent from training, under `serve --watch` or when a model scores another project |
 | b | ReLU's multiplicative mask: `ReLU(-inf)` is nan, and an infinite gradient at an inactive unit comes back nan (2 xfails) | `grackle_nn/layers.py` ReLU | `np.maximum(x, 0.0)` / `np.where(mask, grad, 0.0)` — verified to flip exactly those two tests with the rest of the suite (golden traces included) green | Low — latent; needs an already-diverged activation |
 
 ### F-14 — Agent: safe_repr runs user code; a symlink aborts the parse (T8-1, T8-3, T8-4)

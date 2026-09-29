@@ -1,14 +1,17 @@
 """Sweep the ADR-0029 synthetic-acceptance margin over many seeds (campaign T9-1).
 
-The acceptance test (``tests/ml/test_synthetic_acceptance.py``) trains once, at
-split seed 0 and train seed 0, and asserts ``mean_model >= mean_baseline +
-0.05`` and ``mean_model > 0.5`` over the two held-out graphs. That is a single
-draw. Its margin (``mean_model - mean_baseline``) is about +0.056, so the bar
-has about 0.006 of headroom at that one point, and nothing says how typical
-that point is. This script answers that question. It runs the test's own
-pipeline (``tests/ml/acceptance_eval.py``, the same corpus, split, training and
-scoring code) over N ``(split_seed, train_seed)`` pairs and reports the
-distribution of the margin.
+The acceptance test (``tests/ml/test_synthetic_acceptance.py``) trains at split
+seed 0 and train seed 0 and checks the margin (``mean_model - mean_baseline``)
+against two bars: a regression guard (``_MARGIN_FLOOR``) and ADR-0029's claim
+(``_MARGIN_BAR``, +0.05, strict-xfail as finding F-12). A single draw says
+nothing about how typical it is. This script answers that question. It runs the
+test's own pipeline (``tests/ml/acceptance_eval.py``, the same corpus, split,
+training and scoring code) over N ``(split_seed, train_seed)`` pairs and reports
+the distribution of the margin.
+
+By default each pair is the original protocol: one split, two held-out graphs.
+With ``--folds K`` each pair is a K-fold evaluation (the test's protocol, with
+K=4): every graph is held out once, and the margin is the mean over all of them.
 
 It is additive. ADR-0029 §6 forbids re-seeding the acceptance test, and this
 script does not touch it: it only measures how the fixed test sits within the
@@ -35,6 +38,10 @@ Options:
     so only the weight init and minibatch order change. With the default
     ``--start 0`` every mode includes ``(0, 0)``, the test's own draw, and its
     margin is printed alongside the distribution.
+``--folds K``
+    Evaluate each pair K-fold over the whole corpus (``evaluate_kfold``) instead
+    of on one split of two graphs. ``--folds 4`` is what the acceptance test
+    runs. Default 0: the single split. A run costs K trainings.
 ``--json PATH``
     Also write the configuration, the summary and every run to PATH.
 ``--max-fraction-below F``
@@ -43,10 +50,10 @@ Options:
 
 The summary gives min / p5 / p25 / median / mean / max of the margin (p5 and
 p25 are ``numpy.percentile``'s linear interpolation), the fraction of runs below
-the +0.05 margin bar, the fraction below the absolute 0.5 bar, the fraction
-that would fail the test (either bar), the mean top-10 overlap, and the five
-worst pairs. The bars are imported from the test module, so the sweep always
-measures against the test's actual thresholds.
+the +0.05 claim bar, below the regression-guard floor, below the absolute 0.5
+bar, the fraction that would fail the guard (floor or absolute), the mean top-10
+overlap, and the five worst pairs. The bars are imported from the test module,
+so the sweep always measures against the test's actual thresholds.
 
 The pipeline modules live in ``tests/ml``, which this script puts on
 ``sys.path`` at run time; type-check it together with them, as
@@ -78,6 +85,7 @@ type Mode = Literal["joint", "split", "train"]
 @dataclass(frozen=True, slots=True)
 class Bars:
     margin: float
+    floor: float
     absolute: float
 
 
@@ -90,9 +98,9 @@ def _import_pipeline() -> Bars:
     """
     if str(_TESTS_ML) not in sys.path:
         sys.path.insert(0, str(_TESTS_ML))
-    from test_synthetic_acceptance import _ABSOLUTE_BAR, _MARGIN_BAR
+    from test_synthetic_acceptance import _ABSOLUTE_BAR, _MARGIN_BAR, _MARGIN_FLOOR
 
-    return Bars(margin=_MARGIN_BAR, absolute=_ABSOLUTE_BAR)
+    return Bars(margin=_MARGIN_BAR, floor=_MARGIN_FLOOR, absolute=_ABSOLUTE_BAR)
 
 
 def seed_pairs(mode: Mode, start: int, count: int) -> list[tuple[int, int]]:
@@ -109,8 +117,9 @@ def summarize(runs: Sequence[AcceptanceRun], bars: Bars) -> dict[str, Any]:
     """Distribution statistics over *runs*, with each bar applied as the test applies it."""
     margins = np.array([r.margin for r in runs], dtype=np.float64)
     below_margin = [r.mean_model < r.mean_baseline + bars.margin for r in runs]
+    below_floor = [r.mean_model < r.mean_baseline + bars.floor for r in runs]
     below_absolute = [not r.mean_model > bars.absolute for r in runs]
-    failing = [m or a for m, a in zip(below_margin, below_absolute, strict=True)]
+    failing = [f or a for f, a in zip(below_floor, below_absolute, strict=True)]
     worst = sorted(runs, key=lambda r: r.margin)[:5]
     return {
         "n": len(runs),
@@ -122,8 +131,9 @@ def summarize(runs: Sequence[AcceptanceRun], bars: Bars) -> dict[str, Any]:
         "margin_std": float(margins.std(ddof=1)) if len(runs) > 1 else 0.0,
         "margin_max": float(margins.max()),
         "fraction_below_margin_bar": sum(below_margin) / len(runs),
+        "fraction_below_margin_floor": sum(below_floor) / len(runs),
         "fraction_below_absolute_bar": sum(below_absolute) / len(runs),
-        "fraction_failing_test": sum(failing) / len(runs),
+        "fraction_failing_guard": sum(failing) / len(runs),
         "mean_model_min": min(r.mean_model for r in runs),
         "mean_top10": float(np.mean([r.mean_top10 for r in runs])),
         "min_top10": min(r.mean_top10 for r in runs),
@@ -157,9 +167,10 @@ def _print_summary(summary: dict[str, Any], bars: Bars, runs: Sequence[Acceptanc
         f"std {summary['margin_std']:.4f}"
     )
     print(
-        f"  below margin bar ({bars.margin:+.2f}): {summary['fraction_below_margin_bar']:.1%}   "
+        f"  below claim bar ({bars.margin:+.2f}): {summary['fraction_below_margin_bar']:.1%}   "
+        f"below guard floor ({bars.floor:+.2f}): {summary['fraction_below_margin_floor']:.1%}   "
         f"below absolute bar (>{bars.absolute}): {summary['fraction_below_absolute_bar']:.1%}   "
-        f"would fail the test: {summary['fraction_failing_test']:.1%}"
+        f"would fail the guard: {summary['fraction_failing_guard']:.1%}"
     )
     print(f"  top-10 overlap: mean {summary['mean_top10']:.3f}   min {summary['min_top10']:.3f}")
     worst = ", ".join(
@@ -182,6 +193,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--seeds", type=int, default=50, help="number of seed pairs (default 50)")
     parser.add_argument("--start", type=int, default=0, help="first seed (default 0)")
     parser.add_argument("--mode", choices=("joint", "split", "train"), default="joint")
+    parser.add_argument(
+        "--folds",
+        type=int,
+        default=0,
+        help="evaluate each pair K-fold over the whole corpus (0: one split, the default)",
+    )
     parser.add_argument("--json", type=Path, default=None, help="write full results here")
     parser.add_argument(
         "--max-fraction-below",
@@ -192,9 +209,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.seeds < 1:
         parser.error("--seeds must be at least 1")
+    if args.folds == 1 or args.folds < 0:
+        parser.error("--folds must be 0 (a single split) or at least 2")
 
     bars = _import_pipeline()
-    from acceptance_eval import EPOCHS, build_corpus, evaluate
+    from acceptance_eval import EPOCHS, build_corpus, evaluate, evaluate_kfold
 
     mode: Mode = args.mode
     pairs = seed_pairs(mode, args.start, args.seeds)
@@ -202,11 +221,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     runs: list[AcceptanceRun] = []
     started = time.perf_counter()
     for i, (split_seed, train_seed) in enumerate(pairs, start=1):
-        run = evaluate(examples, split_seed=split_seed, train_seed=train_seed)
+        if args.folds:
+            run = evaluate_kfold(
+                examples, split_seed=split_seed, train_seed=train_seed, folds=args.folds
+            )
+        else:
+            run = evaluate(examples, split_seed=split_seed, train_seed=train_seed)
         runs.append(run)
         print(
             f"[{i}/{len(pairs)}] split={split_seed} train={train_seed} "
-            f"val={','.join(run.val_names)} margin={run.margin:+.4f} "
+            f"held_out={len(run.val_names)} margin={run.margin:+.4f} "
             f"model={run.mean_model:.4f} top10={run.mean_top10:.2f}",
             file=sys.stderr,
         )
@@ -222,8 +246,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "mode": mode,
                 "start": args.start,
                 "seeds": args.seeds,
+                "folds": args.folds,
                 "epochs": EPOCHS,
                 "margin_bar": bars.margin,
+                "margin_floor": bars.floor,
                 "absolute_bar": bars.absolute,
                 "numpy": np.__version__,
                 "platform": sys.platform,

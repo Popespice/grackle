@@ -10,8 +10,9 @@ name: Campaign (nightly)
 #                   by default; each has a small unmarked sibling in the gate)
 #   properties      both Python suites under the "nightly" hypothesis profile
 #                   (5000 examples, fresh randomness) instead of the gate's "ci"
-#   margin-sweep    the ADR-0029 acceptance margin over 200 seed pairs, as a
-#                   distribution (T9-1) — report-only, uploaded as an artifact
+#   margin-sweep    the ADR-0029 acceptance margin, evaluated 4-fold over 100
+#                   seed pairs, as a distribution (T9-1) — report-only, uploaded
+#                   as an artifact
 
 on:
   schedule:
@@ -192,17 +193,19 @@ jobs:
       - name: Codegen
         run: pnpm codegen
 
-      # Report-only: the sweep exits 0 regardless of the distribution. The
-      # C5 measurement put 91% of seed pairs below the +0.05 bar, so a gating
-      # threshold here would only restate that finding every night; the bar
-      # itself is an owner decision under ADR-0029.
-      - name: Sweep the acceptance margin over 200 seed pairs
+      # Report-only: the sweep exits 0 regardless of the distribution. Evaluated
+      # 4-fold (the acceptance test's own protocol, ADR-0029's k-fold
+      # amendment) the margin is centred on zero: the model matches the
+      # in-degree baseline and does not beat it (finding F-12). A gating
+      # threshold on the +0.05 claim would only restate that every night; the
+      # regression guard is enforced by the gate test, at fixed seeds.
+      - name: Sweep the acceptance margin, 4-fold, over 100 seed pairs
         working-directory: packages/nn
         run: |
           uv sync --frozen
-          uv run python scripts/margin_sweep.py --seeds 200 --json margin-sweep.json | tee margin-sweep.txt
+          uv run python scripts/margin_sweep.py --seeds 100 --folds 4 --json margin-sweep.json | tee margin-sweep.txt
           {
-            echo '## ADR-0029 acceptance margin, 200 seed pairs'
+            echo '## ADR-0029 acceptance margin, 4-fold, 100 seed pairs'
             echo '```'
             cat margin-sweep.txt
             echo '```'

@@ -1,0 +1,20 @@
+{
+  "id": "nn-acceptance-margin-floor-vacuous",
+  "description": "F-12: the regression guard's margin floor is -2.0 instead of -0.06, so a model far worse than the baseline still clears it. The inverted-model test must catch it (the shuffled-labels test is caught by the absolute bar alone, which is why the floor needs its own test).",
+  "target": {
+    "file": "packages/nn/tests/ml/test_synthetic_acceptance.py",
+    "find": "_MARGIN_FLOOR = -0.06",
+    "replace": "_MARGIN_FLOOR = -2.0"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/nn",
+    "args": [
+      "-q",
+      "tests/ml/test_synthetic_acceptance.py",
+      "-k",
+      "inverted_model"
+    ]
+  },
+  "expect": "killed"
+}
