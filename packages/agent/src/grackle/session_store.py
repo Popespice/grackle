@@ -14,17 +14,33 @@ from asyncio executor threads, and **every** access is serialized through a
 ``threading.Lock``.  ``sqlite3`` connections are not safe for genuinely
 concurrent use even in WAL mode; the lock makes save/list/get mutually
 exclusive regardless of which thread calls them.
+
+Several connections to one database (two ``serve --store`` processes sharing a
+library) are a different matter: SQLite serializes their writes, and the
+connection's busy timeout absorbs most of the waiting.  On Windows it does not
+absorb all of it, so ``save_session`` retries ``SQLITE_BUSY`` itself for a
+bounded time (see ``_BUSY_RETRY_SECONDS``).
 """
 
 from __future__ import annotations
 
 import sqlite3
 import threading
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+# How long save_session keeps retrying SQLITE_BUSY before it raises.  Windows CI
+# showed a store's first write on a shared database failing with "database is
+# locked" even though the connection's own 5 s busy timeout had not run out (the
+# nightly ``test_two_stores_one_database`` hammer, 6 runs in 6); the next save
+# on the same connection then succeeded, so the failure is transient.
+_BUSY_RETRY_SECONDS = 10.0
+_BUSY_BACKOFF_START = 0.005
+_BUSY_BACKOFF_MAX = 0.2
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -50,6 +66,12 @@ class SessionMeta:
     source_path: str  # absolute local path to the JSONL file (read back via Path)
     event_count: int
     language: str  # open string per ADR-0004
+
+
+def _is_busy(exc: sqlite3.OperationalError) -> bool:
+    """True for SQLITE_BUSY (the primary code, so BUSY_SNAPSHOT and BUSY_RECOVERY too)."""
+    code = exc.sqlite_errorcode
+    return code is not None and code & 0xFF == sqlite3.SQLITE_BUSY
 
 
 def _row_to_meta(row: tuple[str, str, int, int, str, int, str]) -> SessionMeta:
@@ -106,24 +128,36 @@ class SessionStore:
 
         Idempotent: calling with the same ``id`` updates the existing row.
         """
+        row = (
+            meta.id,
+            meta.label,
+            meta.started_ns,
+            meta.ended_ns,
+            meta.source_path,
+            meta.event_count,
+            meta.language,
+        )
         with self._lock:
-            self._conn.execute(
-                """
-                INSERT OR REPLACE INTO sessions
-                    (id, label, started_ns, ended_ns, source_path, event_count, language)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    meta.id,
-                    meta.label,
-                    meta.started_ns,
-                    meta.ended_ns,
-                    meta.source_path,
-                    meta.event_count,
-                    meta.language,
-                ),
-            )
-            self._conn.commit()
+            deadline = time.monotonic() + _BUSY_RETRY_SECONDS
+            delay = _BUSY_BACKOFF_START
+            while True:
+                try:
+                    self._conn.execute(
+                        """
+                        INSERT OR REPLACE INTO sessions
+                            (id, label, started_ns, ended_ns, source_path, event_count, language)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        row,
+                    )
+                    self._conn.commit()
+                    return
+                except sqlite3.OperationalError as exc:
+                    if not _is_busy(exc) or time.monotonic() >= deadline:
+                        raise
+                    self._conn.rollback()  # drop the half-open implicit transaction
+                    time.sleep(delay)
+                    delay = min(delay * 2, _BUSY_BACKOFF_MAX)
 
     def list_sessions(self) -> list[SessionMeta]:
         """Return all sessions ordered by ``started_ns`` descending."""

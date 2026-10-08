@@ -1,0 +1,20 @@
+{
+  "id": "agent-session-store-busy-retry-keeps-transaction",
+  "description": "save_session retries a busy write without rolling back the half-open implicit transaction first, so the next attempt runs inside a stale one.",
+  "target": {
+    "file": "packages/agent/src/grackle/session_store.py",
+    "find": "                    self._conn.rollback()  # drop the half-open implicit transaction\n",
+    "replace": ""
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_session_store_faults.py",
+      "-k",
+      "a_transient_busy_error_is_retried"
+    ]
+  },
+  "expect": "killed"
+}

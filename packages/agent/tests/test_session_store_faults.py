@@ -334,9 +334,9 @@ def test_save_waits_out_another_connections_write_lock(tmp_path: Path) -> None:
     ``save_session`` must wait for it (sqlite3's busy timeout), not fail with
     "database is locked" the moment it collides.
 
-    Observed beyond the timeout (not pinned — it takes 5 s): a lock held past
-    sqlite3's default 5.0 s makes ``save_session`` raise
-    ``OperationalError: database is locked`` after ~5.2 s. Reads and
+    Observed beyond the timeout (not pinned — it takes 10+ s): a lock held past
+    sqlite3's default 5.0 s timeout and ``save_session``'s own 10 s of ``SQLITE_BUSY``
+    retries makes it raise ``OperationalError: database is locked``. Reads and
     ``SessionStore.open`` are not blocked by a writer at all (WAL)."""
     db = tmp_path / "sessions.db"
     store = SessionStore.open(db)
@@ -356,6 +356,80 @@ def test_save_waits_out_another_connections_write_lock(tmp_path: Path) -> None:
     # Discriminating-power companion: the save really did collide with the
     # lock (otherwise this test would pass whatever the busy handling was).
     assert waited >= 0.2, f"save_session returned after {waited:.3f}s — it never hit the lock"
+
+
+class _BusyConnection:
+    """Stands in for a ``sqlite3.Connection``: the first *failures* writes raise
+    ``SQLITE_BUSY`` (or *code*), as Windows does under cross-connection contention."""
+
+    def __init__(self, real: sqlite3.Connection, failures: int, code: int = sqlite3.SQLITE_BUSY):
+        self.real = real
+        self.failures = failures
+        self.code = code
+        self.executes = 0
+        self.rollbacks = 0
+
+    def execute(self, sql: str, params: Any = ()) -> Any:
+        self.executes += 1
+        if self.failures > 0:
+            self.failures -= 1
+            exc = sqlite3.OperationalError("database is locked")
+            exc.sqlite_errorcode = self.code
+            raise exc
+        return self.real.execute(sql, params)
+
+    def commit(self) -> None:
+        self.real.commit()
+
+    def rollback(self) -> None:
+        self.rollbacks += 1
+        self.real.rollback()
+
+    def close(self) -> None:
+        self.real.close()
+
+
+def _store_with_busy_connection(db: Path, **kwargs: Any) -> tuple[SessionStore, _BusyConnection]:
+    store = SessionStore.open(db)
+    busy = _BusyConnection(store._conn, **kwargs)
+    store._conn = cast("Any", busy)
+    return store, busy
+
+
+def test_a_transient_busy_error_is_retried(tmp_path: Path) -> None:
+    """Nightly Windows hammer: a store's first write on a shared database failed
+    with ``database is locked`` although the busy timeout had not run out, and the
+    next save succeeded. ``save_session`` retries ``SQLITE_BUSY`` and rolls back the
+    half-open transaction between attempts."""
+    store, busy = _store_with_busy_connection(tmp_path / "sessions.db", failures=3)
+    store.save_session(_meta("patient"))
+    assert busy.executes == 4
+    assert busy.rollbacks == 3
+    assert store.get_session("patient") == _meta("patient")
+    store.close()
+
+
+def test_a_busy_error_that_never_clears_still_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("grackle.session_store._BUSY_RETRY_SECONDS", 0.2)
+    store, busy = _store_with_busy_connection(tmp_path / "sessions.db", failures=10**6)
+    t0 = time.monotonic()
+    with pytest.raises(sqlite3.OperationalError, match="locked"):
+        store.save_session(_meta("never"))
+    assert 0.2 <= time.monotonic() - t0 < 5.0
+    assert busy.executes > 1  # it did retry before giving up
+    store.close()
+
+
+def test_an_error_that_is_not_busy_is_not_retried(tmp_path: Path) -> None:
+    store, busy = _store_with_busy_connection(
+        tmp_path / "sessions.db", failures=1, code=sqlite3.SQLITE_ERROR
+    )
+    with pytest.raises(sqlite3.OperationalError):
+        store.save_session(_meta("broken"))
+    assert busy.executes == 1
+    assert busy.rollbacks == 0
 
 
 def _hammer_two_stores(db: Path, *, stores: int, writers_per_store: int, saves: int) -> None:
