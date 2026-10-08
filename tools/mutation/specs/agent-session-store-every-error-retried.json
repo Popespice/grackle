@@ -1,0 +1,20 @@
+{
+  "id": "agent-session-store-every-error-retried",
+  "description": "save_session treats every OperationalError as busy, so a real fault (no such table, disk I/O error) is retried for 10 s and then reported as if it were lock contention.",
+  "target": {
+    "file": "packages/agent/src/grackle/session_store.py",
+    "find": "    return code is not None and code & 0xFF == sqlite3.SQLITE_BUSY",
+    "replace": "    return True"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_session_store_faults.py",
+      "-k",
+      "error_that_is_not_busy_is_not_retried"
+    ]
+  },
+  "expect": "killed"
+}

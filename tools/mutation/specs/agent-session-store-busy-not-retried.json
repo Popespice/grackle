@@ -1,0 +1,20 @@
+{
+  "id": "agent-session-store-busy-not-retried",
+  "description": "Nightly Windows hammer: save_session raises on the first SQLITE_BUSY again, as before the retry, so a store's first write on a shared database fails with 'database is locked' although the busy timeout had not run out.",
+  "target": {
+    "file": "packages/agent/src/grackle/session_store.py",
+    "find": "                    if not _is_busy(exc) or time.monotonic() >= deadline:",
+    "replace": "                    if True:"
+  },
+  "suite": {
+    "kind": "pytest",
+    "cwd": "packages/agent",
+    "args": [
+      "-q",
+      "tests/test_session_store_faults.py",
+      "-k",
+      "a_transient_busy_error_is_retried"
+    ]
+  },
+  "expect": "killed"
+}
