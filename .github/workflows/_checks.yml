@@ -36,7 +36,7 @@ jobs:
           node-version: "22"
           cache: pnpm
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.22"
           # The Go runtime adapter only builds the dependency-free tiny-go-app
